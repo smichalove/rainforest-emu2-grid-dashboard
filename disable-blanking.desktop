@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Disable Blanking
+Exec=/usr/bin/xset s off -dpms
+StartupNotify=false
+Terminal=false

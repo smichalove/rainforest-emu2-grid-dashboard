@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Grid Dashboard
+Exec=/usr/bin/python3 /home/steven/dashboard.py
+StartupNotify=false
+Terminal=false
