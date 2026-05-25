@@ -8,3 +8,5 @@ agent.md
 .agents/
 Auth/
 auth/
+grid_history.csv
+gemini_summary.json
