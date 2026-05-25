@@ -40,6 +40,10 @@ SUMMARY_FONT_SIZE: int = 12
 SUMMARY_ALPHA: float = 0.85
 SUMMARY_COLOR: str = 'deepskyblue'
 
+# Color tokens for grid status and line plot
+IMPORT_COLOR: str = '#f43f5e'  # Modern rose/crimson red
+EXPORT_COLOR: str = '#00ff00'  # Classic neon green
+
 class GridDashboard(tk.Tk):
     """A fullscreen Tkinter dashboard application that visualizes real-time power grid usage.
 
@@ -323,7 +327,7 @@ class GridDashboard(tk.Tk):
                 
                 # Format current status. Green indicates solar export, red indicates grid import.
                 status: str = "Exporting (Solar)" if actual_kw < 0 else "Importing (Grid)"
-                color: str = "#00ff00" if actual_kw < 0 else "#ff4444"
+                color: str = EXPORT_COLOR if actual_kw < 0 else IMPORT_COLOR
                 text: str = f"{actual_kw:.3f} kW | {status}"
                 
                 # Safely execute GUI modifications on the main thread using after().
@@ -352,18 +356,26 @@ class GridDashboard(tk.Tk):
         """
         self.status_label.config(text=label_text, fg=color)
         
-        # Build segments and dynamically color them: red for importing (>0 kW), green for exporting (<0 kW).
+        # Build segments and dynamically color/size them: red for importing (>0 kW), green for exporting (<0 kW).
+        # We draw the neon green line slightly thinner (1.3) than the rose red line (1.8) to balance visual weight.
         if len(self.usage) > 1:
             x_nums = mdates.date2num(self.timestamps)
             segments = []
             colors = []
+            widths = []
             for i in range(len(self.usage) - 1):
                 y1, y2 = self.usage[i], self.usage[i+1]
                 segments.append(((x_nums[i], y1), (x_nums[i+1], y2)))
                 avg_y = (y1 + y2) / 2.0
-                colors.append("#ff4444" if avg_y > 0 else "#00ff00")
+                if avg_y > 0:
+                    colors.append(IMPORT_COLOR)
+                    widths.append(1.8)
+                else:
+                    colors.append(EXPORT_COLOR)
+                    widths.append(1.3)
             self.lc.set_segments(segments)
             self.lc.set_colors(colors)
+            self.lc.set_linewidths(widths)
         else:
             self.lc.set_segments([])
         
