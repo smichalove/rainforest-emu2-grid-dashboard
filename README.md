@@ -1,5 +1,7 @@
 # EMU-2 Grid Dashboard
 
+![EMU-2 Grid Dashboard Preview](dashboard_preview.jpeg)
+
 A robust, 24-hour real-time grid monitoring dashboard using a Rainforest EMU-2 smart meter connected to a Raspberry Pi. It automatically boots into a fullscreen kiosk mode over HDMI, safely bypasses modern Wayland graphic quirks, and seamlessly persists data to a CSV to survive power outages.
 
 ## Hardware Requirements
@@ -9,7 +11,7 @@ A robust, 24-hour real-time grid monitoring dashboard using a Rainforest EMU-2 s
 
 ## Key Features
 - **Real-Time Data Parsing**: Decodes raw XML telemetry (`<InstantaneousDemand>`) directly from the EMU-2 serial port.
-- **Fixed 24-Hour Graph**: Features a fixed `Midnight-to-Midnight` X-axis to accurately plot daily trends without using a confusing, fast-sliding window.
+- **Rolling 24-Hour Graph**: Features a dynamic rolling 24-hour X-axis with the newest readings always positioned on the far right, ensuring the graph is always fully populated with historical context.
 - **Persistent Data**: Logs data automatically to `grid_history.csv` every 15 seconds and retroactively reloads the graph immediately upon boot.
 - **Hands-Free Kiosk Mode**: Configured to boot completely headless and automatically launch into fullscreen without sleeping.
 - **Gemini Background Summaries**: Uses a background thread to call the Gemini 2.5 Flash model (via Vertex AI or Developer API Key) to analyze power trends and render a blue narrative watermark summary directly on the graph background, formatted with smart 80-character line wrapping.
