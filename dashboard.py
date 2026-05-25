@@ -339,8 +339,8 @@ class GridDashboard(tk.Tk):
     def update_chart(self, label_text: str, color: str) -> None:
         """Updates the status text label and redraws the grid usage graph.
 
-        Adjusts the chart's X-axis range to lock between midnight and midnight of 
-        the current day, dynamically recalculates the Y-axis scale with padding,
+        Adjusts the chart's X-axis range to show a rolling 24-hour window ending at
+        the current time, dynamically recalculates the Y-axis scale with padding,
         and requests the matplotlib canvas to redraw.
 
         Args:
@@ -353,11 +353,10 @@ class GridDashboard(tk.Tk):
         self.line.set_xdata(self.timestamps)
         self.line.set_color(color)
         
-        # Enforce static midnight-to-midnight X-axis for a fixed 24-hour visual trend.
+        # Rolling 24-hour X-axis where the newest data is always on the far right.
         now: datetime.datetime = datetime.datetime.now()
-        start_of_day: datetime.datetime = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        end_of_day: datetime.datetime = start_of_day + datetime.timedelta(days=1)
-        self.ax.set_xlim(start_of_day, end_of_day)
+        start_time: datetime.datetime = now - datetime.timedelta(hours=24)
+        self.ax.set_xlim(start_time, now)
         
         # Dynamically scale Y-axis with some margin above and below minimum/maximum points.
         if self.usage:
