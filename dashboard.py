@@ -439,9 +439,10 @@ class GridDashboard(tk.Tk):
         try:
             logging.info("Initiating Gemini API call to fetch grid summary...")
             # 1. Format the data compactly (taking every 4th point / ~1 min intervals)
+            # Include both year-month-day and hour-minute to avoid model date hallucinations.
             lines = []
             for i in range(0, len(self.usage), 4):
-                ts = self.timestamps[i].strftime("%H:%M")
+                ts = self.timestamps[i].strftime("%Y-%m-%d %H:%M")
                 val = f"{self.usage[i]:.3f}"
                 lines.append(f"{ts},{val}")
             csv_data = "\n".join(lines)
@@ -501,38 +502,35 @@ class GridDashboard(tk.Tk):
                 )
 
             # Load the prompt template from external txt file dynamically at runtime.
-            default_template: str = (
-                "You are an energy monitoring assistant. Below is a CSV of time and kW usage "
-                "for the last 24 hours (negative = solar export, positive = grid import).\n"
-                "Analyze this data and provide a concise, high-density dashboard summary.\n\n"
-                "Data:\n"
-                "{csv_data}\n\n"
-                "Instructions:\n"
-                "1. Provide a table or list of key statistics (Total Imported, Total Exported, "
-                "Net Energy, Peak Demand + time, and Peak Solar Export + time).\n"
-                "2. Include a short 3 to 4 sentence paragraph summary analyzing the day's overall "
-                "energy usage, solar generation performance, and notable trends.\n"
-                "3. Keep the total output under 15 lines.\n"
-                "4. Do NOT include markdown code blocks, bold text (**), asterisks, or formatting other than plain text.\n"
-                "5. Be concise and precise."
-            )
-            
-            prompt_template: str = default_template
             prompt_path: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gemini_prompt.txt")
             if not os.path.exists(prompt_path):
                 prompt_path = "/home/steven/gemini_prompt.txt"
                 
-            if os.path.exists(prompt_path):
-                try:
-                    with open(prompt_path, 'r', encoding='utf-8') as pf:
-                        prompt_template = pf.read()
-                    logging.info(f"Successfully loaded external prompt template from {prompt_path}")
-                except Exception as pe:
-                    logging.warning(f"Failed to read prompt file {prompt_path}, using default template. Error: {pe}")
-            else:
-                logging.info("External prompt template not found, using default template.")
+            if not os.path.exists(prompt_path):
+                logging.error(f"Required external prompt template not found at: {prompt_path}")
+                return
 
-            prompt: str = prompt_template.format(csv_data=csv_data)
+            try:
+                with open(prompt_path, 'r', encoding='utf-8') as pf:
+                    prompt_template: str = pf.read()
+                logging.info(f"Successfully loaded external prompt template from {prompt_path}")
+            except Exception as pe:
+                logging.error(f"Failed to read prompt file {prompt_path}. Error: {pe}")
+                return
+
+            # Format the CSV data and relevant date placeholders (both current time and last telemetry time)
+            current_dt_str: str = now.strftime("%Y-%m-%d %H:%M:%S")
+            last_dt_str: str = self.timestamps[-1].strftime("%Y-%m-%d %H:%M:%S") if self.timestamps else "N/A"
+            try:
+                # Support both {current_date_time} and {last_data_time} placeholders in the template
+                prompt: str = prompt_template.format(
+                    csv_data=csv_data,
+                    current_date_time=current_dt_str,
+                    last_data_time=last_dt_str
+                )
+            except KeyError as ke:
+                logging.error(f"Failed to format prompt template due to missing placeholder: {ke}")
+                return
 
             response = client.models.generate_content(
                 model=model_name,
