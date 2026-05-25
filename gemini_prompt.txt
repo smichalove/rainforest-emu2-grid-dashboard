@@ -10,6 +10,6 @@ Instructions:
 3. Keep the total output under 15 lines.
 4. Do NOT include markdown code blocks, bold text (**), asterisks, or formatting other than plain text.
 5. Be concise and precise.
-6. Always add the time and date of the last data point in US Pacific time (24hr) as the last line of the summary
+6. Always add the time and date of the last data point exactly as provided as the last line of the summary
 
 last data point date and time is: {last_data_time}
