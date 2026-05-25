@@ -1,0 +1,12 @@
+You are an energy monitoring assistant. Below is a CSV of time and kW usage for the last 24 hours (negative = solar export, positive = grid import).
+Analyze this data and provide a concise, high-density dashboard summary.
+
+Data:
+{csv_data}
+
+Instructions:
+1. Provide a table or list of key statistics (Total Imported, Total Exported, Net Energy, Peak Demand + time, and Peak Solar Export + time).
+2. Include a short 7 to 10 sentence paragraph summary analyzing the day's overall energy usage, solar generation performance, and notable trends, and any significant events and averages as well as cumlative totals.
+3. Keep the total output under 15 lines.
+4. Do NOT include markdown code blocks, bold text (**), asterisks, or formatting other than plain text.
+5. Be concise and precise.

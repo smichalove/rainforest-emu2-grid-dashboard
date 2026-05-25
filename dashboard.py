@@ -500,12 +500,13 @@ class GridDashboard(tk.Tk):
                     location=location
                 )
 
-            prompt = (
+            # Load the prompt template from external txt file dynamically at runtime.
+            default_template: str = (
                 "You are an energy monitoring assistant. Below is a CSV of time and kW usage "
                 "for the last 24 hours (negative = solar export, positive = grid import).\n"
                 "Analyze this data and provide a concise, high-density dashboard summary.\n\n"
                 "Data:\n"
-                f"{csv_data}\n\n"
+                "{csv_data}\n\n"
                 "Instructions:\n"
                 "1. Provide a table or list of key statistics (Total Imported, Total Exported, "
                 "Net Energy, Peak Demand + time, and Peak Solar Export + time).\n"
@@ -515,6 +516,23 @@ class GridDashboard(tk.Tk):
                 "4. Do NOT include markdown code blocks, bold text (**), asterisks, or formatting other than plain text.\n"
                 "5. Be concise and precise."
             )
+            
+            prompt_template: str = default_template
+            prompt_path: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gemini_prompt.txt")
+            if not os.path.exists(prompt_path):
+                prompt_path = "/home/steven/gemini_prompt.txt"
+                
+            if os.path.exists(prompt_path):
+                try:
+                    with open(prompt_path, 'r', encoding='utf-8') as pf:
+                        prompt_template = pf.read()
+                    logging.info(f"Successfully loaded external prompt template from {prompt_path}")
+                except Exception as pe:
+                    logging.warning(f"Failed to read prompt file {prompt_path}, using default template. Error: {pe}")
+            else:
+                logging.info("External prompt template not found, using default template.")
+
+            prompt: str = prompt_template.format(csv_data=csv_data)
 
             response = client.models.generate_content(
                 model=model_name,
