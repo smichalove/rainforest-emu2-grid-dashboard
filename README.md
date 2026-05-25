@@ -12,6 +12,25 @@ A robust, 24-hour real-time grid monitoring dashboard using a Rainforest EMU-2 s
 - **Fixed 24-Hour Graph**: Features a fixed `Midnight-to-Midnight` X-axis to accurately plot daily trends without using a confusing, fast-sliding window.
 - **Persistent Data**: Logs data automatically to `grid_history.csv` every 15 seconds and retroactively reloads the graph immediately upon boot.
 - **Hands-Free Kiosk Mode**: Configured to boot completely headless and automatically launch into fullscreen without sleeping.
+- **Gemini Background Summaries**: Uses a background thread to call the Gemini 2.5 Flash model (via Vertex AI or Developer API Key) to analyze power trends and render a blue narrative watermark summary directly on the graph background, formatted with smart 80-character line wrapping.
+
+---
+
+## AI Background Summaries & Authentication
+
+The dashboard integrates the **`google-genai`** SDK to query Gemini every 30 minutes in a non-blocking background thread. The generated summary is cached locally to disk (`/home/steven/gemini_summary.json`) and loads instantly on startup.
+
+### Authentication Setup
+The dashboard automatically searches for credentials using one of the following methods:
+1. **Google Cloud Service Account JSON (Headless/Vertex AI):**
+   - Place the service account JSON key at `/home/steven/Auth/service_account.json` (or `auth/service_account.json` in the app directory).
+   - The script routes queries via Vertex AI using the project `mutua-477100` and location `global`.
+   - Detailed instructions on setting up your Vertex AI Google Cloud account and generating service account keys can be found in the [veo-video-creation-workflow README](https://github.com/smichalove/veo-video-creation-workflow/blob/main/README.md).
+2. **Developer API Key:**
+   - Create a `.env` file in the same directory as `dashboard.py` and define:
+     ```env
+     GEMINI_API_KEY="your_api_key_here"
+     ```
 
 ---
 
@@ -62,8 +81,14 @@ Make sure you have all required Python libraries installed:
 pip3 install -r requirements.txt
 ```
 
-### 5. Running Manually (Troubleshooting)
-If you ever need to manually stop and restart the dashboard while the desktop is running, press `Ctrl+C` in your SSH terminal and run:
+### 5. Running Manually & Graceful Teardown
+If you ever need to manually stop and restart the dashboard while the desktop is running, press `Ctrl+C` in your SSH terminal or close the window (by clicking the screen or pressing `Escape`). 
+
+The script registers OS signal handlers (`SIGINT`, `SIGTERM`), which guarantees that:
+- Background threads are stopped cleanly.
+- The USB serial interface port (`/dev/ttyACM0`) is released.
+
+To run manually:
 ```bash
 export DISPLAY=:0 && python3 dashboard.py
 ```
