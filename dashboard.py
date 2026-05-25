@@ -37,8 +37,8 @@ PORT: str = '/dev/ttyACM0'
 BAUD: int = 115200
 
 # Gemini Summary Display Settings
-SUMMARY_FONT_SIZE: int = 10
-SUMMARY_ALPHA: float = 0.30
+SUMMARY_FONT_SIZE: int = 11
+SUMMARY_ALPHA: float = 0.55
 SUMMARY_COLOR: str = 'deepskyblue'
 
 # Color tokens for grid status and line plot

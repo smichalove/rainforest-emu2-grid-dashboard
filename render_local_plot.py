@@ -11,8 +11,8 @@ from matplotlib.collections import LineCollection
 from typing import List, Any
 
 # Match settings from main dashboard.py
-SUMMARY_FONT_SIZE: int = 10
-SUMMARY_ALPHA: float = 0.30
+SUMMARY_FONT_SIZE: int = 11
+SUMMARY_ALPHA: float = 0.55
 SUMMARY_COLOR: str = 'deepskyblue'
 IMPORT_COLOR: str = '#f43f5e'  # Modern rose red
 EXPORT_COLOR: str = '#00ff00'  # Classic neon green
