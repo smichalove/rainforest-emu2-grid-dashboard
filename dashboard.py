@@ -13,6 +13,7 @@ import textwrap
 import matplotlib.dates as mdates
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.collections import LineCollection
 from typing import List, Any, Optional
 
 # Setup logging to keep track of serial port communication and errors.
@@ -56,7 +57,7 @@ class GridDashboard(tk.Tk):
         status_label (tk.Label): GUI text label displaying current demand.
         fig (Figure): Matplotlib Figure for the grid graph.
         ax (Any): Matplotlib Axes representing the plot area.
-        line (Any): Matplotlib Line2D plot element.
+        lc (LineCollection): Matplotlib LineCollection plot element.
         summary_text_obj (Any): Matplotlib Text object for displaying background summaries.
         canvas (FigureCanvasTkAgg): Canvas widget connecting matplotlib and Tkinter.
     """
@@ -114,7 +115,9 @@ class GridDashboard(tk.Tk):
         # Dotted horizontal line at 0 kW to distinguish importing vs exporting power.
         self.ax.axhline(0, color='gray', linestyle='--') 
         
-        self.line, = self.ax.plot([], [], color='#00ff00', linewidth=3)
+        # LineCollection to draw a plot line with dynamic colors and sleeker thickness.
+        self.lc: LineCollection = LineCollection([], linewidths=1.8, zorder=2)
+        self.ax.add_collection(self.lc)
         
         # Text object to display Gemini-generated summary in the background of the axes.
         # Uses axes coordinates (transAxes) to place the text in the top-left corner.
@@ -349,9 +352,20 @@ class GridDashboard(tk.Tk):
         """
         self.status_label.config(text=label_text, fg=color)
         
-        self.line.set_ydata(self.usage)
-        self.line.set_xdata(self.timestamps)
-        self.line.set_color(color)
+        # Build segments and dynamically color them: red for importing (>0 kW), green for exporting (<0 kW).
+        if len(self.usage) > 1:
+            x_nums = mdates.date2num(self.timestamps)
+            segments = []
+            colors = []
+            for i in range(len(self.usage) - 1):
+                y1, y2 = self.usage[i], self.usage[i+1]
+                segments.append(((x_nums[i], y1), (x_nums[i+1], y2)))
+                avg_y = (y1 + y2) / 2.0
+                colors.append("#ff4444" if avg_y > 0 else "#00ff00")
+            self.lc.set_segments(segments)
+            self.lc.set_colors(colors)
+        else:
+            self.lc.set_segments([])
         
         # Rolling 24-hour X-axis where the newest data is always on the far right.
         now: datetime.datetime = datetime.datetime.now()
