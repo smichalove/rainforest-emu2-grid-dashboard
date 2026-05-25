@@ -1,0 +1,25 @@
+#!/bin/bash
+set -e
+
+echo "=== Rainforest EMU-2 Dashboard Setup ==="
+
+echo "1. Creating Python virtual environment (venv)..."
+python3 -m venv venv
+
+echo "2. Installing requirements..."
+source venv/bin/activate
+pip install -r requirements.txt
+
+echo "3. Setting up X11 Autostart (GUI safe)..."
+mkdir -p ~/.config/autostart
+cat <<EOF > ~/.config/autostart/grid-dashboard.desktop
+[Desktop Entry]
+Type=Application
+Name=Grid Dashboard
+Exec=$(pwd)/venv/bin/python $(pwd)/dashboard.py
+StartupNotify=false
+Terminal=false
+EOF
+
+echo "Autostart configured at ~/.config/autostart/grid-dashboard.desktop!"
+echo "=== Setup Complete! ==="

@@ -33,7 +33,6 @@ except ImportError:
     logging.warning("google-genai package is not installed. Gemini background summaries will be disabled.")
 
 # Rainforest EMU-2 hardware communication settings
-PORT: str = '/dev/ttyACM0'
 BAUD: int = 115200
 
 # Gemini Summary Display Settings
@@ -233,55 +232,70 @@ class GridDashboard(tk.Tk):
         except Exception as e:
             logging.error(f"Failed to read history file: {e}")
 
+    def find_emu2_port(self) -> str:
+        """Dynamically searches for the EMU-2 serial port.
+        
+        Scans all available COM/TTY ports and returns the first one that appears
+        to be a USB CDC device (like ttyACM) or has Rainforest in the manufacturer name.
+        """
+        import serial.tools.list_ports
+        ports = serial.tools.list_ports.comports()
+        for p in ports:
+            # Rainforest meters typically enumerate as USB CDC devices (ttyACM)
+            if 'ACM' in p.device or 'Rainforest' in str(p.manufacturer):
+                return p.device
+        return '/dev/ttyACM0'  # Fallback
+
     def read_serial(self) -> None:
         """Performs long-polling of the EMU-2 USB serial port in a background thread.
 
-        Attempts to open the serial port and read incoming data. It splits incoming
-        buffer streams into individual `<InstantaneousDemand>` XML segments and passes
-        them to the parser.
+        Attempts to open the serial port and read incoming data. Features a 5-second
+        exponential-style reconnection loop to recover gracefully from USB disconnects
+        or device reboots.
         """
         logging.info("Starting background thread to read serial port.")
-        try:
-            self.ser = serial.Serial(PORT, BAUD, timeout=1)
-            logging.info(f"Successfully opened {PORT} at {BAUD} baud.")
-        except Exception as e:
-            err_msg: str = f"Port Error: {e}"
-            logging.error(err_msg)
-            self.update_ui_text(err_msg)
-            return
-
         buffer: str = ""
-        try:
-            while self.running:
-                try:
-                    if self.ser and self.ser.is_open:
-                        # Read waiting data or block for 1 byte if empty.
-                        data: bytes = self.ser.read(self.ser.in_waiting or 1)
-                        if data:
-                            buffer += data.decode('utf-8', errors='ignore')
+        
+        while self.running:
+            port_to_use = self.find_emu2_port()
+            try:
+                self.ser = serial.Serial(port_to_use, BAUD, timeout=1)
+                logging.info(f"Successfully opened {port_to_use} at {BAUD} baud.")
+            except Exception as e:
+                err_msg: str = f"Failed to open port {port_to_use}: {e}. Retrying in 5s..."
+                logging.error(err_msg)
+                self.update_ui_text("Hardware disconnected.\nRetrying...")
+                time.sleep(5)
+                continue
+
+            try:
+                while self.running and self.ser.is_open:
+                    # Read waiting data or block for 1 byte if empty.
+                    data: bytes = self.ser.read(self.ser.in_waiting or 1)
+                    if data:
+                        buffer += data.decode('utf-8', errors='ignore')
+                        
+                        # Search and extract full XML chunks for parsing.
+                        while '<InstantaneousDemand>' in buffer and '</InstantaneousDemand>' in buffer:
+                            start: int = buffer.find('<InstantaneousDemand>')
+                            end: int = buffer.find('</InstantaneousDemand>') + len('</InstantaneousDemand>')
                             
-                            # Search and extract full XML chunks for parsing.
-                            while '<InstantaneousDemand>' in buffer and '</InstantaneousDemand>' in buffer:
-                                start: int = buffer.find('<InstantaneousDemand>')
-                                end: int = buffer.find('</InstantaneousDemand>') + len('</InstantaneousDemand>')
-                                
-                                chunk: str = buffer[start:end]
-                                self.process_chunk(chunk)
-                                # Remove the processed chunk from the buffer.
-                                buffer = buffer[end:]
-                except Exception as e:
-                    # Avoid logging spam if the thread is shutting down.
-                    if self.running:
-                        logging.error(f"Error reading serial data: {e}")
-                time.sleep(0.1)
-        finally:
-            if self.ser:
-                try:
-                    if self.ser.is_open:
-                        self.ser.close()
-                    logging.info("Serial connection closed cleanly in read_serial finally block.")
-                except Exception as e:
-                    logging.error(f"Failed to close serial port in background thread: {e}")
+                            chunk: str = buffer[start:end]
+                            self.process_chunk(chunk)
+                            # Remove the processed chunk from the buffer.
+                            buffer = buffer[end:]
+                    time.sleep(0.1)
+            except serial.SerialException as e:
+                if self.running:
+                    logging.error(f"Serial connection lost: {e}. Reconnecting in 5 seconds...")
+                time.sleep(5)
+            except Exception as e:
+                if self.running:
+                    logging.error(f"Unexpected error reading serial data: {e}")
+                time.sleep(5)
+            finally:
+                if self.ser and self.ser.is_open:
+                    self.ser.close()
 
     def process_chunk(self, xml_data: str) -> None:
         """Parses a single XML block containing grid demand telemetry.
@@ -345,6 +359,9 @@ class GridDashboard(tk.Tk):
                 
                 # Safely execute GUI modifications on the main thread using after().
                 self.after(0, self.update_chart, text, color)
+        except ET.ParseError as e:
+            logging.warning(f"Fragmented XML dropped: {e}")
+            return
         except Exception as e:
             logging.error(f"Error parsing XML chunk: {e}")
 
@@ -570,10 +587,24 @@ class GridDashboard(tk.Tk):
                 logging.error(f"Failed to format prompt template due to missing placeholder: {ke}")
                 return
 
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
-            )
+            # Native Exponential Backoff Retry Loop
+            backoff_delays = [2, 4, 8]
+            response = None
+            
+            for attempt, delay in enumerate(backoff_delays + [0]):
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                    )
+                    break # Success
+                except Exception as api_err:
+                    if attempt < len(backoff_delays):
+                        logging.warning(f"Gemini API call failed: {api_err}. Retrying in {delay}s...")
+                        time.sleep(delay)
+                    else:
+                        logging.error(f"Gemini API completely failed after retries: {api_err}")
+                        raise
 
             summary_text = response.text
             if summary_text:

@@ -33,6 +33,7 @@ class OfflineViewer(tk.Tk):
 
         self.usage: List[float] = []
         self.timestamps: List[datetime.datetime] = []
+        self.mock_se_pv: List[float] = []
         
         # Load local history file copied from the Pi
         self.load_history()
@@ -59,14 +60,16 @@ class OfflineViewer(tk.Tk):
         self.fig.autofmt_xdate()
         self.ax.spines['bottom'].set_color('white')
         self.ax.spines['left'].set_color('white')
-        self.ax.spines['top'].set_color('black')
-        self.ax.spines['right'].set_color('black')
+        # Secondary axes for SolarEdge bar chart along the bottom
+        self.ax_bar = self.ax.twinx()
+        self.ax_bar.set_ylim(0, 10)  # Fixed arbitrary high limit so bars stay at bottom
+        self.ax_bar.axis('off')  # Hide the axes lines and ticks so it blends in
         
         # Dotted horizontal line at 0 kW
         self.ax.axhline(0, color='gray', linestyle='--') 
         
         # LineCollection for dynamic segment styling
-        self.lc: LineCollection = LineCollection([], linewidths=1.8, zorder=2)
+        self.lc: LineCollection = LineCollection([], linewidths=1.8, zorder=3)
         self.ax.add_collection(self.lc)
         
         # Background summary text watermark
@@ -135,6 +138,21 @@ class OfflineViewer(tk.Tk):
                             if ts > cutoff:
                                 self.timestamps.append(ts)
                                 self.usage.append(float(val_str))
+                                
+                                # Mock SolarEdge PV Data based on hour of day
+                                hour = ts.hour + ts.minute / 60.0
+                                # Simple bell curve for solar peaking at noon (12:00)
+                                if 7 <= hour <= 19:
+                                    import math
+                                    # Base amplitude of 3kW, scaled by a sine wave from 7 to 19
+                                    pv_val = 3.0 * math.sin((hour - 7) * math.pi / 12)
+                                    # Add some noise
+                                    import random
+                                    pv_val += random.uniform(-0.2, 0.2)
+                                    self.mock_se_pv.append(max(0, pv_val))
+                                else:
+                                    self.mock_se_pv.append(0.0)
+                                    
                         except Exception:
                             continue
             print(f"Loaded {len(self.usage)} data points.")
@@ -210,6 +228,27 @@ class OfflineViewer(tk.Tk):
             self.lc.set_segments(segments)
             self.lc.set_colors(colors)
             self.lc.set_linewidths(widths)
+            
+            # Draw the bar chart using 30-min downsampled data on the twin axes
+            if self.mock_se_pv:
+                bar_times = []
+                bar_heights = []
+                for j in range(0, len(self.mock_se_pv), 120):
+                    if j + 120 < len(self.mock_se_pv):
+                        chunk = self.mock_se_pv[j:j+120]
+                        energy = (sum(chunk)/len(chunk)) * 0.5 
+                        if energy > 0.05:
+                            bar_times.append(self.timestamps[j+60])
+                            bar_heights.append(energy)
+                
+                self.ax_bar.clear()
+                self.ax_bar.axis('off')
+                if bar_times:
+                    # Plot bars with zorder 1 so they stay behind the grid line
+                    self.ax_bar.bar(bar_times, bar_heights, width=20/(24*60), color='#fbbf24', alpha=0.3, zorder=1)
+                    # Scale max y of ax_bar so the bars only occupy the bottom ~30% of the screen
+                    max_energy = max(bar_heights) if bar_heights else 1
+                    self.ax_bar.set_ylim(0, max_energy * 3)
         
         if self.timestamps:
             # Match the rolling 24-hour window ending at the last data point

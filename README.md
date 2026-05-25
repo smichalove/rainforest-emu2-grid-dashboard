@@ -85,10 +85,19 @@ StartupNotify=false
 Terminal=false
 ```
 
-### 4. Install Dependencies
-Make sure you have all required Python libraries installed:
+### 4. Install Dependencies & X11 Autostart
+Modern Debian distributions (like Bookworm on Raspberry Pi) enforce PEP 668, preventing direct `pip` installations. We have provided a 1-click install script that automatically provisions a Python virtual environment (`venv`), installs dependencies, and sets up a standard `.desktop` autostart file to launch the dashboard automatically when the X11 desktop loads.
+
+Run the install script from the project root:
 ```bash
-pip3 install -r requirements.txt
+bash install.sh
+```
+
+**Manual `venv` setup (if not using the install script):**
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
 ```
 
 ### 5. Running Manually & Graceful Teardown
