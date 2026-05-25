@@ -37,8 +37,8 @@ PORT: str = '/dev/ttyACM0'
 BAUD: int = 115200
 
 # Gemini Summary Display Settings
-SUMMARY_FONT_SIZE: int = 12
-SUMMARY_ALPHA: float = 0.85
+SUMMARY_FONT_SIZE: int = 10
+SUMMARY_ALPHA: float = 0.30
 SUMMARY_COLOR: str = 'deepskyblue'
 
 # Color tokens for grid status and line plot
@@ -63,7 +63,7 @@ class GridDashboard(tk.Tk):
         fig (Figure): Matplotlib Figure for the grid graph.
         ax (Any): Matplotlib Axes representing the plot area.
         lc (LineCollection): Matplotlib LineCollection plot element.
-        insights_text (tk.Text): Text widget for displaying Gemini-generated energy summaries.
+        summary_text_obj (Any): Matplotlib Text object for displaying background summaries.
         canvas (FigureCanvasTkAgg): Canvas widget connecting matplotlib and Tkinter.
     """
 
@@ -105,52 +105,10 @@ class GridDashboard(tk.Tk):
         )
         self.status_label.pack(pady=5)
 
-        # Main container frame to hold chart and insights side-by-side.
-        self.main_container: tk.Frame = tk.Frame(self, bg='black')
-        self.main_container.pack(fill=tk.BOTH, expand=True)
-
-        # Left side: Chart frame.
-        self.chart_frame: tk.Frame = tk.Frame(self.main_container, bg='black')
-        self.chart_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        # Right side: Insights frame with fixed width.
-        self.insights_frame: tk.Frame = tk.Frame(self.main_container, bg='#0f172a', width=350, padx=15, pady=15)
-        self.insights_frame.pack_propagate(False)
-        self.insights_frame.pack(side=tk.RIGHT, fill=tk.Y, expand=False)
-
-        # Title inside insights frame
-        self.insights_title: tk.Label = tk.Label(
-            self.insights_frame,
-            text="GEMINI GRID INSIGHTS",
-            font=('Helvetica', 12, 'bold'),
-            bg='#0f172a',
-            fg='#38bdf8'
-        )
-        self.insights_title.pack(anchor='w', pady=(0, 10))
-
-        # Divider line
-        divider: tk.Frame = tk.Frame(self.insights_frame, bg='#1e293b', height=2)
-        divider.pack(fill=tk.X, pady=(0, 15))
-
-        # Text container for the insights
-        self.insights_text: tk.Text = tk.Text(
-            self.insights_frame,
-            bg='#0f172a',
-            fg='#e2e8f0',
-            font=('Helvetica', 11),
-            wrap=tk.WORD,
-            bd=0,
-            highlightthickness=0,
-            padx=0,
-            pady=0
-        )
-        self.insights_text.pack(fill=tk.BOTH, expand=True)
-        self.insights_text.config(state=tk.DISABLED)
-
         # Matplotlib figure setup.
         self.fig: Figure = Figure(figsize=(5, 3), dpi=100, facecolor='black')
-        # Adjust margins so that labels and ticks fit comfortably on displays.
-        self.fig.subplots_adjust(left=0.10, right=0.95, top=0.95, bottom=0.15)
+        # Adjust margins so that labels and ticks fit comfortably on fullscreen displays.
+        self.fig.subplots_adjust(left=0.15, right=0.95, top=0.95, bottom=0.15)
         
         self.ax: Any = self.fig.add_subplot(111)
         self.ax.set_facecolor('black')
@@ -169,8 +127,22 @@ class GridDashboard(tk.Tk):
         self.lc: LineCollection = LineCollection([], linewidths=1.8, zorder=2)
         self.ax.add_collection(self.lc)
         
-        # Integrate Matplotlib canvas inside the chart frame.
-        self.canvas: FigureCanvasTkAgg = FigureCanvasTkAgg(self.fig, master=self.chart_frame)
+        # Text object to display Gemini-generated summary in the background of the axes.
+        # Uses axes coordinates (transAxes) to place the text in the top-left corner.
+        self.summary_text_obj: Any = self.ax.text(
+            0.02, 0.95, "",
+            transform=self.ax.transAxes,
+            ha='left', va='top',
+            fontsize=SUMMARY_FONT_SIZE,
+            color=SUMMARY_COLOR,
+            alpha=SUMMARY_ALPHA,
+            fontfamily='monospace',
+            weight='bold',
+            zorder=0.1
+        )
+        
+        # Integrate Matplotlib canvas with the Tkinter window.
+        self.canvas: FigureCanvasTkAgg = FigureCanvasTkAgg(self.fig, master=self)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
         # Summary cache settings to prevent redundant API queries on restart
@@ -473,11 +445,9 @@ class GridDashboard(tk.Tk):
                     # If it's less than 30 minutes old, load it immediately
                     if now - ts < datetime.timedelta(minutes=30):
                         self.last_summary_time = ts
-                        self.insights_text.config(state=tk.NORMAL)
-                        self.insights_text.delete("1.0", tk.END)
-                        self.insights_text.insert(tk.END, summary.strip())
-                        self.insights_text.config(state=tk.DISABLED)
+                        self.summary_text_obj.set_text(self.wrap_text(summary.strip()))
                         logging.info(f"Loaded fresh cached Gemini summary from {ts_str}.")
+                        self.fig.canvas.draw_idle()
                     else:
                         logging.info("Cached Gemini summary exists but is older than 30 minutes.")
         except Exception as e:
@@ -680,12 +650,11 @@ class GridDashboard(tk.Tk):
         """Updates the background summary text on the main thread.
 
         Args:
-            text: The new summary text block to render in the insights panel.
+            text: The new summary text block to render in the background.
         """
-        self.insights_text.config(state=tk.NORMAL)
-        self.insights_text.delete("1.0", tk.END)
-        self.insights_text.insert(tk.END, text.strip())
-        self.insights_text.config(state=tk.DISABLED)
+        wrapped_text = self.wrap_text(text)
+        self.summary_text_obj.set_text(wrapped_text)
+        self.fig.canvas.draw_idle()
 
     def destroy(self) -> None:
         """Cleanly destroys the dashboard application, stopping threads and closing serial ports.
