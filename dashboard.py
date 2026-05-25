@@ -17,8 +17,9 @@ from matplotlib.collections import LineCollection
 from typing import List, Any, Optional
 
 # Setup logging to keep track of serial port communication and errors.
+home_dir: str = os.path.expanduser('~')
 logging.basicConfig(
-    filename='/home/steven/dashboard.log',
+    filename=os.path.join(home_dir, 'dashboard.log'),
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s'
 )
@@ -93,7 +94,7 @@ class GridDashboard(tk.Tk):
         # Resolve history file location, defaulting to local directory if present
         script_dir: str = os.path.dirname(os.path.abspath(__file__))
         local_history: str = os.path.join(script_dir, 'grid_history.csv')
-        self.history_file: str = local_history if os.path.exists(local_history) else '/home/steven/grid_history.csv'
+        self.history_file: str = local_history if os.path.exists(local_history) else os.path.join(home_dir, 'grid_history.csv')
         
         # Reload historical data from CSV so the graph survives power interruptions.
         self.load_history()
@@ -174,7 +175,7 @@ class GridDashboard(tk.Tk):
 
         # Summary cache settings to prevent redundant API queries on restart
         local_cache: str = os.path.join(script_dir, 'gemini_summary.json')
-        self.summary_cache_file: str = local_cache if os.path.exists(local_cache) else '/home/steven/gemini_summary.json'
+        self.summary_cache_file: str = local_cache if os.path.exists(local_cache) else os.path.join(home_dir, 'gemini_summary.json')
         self.last_summary_time: Optional[datetime.datetime] = None
         
         # Load cached summary on startup if it exists and is fresh
@@ -535,8 +536,8 @@ class GridDashboard(tk.Tk):
                 os.path.join(os.path.dirname(os.path.abspath(__file__)), "auth/service_account.json"),
                 os.path.join(os.path.dirname(os.path.abspath(__file__)), "../Auth/service_account.json"),
                 os.path.join(os.path.dirname(os.path.abspath(__file__)), "../auth/service_account.json"),
-                "/home/steven/Auth/service_account.json",
-                "/home/steven/auth/service_account.json"
+                os.path.join(home_dir, "Auth/service_account.json"),
+                os.path.join(home_dir, "auth/service_account.json")
             ]
             for path in possible_paths:
                 if os.path.exists(path):
@@ -560,7 +561,7 @@ class GridDashboard(tk.Tk):
                 client = genai.Client(api_key=api_key)
             else:
                 logging.info("Initializing GenAI client for Vertex AI.")
-                project_id = os.environ.get("GOOGLE_CLOUD_PROJECT", "mutua-477100")
+                project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
                 location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
                 client = genai.Client(
                     vertexai=True,
@@ -571,7 +572,7 @@ class GridDashboard(tk.Tk):
             # Load the prompt template from external txt file dynamically at runtime.
             prompt_path: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gemini_prompt.txt")
             if not os.path.exists(prompt_path):
-                prompt_path = "/home/steven/gemini_prompt.txt"
+                prompt_path = os.path.join(home_dir, "gemini_prompt.txt")
                 
             if not os.path.exists(prompt_path):
                 logging.error(f"Required external prompt template not found at: {prompt_path}")

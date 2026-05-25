@@ -20,14 +20,14 @@ A robust, 24-hour real-time grid monitoring dashboard using a Rainforest EMU-2 s
 
 ## AI Background Summaries & Authentication
 
-The dashboard integrates the **`google-genai`** SDK to query Gemini every 30 minutes in a non-blocking background thread. The generated summary is cached locally to disk (`/home/steven/gemini_summary.json`) and loads instantly on startup.
+The dashboard integrates the **`google-genai`** SDK to query Gemini every 30 minutes in a non-blocking background thread. The generated summary is cached locally to disk (defaulting to `~/gemini_summary.json` if run from outside the repo) and loads instantly on startup.
 
 ### Authentication Setup
 The dashboard automatically searches for credentials using one of the following methods:
 1. **Google Cloud Service Account JSON (Headless/Vertex AI):**
-   - Place the service account JSON key at `/home/steven/Auth/service_account.json` (or `auth/service_account.json` in the app directory).
-   - The script routes queries via Vertex AI using the project `mutua-477100` and location `global`.
-   - Detailed instructions on setting up your Vertex AI Google Cloud account and generating service account keys can be found in the [veo-video-creation-workflow README](https://github.com/smichalove/veo-video-creation-workflow/blob/main/README.md).
+   - Place the service account JSON key at `~/Auth/service_account.json` (or `auth/service_account.json` in the application directory).
+   - The script routes queries via Vertex AI using the project `<your-gcp-project-id>` and location `global`.
+   - Detailed instructions on setting up your Vertex AI Google Cloud account and generating service account keys can be found in the [veo-video-creation-workflow README](https://github.com/<your-github-username>/veo-video-creation-workflow/blob/main/README.md).
 2. **Developer API Key:**
    - Create a `.env` file in the same directory as `dashboard.py` and define:
      ```env
@@ -37,6 +37,14 @@ The dashboard automatically searches for credentials using one of the following 
 ---
 
 ## Complete Setup Instructions
+
+### 0. Clone the Repository
+Clone this repository directly to your user's home directory on the Raspberry Pi:
+```bash
+cd ~
+git clone https://github.com/<your-github-username>/rainforest-emu2-grid-dashboard.git
+cd rainforest-emu2-grid-dashboard
+```
 
 ### 1. Revert to X11 (Debian Bookworm)
 Modern Raspberry Pi OS uses Wayland, which severely limits X11 forwarding and headless Tkinter display configurations over SSH. Revert to the highly stable X11 (LightDM) backend:
@@ -67,12 +75,12 @@ Create a second desktop entry to automatically launch the python dashboard when 
 ```bash
 nano ~/.config/autostart/grid-dashboard.desktop
 ```
-Add the following configuration:
+Add the following configuration (be sure to replace `username` with your Pi's actual user account name, e.g. `steven` or `pi`):
 ```ini
 [Desktop Entry]
 Type=Application
 Name=Grid Dashboard
-Exec=/usr/bin/python3 /home/steven/dashboard.py
+Exec=/usr/bin/python3 /home/username/rainforest-emu2-grid-dashboard/dashboard.py
 StartupNotify=false
 Terminal=false
 ```
