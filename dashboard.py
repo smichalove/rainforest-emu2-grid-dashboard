@@ -623,7 +623,7 @@ class GridDashboard(tk.Tk):
         self.summary_thread.start()
 
     def summary_loop(self) -> None:
-        """Periodically fetches grid usage summaries from Gemini every 30 minutes."""
+        """Periodically fetches grid usage summaries from Gemini every 15 minutes."""
         # Wait 10 seconds for initial startup and history load to settle.
         time.sleep(10)
         while self.running:
@@ -632,8 +632,8 @@ class GridDashboard(tk.Tk):
             except Exception as e:
                 logging.error(f"Failed in summary loop: {e}")
             
-            # Sleep for 30 minutes (1800 seconds), checking self.running every 10 seconds.
-            for _ in range(180):
+            # Sleep for 15 minutes (900 seconds), checking self.running every 10 seconds.
+            for _ in range(90):
                 if not self.running:
                     break
                 time.sleep(10)
@@ -652,14 +652,14 @@ class GridDashboard(tk.Tk):
                 if ts_str and summary:
                     ts = datetime.datetime.fromisoformat(ts_str)
                     now = datetime.datetime.now()
-                    # If it's less than 30 minutes old, load it immediately
-                    if now - ts < datetime.timedelta(minutes=30):
+                    # If it's less than 15 minutes old, load it immediately
+                    if now - ts < datetime.timedelta(minutes=15):
                         self.last_summary_time = ts
                         self.summary_text_obj.set_text(self.wrap_text(summary.strip()))
                         logging.info(f"Loaded fresh cached Gemini summary from {ts_str}.")
                         self.fig.canvas.draw_idle()
                     else:
-                        logging.info("Cached Gemini summary exists but is older than 30 minutes.")
+                        logging.info("Cached Gemini summary exists but is older than 15 minutes.")
         except Exception as e:
             logging.error(f"Failed to load cached Gemini summary: {e}")
 
@@ -753,7 +753,7 @@ class GridDashboard(tk.Tk):
 
         # Check if we already have a fresh summary (either from startup load or previous loop)
         now = datetime.datetime.now()
-        if self.last_summary_time and now - self.last_summary_time < datetime.timedelta(minutes=30):
+        if self.last_summary_time and now - self.last_summary_time < datetime.timedelta(minutes=15):
             logging.info("Skipping Gemini call; local cached summary is still fresh.")
             return
 
@@ -803,12 +803,14 @@ class GridDashboard(tk.Tk):
                 return
 
             from google import genai
+            from google.genai import types
 
             # 5. Initialize client based on available auth method
             model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+            http_opts = types.HttpOptions(timeout=60.0)
             if api_key:
                 logging.info("Initializing GenAI client using developer API key.")
-                client = genai.Client(api_key=api_key)
+                client = genai.Client(api_key=api_key, http_options=http_opts)
             else:
                 logging.info("Initializing GenAI client for Vertex AI.")
                 project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
@@ -827,7 +829,8 @@ class GridDashboard(tk.Tk):
                 client = genai.Client(
                     vertexai=True,
                     project=project_id,
-                    location=location
+                    location=location,
+                    http_options=http_opts
                 )
 
             # Load the prompt template from external txt file dynamically at runtime.
