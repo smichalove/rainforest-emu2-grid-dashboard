@@ -11,6 +11,8 @@ import json
 import signal
 import textwrap
 import statistics
+import urllib.request
+import sys
 from collections import defaultdict
 import matplotlib.dates as mdates
 from matplotlib.figure import Figure
@@ -67,6 +69,7 @@ class GridDashboard(tk.Tk):
         summary_text_obj (Any): Matplotlib Text object for displaying background summaries.
         canvas (FigureCanvasTkAgg): Canvas widget connecting matplotlib and Tkinter.
     """
+    solar_off = False
 
     def __init__(self) -> None:
         """Initializes the GridDashboard window, plot, and background serial reader.
@@ -90,6 +93,15 @@ class GridDashboard(tk.Tk):
         self.usage: List[float] = []
         self.timestamps: List[datetime.datetime] = []
         
+        # Check command line flags
+        self.solar_off: bool = "--solaroff" in sys.argv
+        
+        # SolarEdge PV In-memory arrays and paths
+        self.se_timestamps: List[datetime.datetime] = []
+        self.se_power: List[float] = []
+        self.solaredge_api_key: Optional[str] = None
+        self.solaredge_site_id: Optional[str] = None
+        
         # 5760 points at ~15s intervals equals exactly 24 hours of data.
         self.max_points: int = 5760 
         # Resolve history file location, defaulting to local directory if present
@@ -97,14 +109,28 @@ class GridDashboard(tk.Tk):
         local_history: str = os.path.join(script_dir, 'grid_history.csv')
         self.history_file: str = local_history if os.path.exists(local_history) else os.path.join(home_dir, 'grid_history.csv')
         
+        local_se_history: str = os.path.join(script_dir, 'solaredge_history.csv')
+        self.se_history_file: str = local_se_history if os.path.exists(local_se_history) else os.path.join(home_dir, 'solaredge_history.csv')
+        
+        self.load_credentials()
+        
         # Reload historical data from CSV so the graph survives power interruptions.
         self.load_history()
+        self.load_solaredge_history()
 
         # UI Text label configuration.
         self.status_label: tk.Label = tk.Label(
             self, text="Waiting for data...", font=('Helvetica', 36, 'bold'), bg='black', fg='white'
         )
         self.status_label.pack(pady=5)
+        
+        self.sub_status_label: tk.Label = tk.Label(
+            self, text="", font=('Helvetica', 20, 'bold'), bg='black', fg='#fbbf24'
+        )
+        if not self.solar_off:
+            self.sub_status_label.pack(pady=2)
+            latest_pv = self.se_power[-1] if self.se_power else 0.0
+            self.sub_status_label.config(text=f"SolarEdge PV: {latest_pv:.3f} kW")
 
         # Matplotlib figure setup.
         self.fig: Figure = Figure(figsize=(5, 3), dpi=100, facecolor='black')
@@ -120,6 +146,17 @@ class GridDashboard(tk.Tk):
         self.ax.spines['left'].set_color('white')
         self.ax.spines['top'].set_color('black')
         self.ax.spines['right'].set_color('black')
+        
+        # Secondary axes for SolarEdge bar chart along the bottom
+        if not self.solar_off:
+            self.ax_bar = self.ax.twinx()
+            self.ax_bar.set_ylim(0, 10)  # Fixed arbitrary high limit so bars stay at bottom
+            self.ax_bar.tick_params(colors='#fbbf24')
+            self.ax_bar.spines['right'].set_color('#fbbf24')
+            self.ax_bar.spines['left'].set_color('none')
+            self.ax_bar.spines['top'].set_color('none')
+            self.ax_bar.spines['bottom'].set_color('none')
+            self.ax_bar.set_ylabel('SolarEdge PV (kW)', color='#fbbf24', rotation=270, labelpad=15)
         
         # Dotted horizontal line at 0 kW to distinguish importing vs exporting power.
         self.ax.axhline(0, color='gray', linestyle='--') 
@@ -172,6 +209,9 @@ class GridDashboard(tk.Tk):
 
         # Start background thread to fetch Gemini grid summaries every 30 minutes.
         self.start_summary_loop()
+        
+        # Start background thread to poll SolarEdge every 15 minutes.
+        self.start_solaredge_loop()
 
         # Register OS signal handlers for clean teardown on termination signals (SIGINT, SIGTERM)
         signal.signal(signal.SIGINT, self.handle_signal)
@@ -233,6 +273,130 @@ class GridDashboard(tk.Tk):
             logging.info(f"Loaded {len(self.usage)} historical points.")
         except Exception as e:
             logging.error(f"Failed to read history file: {e}")
+
+    def load_credentials(self) -> None:
+        """Loads credentials and settings from environment or local Auth files."""
+        self.solaredge_api_key = os.environ.get("SOLAREDGE_API_KEY")
+        self.solaredge_site_id = os.environ.get("SOLAREDGE_SITE_ID")
+        
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        possible_paths = [
+            os.path.join(script_dir, "Auth/solaredge_config.json"),
+            os.path.join(script_dir, "auth/solaredge_config.json"),
+            os.path.join(home_dir, "Auth/solaredge_config.json"),
+            os.path.join(home_dir, "auth/solaredge_config.json")
+        ]
+        
+        for path in possible_paths:
+            if os.path.exists(path):
+                try:
+                    with open(path, 'r') as f:
+                        data = json.load(f)
+                        if not self.solaredge_api_key:
+                            self.solaredge_api_key = data.get("api_key")
+                        if not self.solaredge_site_id:
+                            self.solaredge_site_id = data.get("site_id")
+                        logging.info(f"Loaded SolarEdge credentials from: {path}")
+                        break
+                except Exception as e:
+                    logging.warning(f"Could not parse credentials file {path}: {e}")
+
+    def load_solaredge_history(self) -> None:
+        """Loads SolarEdge PV history from CSV."""
+        if self.solar_off or not os.path.exists(self.se_history_file):
+            return
+            
+        logging.info("Loading SolarEdge history from CSV...")
+        now: datetime.datetime = datetime.datetime.now()
+        cutoff: datetime.datetime = now - datetime.timedelta(days=1)
+        
+        try:
+            with open(self.se_history_file, 'r') as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    if len(row) == 2:
+                        try:
+                            ts_str = row[0].replace('\x00', '').strip()
+                            val_str = row[1].replace('\x00', '').strip()
+                            if not ts_str or not val_str:
+                                continue
+                            ts = datetime.datetime.fromisoformat(ts_str)
+                            if ts > cutoff:
+                                self.se_timestamps.append(ts)
+                                self.se_power.append(float(val_str))
+                        except Exception as parse_err:
+                            logging.warning(f"Skipping corrupted SolarEdge row: {row} - Error: {parse_err}")
+            logging.info(f"Loaded {len(self.se_power)} SolarEdge historical points.")
+        except Exception as e:
+            logging.error(f"Failed to read SolarEdge history file: {e}")
+
+    def fetch_solaredge_data(self) -> None:
+        """Polls SolarEdge API and logs to history."""
+        if not self.solaredge_api_key or not self.solaredge_site_id:
+            logging.info("SolarEdge credentials not set. Skipping poll.")
+            return
+
+        now = datetime.datetime.now()
+        hour = now.hour + now.minute / 60.0
+        
+        # Smart Sunrise/Sunset Polling check
+        # Skip polling outside potential daylight hours (5:00 AM to 9:30 PM) to conserve calls
+        if hour < 5.0 or hour > 21.5:
+            logging.info("Outside of daytime window. Skipping SolarEdge poll.")
+            return
+
+        url = f"https://monitoringapi.solaredge.com/site/{self.solaredge_site_id}/overview?api_key={self.solaredge_api_key}&format=json"
+        try:
+            logging.info("Polling SolarEdge API...")
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode('utf-8'))
+                overview = data.get("overview", {})
+                current_power = overview.get("currentPower", {})
+                power_w = current_power.get("power", 0.0)
+                power_kw = power_w / 1000.0
+                
+                logging.info(f"SolarEdge PV current power: {power_kw:.3f} kW")
+                
+                self.se_timestamps.append(now)
+                self.se_power.append(power_kw)
+                
+                if len(self.se_power) > self.max_points:
+                    self.se_power.pop(0)
+                    self.se_timestamps.pop(0)
+                
+                try:
+                    with open(self.se_history_file, 'a') as f:
+                        writer = csv.writer(f)
+                        writer.writerow([now.isoformat(), f"{power_kw:.3f}"])
+                except Exception as file_err:
+                    logging.error(f"Failed to write SolarEdge history: {file_err}")
+                
+                # Redraw is handled dynamically when update_chart runs, or we trigger it explicitly
+                self.after(0, lambda: self.sub_status_label.config(text=f"SolarEdge PV: {power_kw:.3f} kW"))
+                self.after(0, lambda: self.update_chart(self.status_label.cget("text"), self.status_label.cget("fg")))
+                
+        except Exception as e:
+            logging.error(f"Error polling SolarEdge API: {e}")
+
+    def start_solaredge_loop(self) -> None:
+        """Spawns the background thread to poll SolarEdge every 15 minutes."""
+        if self.solar_off:
+            return
+        self.solaredge_thread: threading.Thread = threading.Thread(target=self.solaredge_loop, daemon=True)
+        self.solaredge_thread.start()
+
+    def solaredge_loop(self) -> None:
+        """Background loop to fetch SolarEdge power data every 15 minutes."""
+        self.fetch_solaredge_data()
+        while self.running:
+            # Sleep for 15 minutes (900 seconds), checking self.running every 10 seconds.
+            for _ in range(90):
+                if not self.running:
+                    break
+                time.sleep(10)
+            if self.running:
+                self.fetch_solaredge_data()
 
     def find_emu2_port(self) -> str:
         """Dynamically searches for the EMU-2 serial port.
@@ -423,6 +587,33 @@ class GridDashboard(tk.Tk):
             padding: float = max(abs(y_max - y_min) * 0.2, 0.5)
             self.ax.set_ylim(min(0, y_min - padding), max(0, y_max + padding))
             
+        # Draw SolarEdge bars on secondary Y-axis
+        if not self.solar_off and hasattr(self, 'ax_bar'):
+            self.ax_bar.clear()
+            self.ax_bar.tick_params(colors='#fbbf24')
+            self.ax_bar.spines['right'].set_color('#fbbf24')
+            self.ax_bar.spines['left'].set_color('none')
+            self.ax_bar.spines['top'].set_color('none')
+            self.ax_bar.spines['bottom'].set_color('none')
+            self.ax_bar.set_ylabel('SolarEdge PV (kW)', color='#fbbf24', rotation=270, labelpad=15)
+            
+            if self.se_power and self.se_timestamps:
+                bar_times = []
+                bar_heights = []
+                for ts, p in zip(self.se_timestamps, self.se_power):
+                    if ts >= start_time:
+                        bar_times.append(ts)
+                        bar_heights.append(p)
+                if bar_times:
+                    width_in_days = 15.0 / (24.0 * 60.0)
+                    self.ax_bar.bar(bar_times, bar_heights, width=width_in_days, color='#fbbf24', alpha=0.3, zorder=1)
+                    max_power = max(bar_heights) if bar_heights else 1.0
+                    self.ax_bar.set_ylim(0, max_power * 3)
+                else:
+                    self.ax_bar.set_ylim(0, 10)
+            else:
+                self.ax_bar.set_ylim(0, 10)
+            
         # Efficiently queue a redraw request on the matplotlib GUI canvas.
         self.fig.canvas.draw_idle()
 
@@ -473,9 +664,9 @@ class GridDashboard(tk.Tk):
             logging.error(f"Failed to load cached Gemini summary: {e}")
 
     def generate_hourly_summaries(self) -> str:
-        """Parses the entire historical CSV and computes hourly min, max, avg, and median.
+        """Parses the entire historical CSV files and computes hourly min, max, avg, and median.
         
-        Returns a compact CSV string representation of all historical data bucketed by hour.
+        Returns a compact CSV string representation of Net Grid and SolarEdge PV data bucketed by hour.
         """
         if not os.path.exists(self.history_file):
             return ""
@@ -500,17 +691,48 @@ class GridDashboard(tk.Tk):
             logging.error(f"Error parsing history file for aggregation: {e}")
             return ""
             
-        lines = ["Hour,Avg_kW,Min_kW,Max_kW,Median_kW"]
-        # Sort chronologically by the string key
-        for hour in sorted(hourly_data.keys()):
+        se_hourly_data = defaultdict(list)
+        if not self.solar_off and os.path.exists(self.se_history_file):
+            try:
+                with open(self.se_history_file, 'r') as f:
+                    reader = csv.reader(f)
+                    for row in reader:
+                        if len(row) == 2:
+                            ts_str = row[0].strip().replace('\x00', '')
+                            val_str = row[1].strip().replace('\x00', '')
+                            if not ts_str or not val_str:
+                                continue
+                            hour_key = ts_str[:13].replace('T', ' ') + ":00"
+                            try:
+                                se_hourly_data[hour_key].append(float(val_str))
+                            except ValueError:
+                                continue
+            except Exception as e:
+                logging.error(f"Error parsing SolarEdge history for aggregation: {e}")
+                
+        lines = ["Hour,Avg_kW,Min_kW,Max_kW,Median_kW,SE_Avg_kW,SE_Max_kW,SE_Energy_kWh"]
+        all_hours = sorted(list(set(list(hourly_data.keys()) + list(se_hourly_data.keys()))))
+        
+        for hour in all_hours:
             vals = hourly_data[hour]
-            if not vals:
-                continue
-            avg_kw = sum(vals) / len(vals)
-            min_kw = min(vals)
-            max_kw = max(vals)
-            med_kw = statistics.median(vals)
-            lines.append(f"{hour},{avg_kw:.3f},{min_kw:.3f},{max_kw:.3f},{med_kw:.3f}")
+            se_vals = se_hourly_data[hour]
+            
+            if vals:
+                avg_kw = sum(vals) / len(vals)
+                min_kw = min(vals)
+                max_kw = max(vals)
+                med_kw = statistics.median(vals)
+            else:
+                avg_kw, min_kw, max_kw, med_kw = 0.0, 0.0, 0.0, 0.0
+                
+            if se_vals:
+                se_avg_kw = sum(se_vals) / len(se_vals)
+                se_max_kw = max(se_vals)
+                se_energy_kwh = se_avg_kw * 1.0
+            else:
+                se_avg_kw, se_max_kw, se_energy_kwh = 0.0, 0.0, 0.0
+                
+            lines.append(f"{hour},{avg_kw:.3f},{min_kw:.3f},{max_kw:.3f},{med_kw:.3f},{se_avg_kw:.3f},{se_max_kw:.3f},{se_energy_kwh:.3f}")
             
         return "\n".join(lines)
 

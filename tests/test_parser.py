@@ -8,6 +8,7 @@ using mock objects to ensure zero external dependencies.
 
 import pytest
 import os
+import json
 import sys
 import tempfile
 import datetime
@@ -128,10 +129,14 @@ def test_fetch_gemini_summary_backoff(mock_sleep, mock_genai_client):
     dashboard = GridDashboard()
     dashboard.usage = [1.0] * 20
     dashboard.timestamps = [datetime.datetime.now()] * 20
+    dashboard.solaredge_api_key = None
+    dashboard.solaredge_site_id = None
     dashboard.last_summary_time = None
     dashboard.summary_cache_file = "/dev/null"
     dashboard.update_background_summary = MagicMock()
     dashboard.after = MagicMock()
+    
+    dashboard.generate_hourly_summaries = MagicMock(return_value="Hour,Avg_kW,Min_kW,Max_kW,Median_kW,SE_Avg_kW,SE_Max_kW,SE_Energy_kWh\n2026-05-26 12:00,1.5,1.5,1.5,1.5,0.0,0.0,0.0")
     
     with patch.dict(os.environ, {"GEMINI_API_KEY": "fake_key"}):
         mock_client_instance = MagicMock()
@@ -146,7 +151,15 @@ def test_fetch_gemini_summary_backoff(mock_sleep, mock_genai_client):
         ]
         mock_genai_client.return_value = mock_client_instance
         
-        with patch('builtins.open', unittest.mock.mock_open(read_data="{csv_data} {current_date_time} {last_data_time}")):
+        original_open = open
+        def mock_open_file(file, *args, **kwargs):
+            if 'gemini_prompt.txt' in str(file):
+                return unittest.mock.mock_open(read_data="{csv_data} {current_date_time} {last_data_time}")()
+            if 'gemini_summary.json' in str(file) or '/dev/null' in str(file):
+                return unittest.mock.mock_open()()
+            return original_open(file, *args, **kwargs)
+            
+        with patch('builtins.open', side_effect=mock_open_file):
             with patch('os.path.exists', return_value=True):
                 dashboard.fetch_gemini_summary()
         
@@ -155,3 +168,131 @@ def test_fetch_gemini_summary_backoff(mock_sleep, mock_genai_client):
         mock_sleep.assert_any_call(8)
         
         dashboard.after.assert_called_with(0, dashboard.update_background_summary, "Spoofed summary")
+
+@patch.object(GridDashboard, '__init__', lambda x: None)
+def test_load_solaredge_history():
+    """Test loading SolarEdge history from CSV."""
+    dashboard = GridDashboard()
+    dashboard.solar_off = False
+    dashboard.se_power = []
+    dashboard.se_timestamps = []
+    
+    with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
+        valid_time = (datetime.datetime.now() - datetime.timedelta(hours=1)).isoformat()
+        f.write(f"{valid_time},1.500\n")
+        f.write(f"{valid_time}\x00,bad_data\x00\n")
+        temp_path = f.name
+        
+    dashboard.se_history_file = temp_path
+    try:
+        dashboard.load_solaredge_history()
+        assert len(dashboard.se_power) == 1
+        assert dashboard.se_power[0] == 1.500
+    finally:
+        os.remove(temp_path)
+
+@patch.object(GridDashboard, '__init__', lambda x: None)
+@patch('urllib.request.urlopen')
+def test_fetch_solaredge_data(mock_urlopen):
+    """Test fetching and parsing SolarEdge API overview response."""
+    dashboard = GridDashboard()
+    dashboard.solaredge_api_key = "fake_key"
+    dashboard.solaredge_site_id = "fake_id"
+    dashboard.se_power = []
+    dashboard.se_timestamps = []
+    dashboard.max_points = 5
+    dashboard.after = MagicMock()
+    dashboard.status_label = MagicMock()
+    dashboard.sub_status_label = MagicMock()
+    
+    # Mock status label cget
+    dashboard.status_label.cget.side_effect = lambda attr: "white" if attr == "fg" else "Waiting..."
+    
+    with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
+        temp_path = f.name
+    dashboard.se_history_file = temp_path
+    
+    # Mock response JSON
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = b'{"overview": {"currentPower": {"power": 1200.0}}}'
+    mock_urlopen.return_value.__enter__.return_value = mock_resp
+    
+    # Mock datetime hour to be inside daytime window (12:00 PM)
+    mock_now = datetime.datetime(2026, 5, 26, 12, 0, 0)
+    try:
+        with patch('datetime.datetime') as mock_datetime:
+            mock_datetime.now.return_value = mock_now
+            mock_datetime.fromisoformat = datetime.datetime.fromisoformat
+            
+            dashboard.fetch_solaredge_data()
+            
+            assert len(dashboard.se_power) == 1
+            assert dashboard.se_power[0] == 1.200 # 1200 W = 1.2 kW
+            dashboard.after.assert_called()
+    finally:
+        os.remove(temp_path)
+
+@patch.object(GridDashboard, '__init__', lambda x: None)
+def test_generate_hourly_summaries_with_solaredge():
+    """Test hourly summaries combine both grid history and SolarEdge history."""
+    dashboard = GridDashboard()
+    dashboard.solar_off = False
+    
+    with tempfile.NamedTemporaryFile(mode='w', delete=False) as f_grid:
+        valid_time = "2026-05-26T12:00:00"
+        f_grid.write(f"{valid_time},2.000\n")
+        grid_path = f_grid.name
+        
+    with tempfile.NamedTemporaryFile(mode='w', delete=False) as f_se:
+        f_se.write(f"{valid_time},1.500\n")
+        se_path = f_se.name
+        
+    dashboard.history_file = grid_path
+    dashboard.se_history_file = se_path
+    
+    try:
+        csv_data = dashboard.generate_hourly_summaries()
+        lines = csv_data.split('\n')
+        # Header + 1 data line
+        assert len(lines) == 2
+        assert lines[0] == "Hour,Avg_kW,Min_kW,Max_kW,Median_kW,SE_Avg_kW,SE_Max_kW,SE_Energy_kWh"
+        assert "2026-05-26 12:00,2.000,2.000,2.000,2.000,1.500,1.500,1.500" in lines[1]
+    finally:
+        os.remove(grid_path)
+        os.remove(se_path)
+
+@patch.object(GridDashboard, '__init__', lambda x: None)
+def test_solar_off_flag():
+    """Test that solar_off flag suppresses SolarEdge loop and history loading."""
+    dashboard = GridDashboard()
+    dashboard.solar_off = True
+    dashboard.se_history_file = "/dev/null"
+    dashboard.se_power = []
+    dashboard.se_timestamps = []
+    
+    dashboard.load_solaredge_history()
+    assert len(dashboard.se_power) == 0
+    
+    dashboard.start_solaredge_loop()
+    assert 'solaredge_thread' not in dashboard.__dict__
+
+@patch.object(GridDashboard, '__init__', lambda x: None)
+def test_load_credentials():
+    """Test loading credentials from JSON config."""
+    dashboard = GridDashboard()
+    dashboard.solaredge_api_key = None
+    dashboard.solaredge_site_id = None
+    
+    with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
+        json.dump({"api_key": "json_key", "site_id": "json_id"}, f)
+        temp_path = f.name
+        
+    try:
+        with patch('os.path.exists', return_value=True):
+            with patch('builtins.open', unittest.mock.mock_open(read_data=open(temp_path).read())):
+                dashboard.load_credentials()
+                assert dashboard.solaredge_api_key == "json_key"
+                assert dashboard.solaredge_site_id == "json_id"
+    finally:
+        os.remove(temp_path)
+

@@ -34,6 +34,15 @@ The dashboard automatically searches for credentials using one of the following 
      GEMINI_API_KEY="your_api_key_here"
      ```
 
+### SolarEdge API Configuration
+To enable SolarEdge PV generation overlay and mathematical analysis in the Gemini prompt, configure your SolarEdge API credentials inside `~/Auth/solaredge_config.json` (or `auth/solaredge_config.json` in the application directory):
+```json
+{
+  "api_key": "your_solaredge_api_key",
+  "site_id": "your_solaredge_site_id"
+}
+```
+
 ---
 
 ## Complete Setup Instructions
@@ -114,6 +123,11 @@ To run manually:
 export DISPLAY=:0 && python3 dashboard.py
 ```
 *(Note: If you receive a `couldn't connect` error because the HDMI is sitting at the root login screen, inject it using: `sudo XAUTHORITY=/var/run/lightdm/root/:0 DISPLAY=:0 python3 dashboard.py`)*
+
+If you do not have a SolarEdge solar system configured and want to completely disable SolarEdge telemetry querying, history loading, bar chart plotting, and aligned aggregations, run the dashboard using the `--solaroff` option:
+```bash
+python3 dashboard.py --solaroff
+```
 
 ## Development & Security
 - Always run `gitleaks` prior to committing or syncing any changes to GitHub.

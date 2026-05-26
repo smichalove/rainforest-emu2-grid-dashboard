@@ -49,6 +49,12 @@ class OfflineViewer(tk.Tk):
         )
         self.status_label.pack(pady=5)
 
+        latest_pv = self.mock_se_pv[-1] if self.mock_se_pv else 0.0
+        self.sub_status_label: tk.Label = tk.Label(
+            self, text=f"SolarEdge PV: {latest_pv:.3f} kW", font=('Helvetica', 20, 'bold'), bg='black', fg='#fbbf24'
+        )
+        self.sub_status_label.pack(pady=2)
+
         # Matplotlib figure setup
         self.fig: Figure = Figure(figsize=(5, 3), dpi=100, facecolor='black')
         self.fig.subplots_adjust(left=0.15, right=0.95, top=0.95, bottom=0.15)
@@ -63,7 +69,12 @@ class OfflineViewer(tk.Tk):
         # Secondary axes for SolarEdge bar chart along the bottom
         self.ax_bar = self.ax.twinx()
         self.ax_bar.set_ylim(0, 10)  # Fixed arbitrary high limit so bars stay at bottom
-        self.ax_bar.axis('off')  # Hide the axes lines and ticks so it blends in
+        self.ax_bar.tick_params(colors='#fbbf24')
+        self.ax_bar.spines['right'].set_color('#fbbf24')
+        self.ax_bar.spines['left'].set_color('none')
+        self.ax_bar.spines['top'].set_color('none')
+        self.ax_bar.spines['bottom'].set_color('none')
+        self.ax_bar.set_ylabel('SolarEdge PV (kW)', color='#fbbf24', rotation=270, labelpad=15)
         
         # Dotted horizontal line at 0 kW
         self.ax.axhline(0, color='gray', linestyle='--') 
@@ -91,6 +102,9 @@ class OfflineViewer(tk.Tk):
         # Load cached summary and draw the plot
         self.load_cached_summary()
         self.update_chart()
+
+        # Schedule automatic screenshot generation after window loads
+        self.after(1500, self.save_screenshot)
 
     def load_history(self) -> None:
         """Loads data from local grid_history.csv file."""
@@ -242,7 +256,12 @@ class OfflineViewer(tk.Tk):
                             bar_heights.append(energy)
                 
                 self.ax_bar.clear()
-                self.ax_bar.axis('off')
+                self.ax_bar.tick_params(colors='#fbbf24')
+                self.ax_bar.spines['right'].set_color('#fbbf24')
+                self.ax_bar.spines['left'].set_color('none')
+                self.ax_bar.spines['top'].set_color('none')
+                self.ax_bar.spines['bottom'].set_color('none')
+                self.ax_bar.set_ylabel('SolarEdge PV (kW)', color='#fbbf24', rotation=270, labelpad=15)
                 if bar_times:
                     # Plot bars with zorder 1 so they stay behind the grid line
                     self.ax_bar.bar(bar_times, bar_heights, width=20/(24*60), color='#fbbf24', alpha=0.3, zorder=1)
@@ -263,6 +282,48 @@ class OfflineViewer(tk.Tk):
             self.ax.set_ylim(min(0, y_min - padding), max(0, y_max + padding))
             
         self.fig.canvas.draw()
+
+    def save_screenshot(self) -> None:
+        """Programmatically captures the TK window and saves it to dashboard_preview.jpeg."""
+        self.attributes('-topmost', True)
+        self.lift()
+        self.focus_force()
+        self.update()
+        
+        # Give the OS window manager a brief moment to bring the window to the front
+        import time
+        time.sleep(0.5)
+        
+        # Retrieve coordinates relative to the screen
+        x = self.winfo_rootx()
+        y = self.winfo_rooty()
+        w = self.winfo_width()
+        h = self.winfo_height()
+        
+        import platform
+        import subprocess
+        
+        if platform.system() == "Darwin":
+            try:
+                # Use macOS's built-in screencapture tool which handles Retina scaling and coordinates cleanly.
+                # Format: screencapture -o -t jpg -R x,y,w,h output.jpeg
+                cmd = ["screencapture", "-o", "-t", "jpg", "-R", f"{x},{y},{w},{h}", "dashboard_preview.jpeg"]
+                subprocess.run(cmd, check=True)
+                print("Successfully captured and saved dashboard_preview.jpeg via macOS screencapture!")
+            except Exception as e:
+                print(f"macOS screencapture failed: {e}. Trying PIL fallback...")
+                self._pil_fallback(x, y, w, h)
+        else:
+            self._pil_fallback(x, y, w, h)
+
+    def _pil_fallback(self, x: int, y: int, w: int, h: int) -> None:
+        from PIL import ImageGrab
+        try:
+            img = ImageGrab.grab(bbox=(x, y, x + w, y + h))
+            img.convert('RGB').save('dashboard_preview.jpeg', 'JPEG', quality=95)
+            print("Successfully captured and saved dashboard_preview.jpeg via PIL ImageGrab!")
+        except Exception as e:
+            print(f"Error capturing screenshot via PIL: {e}")
 
 if __name__ == "__main__":
     app = OfflineViewer()
