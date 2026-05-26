@@ -10,6 +10,8 @@ import os
 import json
 import signal
 import textwrap
+import statistics
+from collections import defaultdict
 import matplotlib.dates as mdates
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -470,6 +472,48 @@ class GridDashboard(tk.Tk):
         except Exception as e:
             logging.error(f"Failed to load cached Gemini summary: {e}")
 
+    def generate_hourly_summaries(self) -> str:
+        """Parses the entire historical CSV and computes hourly min, max, avg, and median.
+        
+        Returns a compact CSV string representation of all historical data bucketed by hour.
+        """
+        if not os.path.exists(self.history_file):
+            return ""
+            
+        hourly_data = defaultdict(list)
+        try:
+            with open(self.history_file, 'r') as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    if len(row) == 2:
+                        ts_str = row[0].strip().replace('\x00', '')
+                        val_str = row[1].strip().replace('\x00', '')
+                        if not ts_str or not val_str:
+                            continue
+                        # Fast string slicing to grab "YYYY-MM-DDTHH" without expensive datetime parsing
+                        hour_key = ts_str[:13].replace('T', ' ') + ":00"
+                        try:
+                            hourly_data[hour_key].append(float(val_str))
+                        except ValueError:
+                            continue
+        except Exception as e:
+            logging.error(f"Error parsing history file for aggregation: {e}")
+            return ""
+            
+        lines = ["Hour,Avg_kW,Min_kW,Max_kW,Median_kW"]
+        # Sort chronologically by the string key
+        for hour in sorted(hourly_data.keys()):
+            vals = hourly_data[hour]
+            if not vals:
+                continue
+            avg_kw = sum(vals) / len(vals)
+            min_kw = min(vals)
+            max_kw = max(vals)
+            med_kw = statistics.median(vals)
+            lines.append(f"{hour},{avg_kw:.3f},{min_kw:.3f},{max_kw:.3f},{med_kw:.3f}")
+            
+        return "\n".join(lines)
+
     def fetch_gemini_summary(self) -> None:
         """Fetches a summary of the current day's data from Gemini.
 
@@ -493,14 +537,11 @@ class GridDashboard(tk.Tk):
 
         try:
             logging.info("Initiating Gemini API call to fetch grid summary...")
-            # 1. Format the data compactly (taking every 4th point / ~1 min intervals)
-            # Include both year-month-day and hour-minute to avoid model date hallucinations.
-            lines = []
-            for i in range(0, len(self.usage), 4):
-                ts = self.timestamps[i].strftime("%Y-%m-%d %H:%M")
-                val = f"{self.usage[i]:.3f}"
-                lines.append(f"{ts},{val}")
-            csv_data = "\n".join(lines)
+            # 1. Generate ultra-compact hourly summaries of the ENTIRE historical dataset
+            csv_data = self.generate_hourly_summaries()
+            if not csv_data or len(csv_data.split('\n')) < 2:
+                logging.warning("No historical data available for Gemini summary.")
+                return
 
             # 2. Check for API key (via Environment variable or local .env file)
             api_key = os.environ.get("GEMINI_API_KEY")
@@ -587,12 +628,18 @@ class GridDashboard(tk.Tk):
             # Format the CSV data and relevant date placeholders (both current time and last telemetry time)
             current_dt_str: str = now.strftime("%Y-%m-%d %H:%M:%S")
             last_dt_str: str = self.timestamps[-1].strftime("%Y-%m-%d %H:%M:%S") if self.timestamps else "N/A"
+            
+            # Extract the starting date/time from the first row of our aggregated CSV (skipping the header)
+            lines_data = csv_data.split('\n')
+            first_dt_str = lines_data[1].split(',')[0] if len(lines_data) > 1 else "N/A"
+            
             try:
-                # Support both {current_date_time} and {last_data_time} placeholders in the template
+                # Support placeholders in the template
                 prompt: str = prompt_template.format(
                     csv_data=csv_data,
                     current_date_time=current_dt_str,
-                    last_data_time=last_dt_str
+                    last_data_time=last_dt_str,
+                    first_data_time=first_dt_str
                 )
             except KeyError as ke:
                 logging.error(f"Failed to format prompt template due to missing placeholder: {ke}")
