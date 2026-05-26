@@ -194,8 +194,7 @@ class GridDashboard(tk.Tk):
 
         # If historical data is loaded, draw the chart and status label immediately on startup.
         if self.usage:
-            latest_val: float = self.usage[-1]
-            status: str = "Exporting (Solar)" if latest_val < 0 else "Importing (Grid)"
+            status: str = "Combined Solar Export (PV)" if latest_val < 0 else "Importing (Grid)"
             color: str = EXPORT_COLOR if latest_val < 0 else IMPORT_COLOR
             text: str = f"{latest_val:.3f} kW | {status}"
             self.update_chart(text, color)
@@ -520,7 +519,7 @@ class GridDashboard(tk.Tk):
                     pass
                 
                 # Format current status. Green indicates solar export, red indicates grid import.
-                status: str = "Exporting (Solar)" if actual_kw < 0 else "Importing (Grid)"
+                status: str = "Combined Solar Export (PV)" if actual_kw < 0 else "Importing (Grid)"
                 color: str = EXPORT_COLOR if actual_kw < 0 else IMPORT_COLOR
                 text: str = f"{actual_kw:.3f} kW | {status}"
                 
