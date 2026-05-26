@@ -152,6 +152,7 @@ class GridDashboard(tk.Tk):
             self.ax_bar = self.ax.twinx()
             self.ax_bar.set_ylim(0, 10)  # Fixed arbitrary high limit so bars stay at bottom
             self.ax_bar.tick_params(colors='#fbbf24')
+            self.ax_bar.yaxis.set_label_position('right')
             self.ax_bar.spines['right'].set_color('#fbbf24')
             self.ax_bar.spines['left'].set_color('none')
             self.ax_bar.spines['top'].set_color('none')
@@ -591,6 +592,7 @@ class GridDashboard(tk.Tk):
         if not self.solar_off and hasattr(self, 'ax_bar'):
             self.ax_bar.clear()
             self.ax_bar.tick_params(colors='#fbbf24')
+            self.ax_bar.yaxis.set_label_position('right')
             self.ax_bar.spines['right'].set_color('#fbbf24')
             self.ax_bar.spines['left'].set_color('none')
             self.ax_bar.spines['top'].set_color('none')
@@ -804,10 +806,11 @@ class GridDashboard(tk.Tk):
 
             from google import genai
             from google.genai import types
+            import httpx
 
             # 5. Initialize client based on available auth method
             model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
-            http_opts = types.HttpOptions(timeout=60.0)
+            http_opts = types.HttpOptions(httpx_client=httpx.Client(timeout=60.0))
             if api_key:
                 logging.info("Initializing GenAI client using developer API key.")
                 client = genai.Client(api_key=api_key, http_options=http_opts)

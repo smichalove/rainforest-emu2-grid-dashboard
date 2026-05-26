@@ -70,6 +70,7 @@ class OfflineViewer(tk.Tk):
         self.ax_bar = self.ax.twinx()
         self.ax_bar.set_ylim(0, 10)  # Fixed arbitrary high limit so bars stay at bottom
         self.ax_bar.tick_params(colors='#fbbf24')
+        self.ax_bar.yaxis.set_label_position('right')
         self.ax_bar.spines['right'].set_color('#fbbf24')
         self.ax_bar.spines['left'].set_color('none')
         self.ax_bar.spines['top'].set_color('none')
@@ -257,6 +258,7 @@ class OfflineViewer(tk.Tk):
                 
                 self.ax_bar.clear()
                 self.ax_bar.tick_params(colors='#fbbf24')
+                self.ax_bar.yaxis.set_label_position('right')
                 self.ax_bar.spines['right'].set_color('#fbbf24')
                 self.ax_bar.spines['left'].set_color('none')
                 self.ax_bar.spines['top'].set_color('none')
