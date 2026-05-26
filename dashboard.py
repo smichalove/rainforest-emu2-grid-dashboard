@@ -549,6 +549,17 @@ class GridDashboard(tk.Tk):
             else:
                 logging.info("Initializing GenAI client for Vertex AI.")
                 project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
+                # Fix: If project_id is missing, read it directly from the service account JSON
+                # to prevent the Vertex AI SDK from hanging for 120 seconds while probing the network.
+                if not project_id and has_service_account:
+                    try:
+                        with open(os.environ["GOOGLE_APPLICATION_CREDENTIALS"], 'r') as key_file:
+                            sa_data = json.load(key_file)
+                            project_id = sa_data.get("project_id")
+                            logging.info(f"Auto-extracted project_id '{project_id}' from Service Account JSON.")
+                    except Exception as json_err:
+                        logging.warning(f"Could not read project_id from service account: {json_err}")
+                
                 location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
                 client = genai.Client(
                     vertexai=True,

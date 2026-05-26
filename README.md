@@ -86,11 +86,13 @@ Terminal=false
 ```
 
 ### 4. Install Dependencies & X11 Autostart
-Modern Debian distributions (like Bookworm on Raspberry Pi) enforce PEP 668, preventing direct `pip` installations. We have provided a 1-click install script that automatically provisions a Python virtual environment (`venv`), installs dependencies, and sets up a standard `.desktop` autostart file to launch the dashboard automatically when the X11 desktop loads.
+Modern Debian distributions (like Bookworm on Raspberry Pi) enforce PEP 668, preventing direct `pip` installations. 
+1. Clone the repository to your Raspberry Pi.
+2. Run the deployment script to create the Python virtual environment, install dependencies, configure the X11 autostart so the dashboard launches fullscreen automatically on boot, and suppress Raspberry Pi OS update popups for a seamless kiosk experience.
 
-Run the install script from the project root:
 ```bash
-bash install.sh
+chmod +x install.sh
+./install.sh
 ```
 
 **Manual `venv` setup (if not using the install script):**
