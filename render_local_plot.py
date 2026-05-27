@@ -356,9 +356,9 @@ class OfflineViewer(tk.Tk):
                     
                 width_in_days = 10.0 / (24.0 * 60.0) # 10 minutes
                 # Draw SolarEdge (bottom)
-                self.ax_bar.bar(bar_times, se_heights, width=width_in_days, color='#fbbf24', alpha=0.3, zorder=1)
+                self.ax_bar.bar(bar_times, se_heights, width=width_in_days, color='#fbbf24', alpha=0.3, zorder=1, edgecolor='none')
                 # Draw Chillicon (stacked on top of SolarEdge - bright neon yellow)
-                self.ax_bar.bar(bar_times, ch_heights, bottom=se_heights, width=width_in_days, color='#ffff00', alpha=0.8, zorder=1.5)
+                self.ax_bar.bar(bar_times, ch_heights, bottom=se_heights, width=width_in_days, color='#ffff00', alpha=0.8, zorder=1.5, edgecolor='none')
                 
                 max_power = max([s + c for s, c in zip(se_heights, ch_heights)]) if all_keys else 1.0
                 self.ax_bar.set_ylim(0, max_power * 3)
