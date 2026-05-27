@@ -95,6 +95,7 @@ class GridDashboard(tk.Tk):
         
         # Check command line flags
         self.solar_off: bool = "--solaroff" in sys.argv
+        self.chilicon_off: bool = "--chiliconoff" in sys.argv
         
         # SolarEdge PV and Battery In-memory arrays and paths
         self.se_timestamps: List[datetime.datetime] = []
@@ -104,6 +105,15 @@ class GridDashboard(tk.Tk):
         self.se_battery_soc: List[float] = []
         self.solaredge_api_key: Optional[str] = None
         self.solaredge_site_id: Optional[str] = None
+
+        # Chillicon Solar In-memory arrays and parameters
+        self.chilicon_timestamps: List[datetime.datetime] = []
+        self.chilicon_power: List[float] = []
+        self.chilicon_energy: List[float] = []
+        self.chilicon_username: Optional[str] = None
+        self.chilicon_password: Optional[str] = None
+        self.chilicon_installation_hash: Optional[str] = None
+        self.chilicon_opener: Optional[urllib.request.OpenerDirector] = None
         
         # 5760 points at ~15s intervals equals exactly 24 hours of data.
         self.max_points: int = 5760 
@@ -117,12 +127,16 @@ class GridDashboard(tk.Tk):
         
         local_se_battery_history: str = os.path.join(script_dir, 'solaredge_battery_history.csv')
         self.se_battery_history_file: str = local_se_battery_history if os.path.exists(local_se_battery_history) else os.path.join(home_dir, 'solaredge_battery_history.csv')
+
+        local_chilicon_history: str = os.path.join(script_dir, 'chilicon_history.csv')
+        self.chilicon_history_file: str = local_chilicon_history if os.path.exists(local_chilicon_history) or not os.path.exists(os.path.join(home_dir, 'chilicon_history.csv')) else os.path.join(home_dir, 'chilicon_history.csv')
         
         self.load_credentials()
         
         # Reload historical data from CSV so the graph survives power interruptions.
         self.load_history()
         self.load_solaredge_history()
+        self.load_chilicon_history()
 
         # UI Text label configuration.
         self.status_label: tk.Label = tk.Label(
@@ -220,6 +234,9 @@ class GridDashboard(tk.Tk):
         # Start background thread to poll SolarEdge every 15 minutes.
         self.start_solaredge_loop()
 
+        # Start background thread to poll Chillicon every 10 minutes.
+        self.start_chilicon_loop()
+
         # Register OS signal handlers for clean teardown on termination signals (SIGINT, SIGTERM)
         signal.signal(signal.SIGINT, self.handle_signal)
         signal.signal(signal.SIGTERM, self.handle_signal)
@@ -285,6 +302,9 @@ class GridDashboard(tk.Tk):
         """Loads credentials and settings from environment or local Auth files."""
         self.solaredge_api_key = os.environ.get("SOLAREDGE_API_KEY")
         self.solaredge_site_id = os.environ.get("SOLAREDGE_SITE_ID")
+        self.chilicon_username = os.environ.get("CHILICON_USERNAME")
+        self.chilicon_password = os.environ.get("CHILICON_PASSWORD")
+        self.chilicon_installation_hash = os.environ.get("CHILICON_INSTALLATION_HASH")
         
         script_dir = os.path.dirname(os.path.abspath(__file__))
         possible_paths = [
@@ -307,6 +327,29 @@ class GridDashboard(tk.Tk):
                         break
                 except Exception as e:
                     logging.warning(f"Could not parse credentials file {path}: {e}")
+
+        # Load Chillicon credentials
+        possible_chilicon_paths = [
+            os.path.join(script_dir, "Auth/chilicon_config.json"),
+            os.path.join(script_dir, "auth/chilicon_config.json"),
+            os.path.join(home_dir, "Auth/chilicon_config.json"),
+            os.path.join(home_dir, "auth/chilicon_config.json")
+        ]
+        for path in possible_chilicon_paths:
+            if os.path.exists(path):
+                try:
+                    with open(path, 'r') as f:
+                        data = json.load(f)
+                        if not self.chilicon_username:
+                            self.chilicon_username = data.get("username")
+                        if not self.chilicon_password:
+                            self.chilicon_password = data.get("password")
+                        if not self.chilicon_installation_hash:
+                            self.chilicon_installation_hash = data.get("installation_hash")
+                        logging.info(f"Loaded Chillicon credentials from: {path}")
+                        break
+                except Exception as e:
+                    logging.warning(f"Could not parse Chillicon credentials file {path}: {e}")
 
     def load_solaredge_history(self) -> None:
         """Loads SolarEdge PV and battery history from CSV."""
@@ -361,6 +404,167 @@ class GridDashboard(tk.Tk):
                 logging.info(f"Loaded {len(self.se_battery_power)} SolarEdge battery historical points.")
             except Exception as e:
                 logging.error(f"Failed to read SolarEdge battery history file: {e}")
+
+    def load_chilicon_history(self) -> None:
+        """Loads Chillicon PV and energy history from CSV."""
+        if self.chilicon_off:
+            return
+            
+        now: datetime.datetime = datetime.datetime.now()
+        cutoff: datetime.datetime = now - datetime.timedelta(days=1)
+        
+        if os.path.exists(self.chilicon_history_file):
+            logging.info("Loading Chillicon history from CSV...")
+            try:
+                with open(self.chilicon_history_file, 'r') as f:
+                    reader = csv.reader(f)
+                    for row in reader:
+                        if len(row) == 3:
+                            try:
+                                ts_str = row[0].replace('\x00', '').strip()
+                                p_str = row[1].replace('\x00', '').strip()
+                                e_str = row[2].replace('\x00', '').strip()
+                                if not ts_str or not p_str or not e_str:
+                                    continue
+                                ts = datetime.datetime.fromisoformat(ts_str)
+                                if ts > cutoff:
+                                    self.chilicon_timestamps.append(ts)
+                                    self.chilicon_power.append(float(p_str))
+                                    self.chilicon_energy.append(float(e_str))
+                            except Exception as parse_err:
+                                logging.warning(f"Skipping corrupted Chillicon row: {row} - Error: {parse_err}")
+                logging.info(f"Loaded {len(self.chilicon_power)} Chillicon historical points.")
+            except Exception as e:
+                logging.error(f"Failed to read Chillicon history file: {e}")
+
+    def chilicon_login(self) -> bool:
+        """Logs into Chilicon Cloud and stores session cookies."""
+        import re
+        if not self.chilicon_username or not self.chilicon_password:
+            logging.error("Chillicon credentials not set. Cannot log in.")
+            return False
+            
+        login_url = "https://cloud.chiliconpower.com/login"
+        try:
+            logging.info("Fetching Chillicon login page for CSRF token...")
+            req = urllib.request.Request(login_url, headers={'User-Agent': 'Mozilla/5.0'})
+            with self.chilicon_opener.open(req, timeout=15) as r:
+                html = r.read().decode('utf-8')
+                csrf_match = re.search(r'name=["\']csrfmiddlewaretoken["\']\s+value=["\']([^"\']+)["\']', html)
+                csrf_token = csrf_match.group(1) if csrf_match else None
+                
+            login_payload = {
+                'username': self.chilicon_username,
+                'password': self.chilicon_password
+            }
+            if csrf_token:
+                login_payload['csrfmiddlewaretoken'] = csrf_token
+                
+            data = urllib.parse.urlencode(login_payload).encode('utf-8')
+            req = urllib.request.Request(
+                login_url,
+                data=data,
+                headers={
+                    'User-Agent': 'Mozilla/5.0',
+                    'Referer': login_url,
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                }
+            )
+            with self.chilicon_opener.open(req, timeout=15) as r:
+                res_url = r.geturl()
+                logging.info(f"Chillicon login response URL: {res_url}")
+                return True
+        except Exception as e:
+            logging.error(f"Error logging into Chillicon: {e}")
+            return False
+
+    def fetch_chilicon_data(self) -> None:
+        """Polls Chillicon API and logs to history."""
+        if self.chilicon_off:
+            return
+        if not self.chilicon_username or not self.chilicon_password or not self.chilicon_installation_hash:
+            logging.info("Chillicon credentials/installation hash not set. Skipping poll.")
+            return
+
+        if self.chilicon_opener is None:
+            import http.cookiejar
+            cj = http.cookiejar.CookieJar()
+            self.chilicon_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+            if not self.chilicon_login():
+                return
+
+        today_str = datetime.date.today().isoformat()
+        owner_update_url = f"https://cloud.chiliconpower.com/ajax/fetchOwnerUpdate?today={today_str}"
+        
+        req = urllib.request.Request(
+            owner_update_url,
+            headers={
+                'User-Agent': 'Mozilla/5.0',
+                'Referer': f"https://cloud.chiliconpower.com/installation/{self.chilicon_installation_hash}",
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+        )
+        
+        try:
+            logging.info("Polling Chillicon API fetchOwnerUpdate...")
+            with self.chilicon_opener.open(req, timeout=15) as response:
+                res = response.read().decode('utf-8')
+                try:
+                    parsed = json.loads(res)
+                except Exception:
+                    logging.info("Chillicon session might have expired or response invalid. Re-authenticating...")
+                    if self.chilicon_login():
+                        with self.chilicon_opener.open(req, timeout=15) as retry_response:
+                            res = retry_response.read().decode('utf-8')
+                            parsed = json.loads(res)
+                    else:
+                        raise ValueError("Failed to re-authenticate with Chillicon")
+                        
+                if len(parsed) >= 3:
+                    energy_wh = float(parsed[1])
+                    power_kw = float(parsed[2])
+                    now = datetime.datetime.now()
+                    
+                    logging.info(f"Chillicon current power: {power_kw:.3f} kW, Daily Energy: {energy_wh:.1f} Wh")
+                    
+                    self.chilicon_timestamps.append(now)
+                    self.chilicon_power.append(power_kw)
+                    self.chilicon_energy.append(energy_wh)
+                    
+                    cutoff = now - datetime.timedelta(days=1)
+                    while self.chilicon_timestamps and self.chilicon_timestamps[0] < cutoff:
+                        self.chilicon_timestamps.pop(0)
+                        self.chilicon_power.pop(0)
+                        self.chilicon_energy.pop(0)
+                        
+                    try:
+                        with open(self.chilicon_history_file, 'a') as f:
+                            writer = csv.writer(f)
+                            writer.writerow([now.isoformat(), f"{power_kw:.3f}", f"{energy_wh:.1f}"])
+                    except Exception as file_err:
+                        logging.error(f"Failed to write Chillicon history: {file_err}")
+                else:
+                    logging.warning(f"Unexpected Chillicon API response format: {parsed}")
+        except Exception as e:
+            logging.error(f"Error polling Chillicon API: {e}")
+
+    def start_chilicon_loop(self) -> None:
+        """Spawns the background thread to poll Chillicon every 15 minutes."""
+        if self.chilicon_off:
+            return
+        self.chilicon_thread: threading.Thread = threading.Thread(target=self.chilicon_loop, daemon=True)
+        self.chilicon_thread.start()
+
+    def chilicon_loop(self) -> None:
+        """Background loop to fetch Chillicon power data every 15 minutes."""
+        self.fetch_chilicon_data()
+        while self.running:
+            for _ in range(90):
+                if not self.running:
+                    break
+                time.sleep(10)
+            if self.running:
+                self.fetch_chilicon_data()
 
     def fetch_solaredge_data(self) -> None:
         """Polls SolarEdge API and logs to history."""
@@ -651,7 +855,7 @@ class GridDashboard(tk.Tk):
             padding: float = max(abs(y_max - y_min) * 0.2, 0.5)
             self.ax.set_ylim(min(0, y_min - padding), max(0, y_max + padding))
             
-        # Draw SolarEdge bars on secondary Y-axis
+        # Draw SolarEdge and Chillicon stacked bars on secondary Y-axis
         if not self.solar_off and hasattr(self, 'ax_bar'):
             self.ax_bar.clear()
             self.ax_bar.tick_params(colors='#fbbf24')
@@ -660,22 +864,44 @@ class GridDashboard(tk.Tk):
             self.ax_bar.spines['left'].set_color('none')
             self.ax_bar.spines['top'].set_color('none')
             self.ax_bar.spines['bottom'].set_color('none')
-            self.ax_bar.set_ylabel('SolarEdge PV (kW)', color='#fbbf24', rotation=270, labelpad=15)
+            self.ax_bar.set_ylabel('Total Solar PV (kW)', color='#fbbf24', rotation=270, labelpad=15)
             
-            if self.se_power and self.se_timestamps:
-                bar_times = []
-                bar_heights = []
-                for ts, p in zip(self.se_timestamps, self.se_power):
+            # Align both SolarEdge and Chillicon on a 10-minute grid
+            grid_se = defaultdict(list)
+            grid_ch = defaultdict(list)
+            
+            for ts, p in zip(self.se_timestamps, self.se_power):
+                if ts >= start_time:
+                    m = (ts.minute // 10) * 10
+                    rounded = ts.replace(minute=m, second=0, microsecond=0)
+                    grid_se[rounded].append(p)
+                    
+            if not self.chilicon_off:
+                for ts, p in zip(self.chilicon_timestamps, self.chilicon_power):
                     if ts >= start_time:
-                        bar_times.append(ts)
-                        bar_heights.append(p)
-                if bar_times:
-                    width_in_days = 15.0 / (24.0 * 60.0)
-                    self.ax_bar.bar(bar_times, bar_heights, width=width_in_days, color='#fbbf24', alpha=0.3, zorder=1)
-                    max_power = max(bar_heights) if bar_heights else 1.0
-                    self.ax_bar.set_ylim(0, max_power * 3)
-                else:
-                    self.ax_bar.set_ylim(0, 10)
+                        m = (ts.minute // 10) * 10
+                        rounded = ts.replace(minute=m, second=0, microsecond=0)
+                        grid_ch[rounded].append(p)
+            
+            all_keys = sorted(list(set(list(grid_se.keys()) + list(grid_ch.keys()))))
+            
+            if all_keys:
+                bar_times = []
+                se_heights = []
+                ch_heights = []
+                for k in all_keys:
+                    bar_times.append(k)
+                    se_heights.append(sum(grid_se[k])/len(grid_se[k]) if grid_se[k] else 0.0)
+                    ch_heights.append(sum(grid_ch[k])/len(grid_ch[k]) if grid_ch[k] else 0.0)
+                    
+                width_in_days = 10.0 / (24.0 * 60.0) # 10 minutes
+                # Draw SolarEdge (bottom)
+                self.ax_bar.bar(bar_times, se_heights, width=width_in_days, color='#fbbf24', alpha=0.3, zorder=1)
+                # Draw Chillicon (stacked on top of SolarEdge - bright neon yellow)
+                self.ax_bar.bar(bar_times, ch_heights, bottom=se_heights, width=width_in_days, color='#ffff00', alpha=0.8, zorder=1.5)
+                
+                max_power = max([s + c for s, c in zip(se_heights, ch_heights)]) if all_keys else 1.0
+                self.ax_bar.set_ylim(0, max_power * 3)
             else:
                 self.ax_bar.set_ylim(0, 10)
             
@@ -795,13 +1021,38 @@ class GridDashboard(tk.Tk):
             except Exception as e:
                 logging.error(f"Error parsing SolarEdge battery history for aggregation: {e}")
                 
-        lines = ["Hour,Avg_kW,Min_kW,Max_kW,Median_kW,SE_Avg_kW,SE_Max_kW,SE_Energy_kWh,Battery_Avg_kW,Battery_SoC"]
-        all_hours = sorted(list(set(list(hourly_data.keys()) + list(se_hourly_data.keys()) + list(se_battery_hourly_data.keys()))))
+        chilicon_hourly_data = defaultdict(list)
+        if not self.chilicon_off and os.path.exists(self.chilicon_history_file):
+            try:
+                with open(self.chilicon_history_file, 'r') as f:
+                    reader = csv.reader(f)
+                    for row in reader:
+                        if len(row) == 3:
+                            ts_str = row[0].strip().replace('\x00', '')
+                            p_str = row[1].strip().replace('\x00', '')
+                            if not ts_str or not p_str:
+                                continue
+                            hour_key = ts_str[:13].replace('T', ' ') + ":00"
+                            try:
+                                chilicon_hourly_data[hour_key].append(float(p_str))
+                            except ValueError:
+                                continue
+            except Exception as e:
+                logging.error(f"Error parsing Chillicon history for aggregation: {e}")
+
+        lines = ["Hour,Avg_kW,Min_kW,Max_kW,Median_kW,SE_Avg_kW,SE_Max_kW,SE_Energy_kWh,Battery_Avg_kW,Battery_SoC,Chillicon_Avg_kW,Chillicon_Max_kW,Chillicon_Energy_kWh"]
+        all_hours = sorted(list(set(
+            list(hourly_data.keys()) + 
+            list(se_hourly_data.keys()) + 
+            list(se_battery_hourly_data.keys()) + 
+            list(chilicon_hourly_data.keys())
+        )))
         
         for hour in all_hours:
             vals = hourly_data[hour]
             se_vals = se_hourly_data[hour]
             bat_vals = se_battery_hourly_data[hour]
+            ch_vals = chilicon_hourly_data[hour]
             
             if vals:
                 avg_kw = sum(vals) / len(vals)
@@ -826,7 +1077,14 @@ class GridDashboard(tk.Tk):
             else:
                 bat_avg_kw, bat_avg_soc = 0.0, 0.0
                 
-            lines.append(f"{hour},{avg_kw:.3f},{min_kw:.3f},{max_kw:.3f},{med_kw:.3f},{se_avg_kw:.3f},{se_max_kw:.3f},{se_energy_kwh:.3f},{bat_avg_kw:.3f},{bat_avg_soc:.1f}")
+            if ch_vals:
+                ch_avg_kw = sum(ch_vals) / len(ch_vals)
+                ch_max_kw = max(ch_vals)
+                ch_energy_kwh = ch_avg_kw * 1.0
+            else:
+                ch_avg_kw, ch_max_kw, ch_energy_kwh = 0.0, 0.0, 0.0
+                
+            lines.append(f"{hour},{avg_kw:.3f},{min_kw:.3f},{max_kw:.3f},{med_kw:.3f},{se_avg_kw:.3f},{se_max_kw:.3f},{se_energy_kwh:.3f},{bat_avg_kw:.3f},{bat_avg_soc:.1f},{ch_avg_kw:.3f},{ch_max_kw:.3f},{ch_energy_kwh:.3f}")
             
         return "\n".join(lines)
 

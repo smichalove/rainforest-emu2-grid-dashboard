@@ -3,6 +3,7 @@ import csv
 import os
 import json
 import datetime
+import sys
 import textwrap
 import matplotlib.dates as mdates
 from matplotlib.figure import Figure
@@ -33,14 +34,20 @@ class OfflineViewer(tk.Tk):
 
         self.usage: List[float] = []
         self.timestamps: List[datetime.datetime] = []
-        self.mock_se_pv: List[float] = []
+        self.se_power: List[float] = []
+        self.se_timestamps: List[datetime.datetime] = []
+        self.chilicon_power: List[float] = []
+        self.chilicon_timestamps: List[datetime.datetime] = []
+        self.chilicon_off: bool = "--chiliconoff" in sys.argv
         
         # Load local history file copied from the Pi
         self.load_history()
+        self.load_solaredge_history()
+        self.load_chilicon_history()
 
         # UI Text label configuration
         latest_val = self.usage[-1] if self.usage else 0.0
-        status = "Exporting (Solar)" if latest_val < 0 else "Importing (Grid)"
+        status = "Combined Solar Export (PV)" if latest_val < 0 else "Importing (Grid)"
         color = EXPORT_COLOR if latest_val < 0 else IMPORT_COLOR
         text = f"{latest_val:.3f} kW | {status}"
 
@@ -49,7 +56,7 @@ class OfflineViewer(tk.Tk):
         )
         self.status_label.pack(pady=5)
 
-        latest_pv = self.mock_se_pv[-1] if self.mock_se_pv else 0.0
+        latest_pv = self.se_power[-1] if self.se_power else 0.0
         self.sub_status_label: tk.Label = tk.Label(
             self, text=f"SolarEdge PV: {latest_pv:.3f} kW", font=('Helvetica', 20, 'bold'), bg='black', fg='#fbbf24'
         )
@@ -153,26 +160,80 @@ class OfflineViewer(tk.Tk):
                             if ts > cutoff:
                                 self.timestamps.append(ts)
                                 self.usage.append(float(val_str))
-                                
-                                # Mock SolarEdge PV Data based on hour of day
-                                hour = ts.hour + ts.minute / 60.0
-                                # Simple bell curve for solar peaking at noon (12:00)
-                                if 7 <= hour <= 19:
-                                    import math
-                                    # Base amplitude of 3kW, scaled by a sine wave from 7 to 19
-                                    pv_val = 3.0 * math.sin((hour - 7) * math.pi / 12)
-                                    # Add some noise
-                                    import random
-                                    pv_val += random.uniform(-0.2, 0.2)
-                                    self.mock_se_pv.append(max(0, pv_val))
-                                else:
-                                    self.mock_se_pv.append(0.0)
-                                    
                         except Exception:
                             continue
             print(f"Loaded {len(self.usage)} data points.")
         except Exception as e:
             print(f"Failed to read history file: {e}")
+
+    def load_solaredge_history(self) -> None:
+        """Loads SolarEdge historical telemetry from CSV file."""
+        se_history_file = 'solaredge_history.csv'
+        if not os.path.exists(se_history_file):
+            print("Warning: solaredge_history.csv not found.")
+            return
+            
+        print("Loading local SolarEdge history...")
+        # Align with the same 24-hour cutoff as the main history file
+        if self.timestamps:
+            cutoff = self.timestamps[-1] - datetime.timedelta(days=1)
+        else:
+            cutoff = datetime.datetime.now() - datetime.timedelta(days=1)
+            
+        try:
+            with open(se_history_file, 'r') as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    if len(row) == 2:
+                        try:
+                            ts_str = row[0].strip().replace('\x00', '')
+                            val_str = row[1].strip().replace('\x00', '')
+                            if not ts_str or not val_str:
+                                continue
+                            ts = datetime.datetime.fromisoformat(ts_str)
+                            if ts > cutoff:
+                                self.se_timestamps.append(ts)
+                                self.se_power.append(float(val_str))
+                        except Exception:
+                            continue
+            print(f"Loaded {len(self.se_power)} SolarEdge historical data points.")
+        except Exception as e:
+            print(f"Failed to read SolarEdge history file: {e}")
+
+    def load_chilicon_history(self) -> None:
+        """Loads Chillicon historical telemetry from CSV file."""
+        if self.chilicon_off:
+            return
+        chilicon_history_file = 'chilicon_history.csv'
+        if not os.path.exists(chilicon_history_file):
+            print("Warning: chilicon_history.csv not found.")
+            return
+            
+        print("Loading local Chillicon history...")
+        if self.timestamps:
+            cutoff = self.timestamps[-1] - datetime.timedelta(days=1)
+        else:
+            cutoff = datetime.datetime.now() - datetime.timedelta(days=1)
+            
+        try:
+            with open(chilicon_history_file, 'r') as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    if len(row) == 3:
+                        try:
+                           ts_str = row[0].strip().replace('\x00', '')
+                           val_str = row[1].strip().replace('\x00', '')
+                           if not ts_str or not val_str:
+                               continue
+                           ts = datetime.datetime.fromisoformat(ts_str)
+                           if ts > cutoff:
+                               self.chilicon_timestamps.append(ts)
+                               self.chilicon_power.append(float(val_str))
+                        except Exception:
+                           continue
+            print(f"Loaded {len(self.chilicon_power)} Chillicon historical data points.")
+        except Exception as e:
+            print(f"Failed to read Chillicon history file: {e}")
 
     def load_cached_summary(self) -> None:
         """Loads local gemini_summary.json and sets the watermark."""
@@ -244,32 +305,57 @@ class OfflineViewer(tk.Tk):
             self.lc.set_colors(colors)
             self.lc.set_linewidths(widths)
             
-            # Draw the bar chart using 30-min downsampled data on the twin axes
-            if self.mock_se_pv:
+            # Draw the bar chart on the twin axes using stacked SolarEdge and Chillicon data
+            self.ax_bar.clear()
+            self.ax_bar.tick_params(colors='#fbbf24')
+            self.ax_bar.yaxis.set_label_position('right')
+            self.ax_bar.spines['right'].set_color('#fbbf24')
+            self.ax_bar.spines['left'].set_color('none')
+            self.ax_bar.spines['top'].set_color('none')
+            self.ax_bar.spines['bottom'].set_color('none')
+            self.ax_bar.set_ylabel('Total Solar PV (kW)', color='#fbbf24', rotation=270, labelpad=15)
+            
+            end_time = self.timestamps[-1] if self.timestamps else datetime.datetime.now()
+            start_time = end_time - datetime.timedelta(hours=24)
+            
+            from collections import defaultdict
+            grid_se = defaultdict(list)
+            grid_ch = defaultdict(list)
+            
+            for ts, p in zip(self.se_timestamps, self.se_power):
+                if ts >= start_time:
+                    m = (ts.minute // 10) * 10
+                    rounded = ts.replace(minute=m, second=0, microsecond=0)
+                    grid_se[rounded].append(p)
+                    
+            if not self.chilicon_off:
+                for ts, p in zip(self.chilicon_timestamps, self.chilicon_power):
+                    if ts >= start_time:
+                        m = (ts.minute // 10) * 10
+                        rounded = ts.replace(minute=m, second=0, microsecond=0)
+                        grid_ch[rounded].append(p)
+            
+            all_keys = sorted(list(set(list(grid_se.keys()) + list(grid_ch.keys()))))
+            
+            if all_keys:
                 bar_times = []
-                bar_heights = []
-                for j in range(0, len(self.mock_se_pv), 120):
-                    if j + 120 < len(self.mock_se_pv):
-                        chunk = self.mock_se_pv[j:j+120]
-                        energy = (sum(chunk)/len(chunk)) * 0.5 
-                        if energy > 0.05:
-                            bar_times.append(self.timestamps[j+60])
-                            bar_heights.append(energy)
+                se_heights = []
+                ch_heights = []
+                for k in all_keys:
+                    bar_times.append(k)
+                    se_heights.append(sum(grid_se[k])/len(grid_se[k]) if grid_se[k] else 0.0)
+                    ch_heights.append(sum(grid_ch[k])/len(grid_ch[k]) if grid_ch[k] else 0.0)
+                    
+                width_in_days = 10.0 / (24.0 * 60.0) # 10 minutes
+                # Draw SolarEdge (bottom)
+                self.ax_bar.bar(bar_times, se_heights, width=width_in_days, color='#fbbf24', alpha=0.3, zorder=1)
+                # Draw Chillicon (stacked on top of SolarEdge - bright neon yellow)
+                self.ax_bar.bar(bar_times, ch_heights, bottom=se_heights, width=width_in_days, color='#ffff00', alpha=0.8, zorder=1.5)
                 
-                self.ax_bar.clear()
-                self.ax_bar.tick_params(colors='#fbbf24')
-                self.ax_bar.yaxis.set_label_position('right')
-                self.ax_bar.spines['right'].set_color('#fbbf24')
-                self.ax_bar.spines['left'].set_color('none')
-                self.ax_bar.spines['top'].set_color('none')
-                self.ax_bar.spines['bottom'].set_color('none')
-                self.ax_bar.set_ylabel('SolarEdge PV (kW)', color='#fbbf24', rotation=270, labelpad=15)
-                if bar_times:
-                    # Plot bars with zorder 1 so they stay behind the grid line
-                    self.ax_bar.bar(bar_times, bar_heights, width=20/(24*60), color='#fbbf24', alpha=0.3, zorder=1)
-                    # Scale max y of ax_bar so the bars only occupy the bottom ~30% of the screen
-                    max_energy = max(bar_heights) if bar_heights else 1
-                    self.ax_bar.set_ylim(0, max_energy * 3)
+                max_power = max([s + c for s, c in zip(se_heights, ch_heights)]) if all_keys else 1.0
+                self.ax_bar.set_ylim(0, max_power * 3)
+            else:
+                self.ax_bar.set_ylim(0, 10)
         
         if self.timestamps:
             # Match the rolling 24-hour window ending at the last data point

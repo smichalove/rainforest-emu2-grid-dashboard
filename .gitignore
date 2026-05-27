@@ -9,5 +9,6 @@ agent.md
 Auth/
 auth/
 grid_history.csv
+*.csv
 gemini_summary.json
 solaredge_integration_plan.md
