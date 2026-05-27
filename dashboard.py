@@ -96,9 +96,12 @@ class GridDashboard(tk.Tk):
         # Check command line flags
         self.solar_off: bool = "--solaroff" in sys.argv
         
-        # SolarEdge PV In-memory arrays and paths
+        # SolarEdge PV and Battery In-memory arrays and paths
         self.se_timestamps: List[datetime.datetime] = []
         self.se_power: List[float] = []
+        self.se_battery_timestamps: List[datetime.datetime] = []
+        self.se_battery_power: List[float] = []
+        self.se_battery_soc: List[float] = []
         self.solaredge_api_key: Optional[str] = None
         self.solaredge_site_id: Optional[str] = None
         
@@ -111,6 +114,9 @@ class GridDashboard(tk.Tk):
         
         local_se_history: str = os.path.join(script_dir, 'solaredge_history.csv')
         self.se_history_file: str = local_se_history if os.path.exists(local_se_history) else os.path.join(home_dir, 'solaredge_history.csv')
+        
+        local_se_battery_history: str = os.path.join(script_dir, 'solaredge_battery_history.csv')
+        self.se_battery_history_file: str = local_se_battery_history if os.path.exists(local_se_battery_history) else os.path.join(home_dir, 'solaredge_battery_history.csv')
         
         self.load_credentials()
         
@@ -303,33 +309,58 @@ class GridDashboard(tk.Tk):
                     logging.warning(f"Could not parse credentials file {path}: {e}")
 
     def load_solaredge_history(self) -> None:
-        """Loads SolarEdge PV history from CSV."""
-        if self.solar_off or not os.path.exists(self.se_history_file):
+        """Loads SolarEdge PV and battery history from CSV."""
+        if self.solar_off:
             return
             
-        logging.info("Loading SolarEdge history from CSV...")
         now: datetime.datetime = datetime.datetime.now()
         cutoff: datetime.datetime = now - datetime.timedelta(days=1)
         
-        try:
-            with open(self.se_history_file, 'r') as f:
-                reader = csv.reader(f)
-                for row in reader:
-                    if len(row) == 2:
-                        try:
-                            ts_str = row[0].replace('\x00', '').strip()
-                            val_str = row[1].replace('\x00', '').strip()
-                            if not ts_str or not val_str:
-                                continue
-                            ts = datetime.datetime.fromisoformat(ts_str)
-                            if ts > cutoff:
-                                self.se_timestamps.append(ts)
-                                self.se_power.append(float(val_str))
-                        except Exception as parse_err:
-                            logging.warning(f"Skipping corrupted SolarEdge row: {row} - Error: {parse_err}")
-            logging.info(f"Loaded {len(self.se_power)} SolarEdge historical points.")
-        except Exception as e:
-            logging.error(f"Failed to read SolarEdge history file: {e}")
+        if os.path.exists(self.se_history_file):
+            logging.info("Loading SolarEdge PV history from CSV...")
+            try:
+                with open(self.se_history_file, 'r') as f:
+                    reader = csv.reader(f)
+                    for row in reader:
+                        if len(row) == 2:
+                            try:
+                                ts_str = row[0].replace('\x00', '').strip()
+                                val_str = row[1].replace('\x00', '').strip()
+                                if not ts_str or not val_str:
+                                    continue
+                                ts = datetime.datetime.fromisoformat(ts_str)
+                                if ts > cutoff:
+                                    self.se_timestamps.append(ts)
+                                    self.se_power.append(float(val_str))
+                            except Exception as parse_err:
+                                logging.warning(f"Skipping corrupted SolarEdge PV row: {row} - Error: {parse_err}")
+                logging.info(f"Loaded {len(self.se_power)} SolarEdge PV historical points.")
+            except Exception as e:
+                logging.error(f"Failed to read SolarEdge PV history file: {e}")
+
+        if os.path.exists(self.se_battery_history_file):
+            logging.info("Loading SolarEdge battery history from CSV...")
+            try:
+                with open(self.se_battery_history_file, 'r') as f:
+                    reader = csv.reader(f)
+                    for row in reader:
+                        if len(row) == 3:
+                            try:
+                                ts_str = row[0].replace('\x00', '').strip()
+                                p_str = row[1].replace('\x00', '').strip()
+                                soc_str = row[2].replace('\x00', '').strip()
+                                if not ts_str or not p_str or not soc_str:
+                                    continue
+                                ts = datetime.datetime.fromisoformat(ts_str)
+                                if ts > cutoff:
+                                    self.se_battery_timestamps.append(ts)
+                                    self.se_battery_power.append(float(p_str))
+                                    self.se_battery_soc.append(float(soc_str))
+                            except Exception as parse_err:
+                                logging.warning(f"Skipping corrupted SolarEdge battery row: {row} - Error: {parse_err}")
+                logging.info(f"Loaded {len(self.se_battery_power)} SolarEdge battery historical points.")
+            except Exception as e:
+                logging.error(f"Failed to read SolarEdge battery history file: {e}")
 
     def fetch_solaredge_data(self) -> None:
         """Polls SolarEdge API and logs to history."""
@@ -346,22 +377,22 @@ class GridDashboard(tk.Tk):
             logging.info("Outside of daytime window. Skipping SolarEdge poll.")
             return
 
-        url = f"https://monitoringapi.solaredge.com/site/{self.solaredge_site_id}/overview?api_key={self.solaredge_api_key}&format=json"
+        url = f"https://monitoringapi.solaredge.com/site/{self.solaredge_site_id}/currentPowerFlow?api_key={self.solaredge_api_key}&format=json"
         try:
-            logging.info("Polling SolarEdge API...")
+            logging.info("Polling SolarEdge API currentPowerFlow...")
             req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
             with urllib.request.urlopen(req, timeout=10) as response:
                 data = json.loads(response.read().decode('utf-8'))
-                overview = data.get("overview", {})
-                current_power = overview.get("currentPower", {})
-                power_w = current_power.get("power", 0.0)
-                power_kw = power_w / 1000.0
+                flow = data.get("siteCurrentPowerFlow", {})
+                
+                # PV Solar Power
+                pv = flow.get("pv") or flow.get("PV") or {}
+                power_kw = pv.get("currentPower", 0.0)
                 
                 logging.info(f"SolarEdge PV current power: {power_kw:.3f} kW")
                 
                 self.se_timestamps.append(now)
                 self.se_power.append(power_kw)
-                
                 if len(self.se_power) > self.max_points:
                     self.se_power.pop(0)
                     self.se_timestamps.pop(0)
@@ -371,14 +402,46 @@ class GridDashboard(tk.Tk):
                         writer = csv.writer(f)
                         writer.writerow([now.isoformat(), f"{power_kw:.3f}"])
                 except Exception as file_err:
-                    logging.error(f"Failed to write SolarEdge history: {file_err}")
+                    logging.error(f"Failed to write SolarEdge PV history: {file_err}")
+                
+                # Storage (Battery) Power & SoC
+                storage = flow.get("storage") or flow.get("STORAGE") or {}
+                raw_battery_kw = storage.get("currentPower", 0.0)
+                battery_soc = storage.get("chargeLevel", 0.0)
+                status = storage.get("status", "Idle")
+                
+                # Sign battery power: positive for discharging, negative for charging
+                if status == "Charging":
+                    battery_kw = -raw_battery_kw
+                elif status == "Discharging":
+                    battery_kw = raw_battery_kw
+                else:
+                    battery_kw = 0.0
+                    
+                logging.info(f"SolarEdge Storage status: {status}, raw power: {raw_battery_kw:.3f} kW (signed: {battery_kw:.3f} kW), SoC: {battery_soc:.1f}%")
+                
+                self.se_battery_timestamps.append(now)
+                self.se_battery_power.append(battery_kw)
+                self.se_battery_soc.append(battery_soc)
+                
+                if len(self.se_battery_power) > self.max_points:
+                    self.se_battery_power.pop(0)
+                    self.se_battery_timestamps.pop(0)
+                    self.se_battery_soc.pop(0)
+                    
+                try:
+                    with open(self.se_battery_history_file, 'a') as f:
+                        writer = csv.writer(f)
+                        writer.writerow([now.isoformat(), f"{battery_kw:.3f}", f"{battery_soc:.1f}"])
+                except Exception as file_err:
+                    logging.error(f"Failed to write SolarEdge battery history: {file_err}")
                 
                 # Redraw is handled dynamically when update_chart runs, or we trigger it explicitly
                 self.after(0, lambda: self.sub_status_label.config(text=f"SolarEdge PV: {power_kw:.3f} kW"))
                 self.after(0, lambda: self.update_chart(self.status_label.cget("text"), self.status_label.cget("fg")))
                 
         except Exception as e:
-            logging.error(f"Error polling SolarEdge API: {e}")
+            logging.error(f"Error polling SolarEdge API currentPowerFlow: {e}")
 
     def start_solaredge_loop(self) -> None:
         """Spawns the background thread to poll SolarEdge every 15 minutes."""
@@ -712,12 +775,33 @@ class GridDashboard(tk.Tk):
             except Exception as e:
                 logging.error(f"Error parsing SolarEdge history for aggregation: {e}")
                 
-        lines = ["Hour,Avg_kW,Min_kW,Max_kW,Median_kW,SE_Avg_kW,SE_Max_kW,SE_Energy_kWh"]
-        all_hours = sorted(list(set(list(hourly_data.keys()) + list(se_hourly_data.keys()))))
+        se_battery_hourly_data = defaultdict(list)
+        if not self.solar_off and os.path.exists(self.se_battery_history_file):
+            try:
+                with open(self.se_battery_history_file, 'r') as f:
+                    reader = csv.reader(f)
+                    for row in reader:
+                        if len(row) == 3:
+                            ts_str = row[0].strip().replace('\x00', '')
+                            p_str = row[1].strip().replace('\x00', '')
+                            soc_str = row[2].strip().replace('\x00', '')
+                            if not ts_str or not p_str or not soc_str:
+                                continue
+                            hour_key = ts_str[:13].replace('T', ' ') + ":00"
+                            try:
+                                se_battery_hourly_data[hour_key].append((float(p_str), float(soc_str)))
+                            except ValueError:
+                                continue
+            except Exception as e:
+                logging.error(f"Error parsing SolarEdge battery history for aggregation: {e}")
+                
+        lines = ["Hour,Avg_kW,Min_kW,Max_kW,Median_kW,SE_Avg_kW,SE_Max_kW,SE_Energy_kWh,Battery_Avg_kW,Battery_SoC"]
+        all_hours = sorted(list(set(list(hourly_data.keys()) + list(se_hourly_data.keys()) + list(se_battery_hourly_data.keys()))))
         
         for hour in all_hours:
             vals = hourly_data[hour]
             se_vals = se_hourly_data[hour]
+            bat_vals = se_battery_hourly_data[hour]
             
             if vals:
                 avg_kw = sum(vals) / len(vals)
@@ -734,7 +818,15 @@ class GridDashboard(tk.Tk):
             else:
                 se_avg_kw, se_max_kw, se_energy_kwh = 0.0, 0.0, 0.0
                 
-            lines.append(f"{hour},{avg_kw:.3f},{min_kw:.3f},{max_kw:.3f},{med_kw:.3f},{se_avg_kw:.3f},{se_max_kw:.3f},{se_energy_kwh:.3f}")
+            if bat_vals:
+                bat_powers = [v[0] for v in bat_vals]
+                bat_socs = [v[1] for v in bat_vals]
+                bat_avg_kw = sum(bat_powers) / len(bat_powers)
+                bat_avg_soc = sum(bat_socs) / len(bat_socs)
+            else:
+                bat_avg_kw, bat_avg_soc = 0.0, 0.0
+                
+            lines.append(f"{hour},{avg_kw:.3f},{min_kw:.3f},{max_kw:.3f},{med_kw:.3f},{se_avg_kw:.3f},{se_max_kw:.3f},{se_energy_kwh:.3f},{bat_avg_kw:.3f},{bat_avg_soc:.1f}")
             
         return "\n".join(lines)
 
