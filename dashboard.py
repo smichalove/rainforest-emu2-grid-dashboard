@@ -152,6 +152,14 @@ class GridDashboard(tk.Tk):
             latest_pv = self.se_power[-1] if self.se_power else 0.0
             self.sub_status_label.config(text=f"SolarEdge PV: {latest_pv:.3f} kW")
 
+        self.chilicon_status_label: tk.Label = tk.Label(
+            self, text="", font=('Helvetica', 20, 'bold'), bg='black', fg='#ffff00'
+        )
+        if not self.chilicon_off:
+            self.chilicon_status_label.pack(pady=2)
+            latest_ch = self.chilicon_power[-1] if self.chilicon_power else 0.0
+            self.chilicon_status_label.config(text=f"Chillicon PV: {latest_ch:.3f} kW")
+
         # Matplotlib figure setup.
         self.fig: Figure = Figure(figsize=(5, 3), dpi=100, facecolor='black')
         # Adjust margins so that labels and ticks fit comfortably on fullscreen displays.
@@ -543,6 +551,9 @@ class GridDashboard(tk.Tk):
                             writer.writerow([now.isoformat(), f"{power_kw:.3f}", f"{energy_wh:.1f}"])
                     except Exception as file_err:
                         logging.error(f"Failed to write Chillicon history: {file_err}")
+                    
+                    self.after(0, lambda: self.chilicon_status_label.config(text=f"Chillicon PV: {power_kw:.3f} kW"))
+                    self.after(0, lambda: self.update_chart(self.status_label.cget("text"), self.status_label.cget("fg")))
                 else:
                     logging.warning(f"Unexpected Chillicon API response format: {parsed}")
         except Exception as e:

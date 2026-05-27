@@ -62,6 +62,14 @@ class OfflineViewer(tk.Tk):
         )
         self.sub_status_label.pack(pady=2)
 
+        self.chilicon_status_label: tk.Label = tk.Label(
+            self, text="", font=('Helvetica', 20, 'bold'), bg='black', fg='#ffff00'
+        )
+        if not self.chilicon_off:
+            self.chilicon_status_label.pack(pady=2)
+            latest_ch = self.chilicon_power[-1] if self.chilicon_power else 0.0
+            self.chilicon_status_label.config(text=f"Chillicon PV: {latest_ch:.3f} kW")
+
         # Matplotlib figure setup
         self.fig: Figure = Figure(figsize=(5, 3), dpi=100, facecolor='black')
         self.fig.subplots_adjust(left=0.15, right=0.95, top=0.95, bottom=0.15)

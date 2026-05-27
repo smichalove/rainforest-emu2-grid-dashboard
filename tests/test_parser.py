@@ -176,6 +176,7 @@ def test_load_solaredge_history():
     dashboard.solar_off = False
     dashboard.se_power = []
     dashboard.se_timestamps = []
+    dashboard.se_battery_history_file = "/dev/null"
     
     with tempfile.NamedTemporaryFile(mode='w', delete=False) as f:
         valid_time = (datetime.datetime.now() - datetime.timedelta(hours=1)).isoformat()
@@ -200,10 +201,14 @@ def test_fetch_solaredge_data(mock_urlopen):
     dashboard.solaredge_site_id = "fake_id"
     dashboard.se_power = []
     dashboard.se_timestamps = []
+    dashboard.se_battery_timestamps = []
+    dashboard.se_battery_power = []
+    dashboard.se_battery_soc = []
     dashboard.max_points = 5
     dashboard.after = MagicMock()
     dashboard.status_label = MagicMock()
     dashboard.sub_status_label = MagicMock()
+    dashboard.se_battery_history_file = "/dev/null"
     
     # Mock status label cget
     dashboard.status_label.cget.side_effect = lambda attr: "white" if attr == "fg" else "Waiting..."
@@ -214,7 +219,7 @@ def test_fetch_solaredge_data(mock_urlopen):
     
     # Mock response JSON
     mock_resp = MagicMock()
-    mock_resp.read.return_value = b'{"overview": {"currentPower": {"power": 1200.0}}}'
+    mock_resp.read.return_value = b'{"siteCurrentPowerFlow": {"pv": {"currentPower": 1.2}, "storage": {"currentPower": 0.0, "chargeLevel": 100.0, "status": "Idle"}}}'
     mock_urlopen.return_value.__enter__.return_value = mock_resp
     
     # Mock datetime hour to be inside daytime window (12:00 PM)
@@ -227,7 +232,7 @@ def test_fetch_solaredge_data(mock_urlopen):
             dashboard.fetch_solaredge_data()
             
             assert len(dashboard.se_power) == 1
-            assert dashboard.se_power[0] == 1.200 # 1200 W = 1.2 kW
+            assert dashboard.se_power[0] == 1.200 # 1.2 kW
             dashboard.after.assert_called()
     finally:
         os.remove(temp_path)
@@ -237,6 +242,8 @@ def test_generate_hourly_summaries_with_solaredge():
     """Test hourly summaries combine both grid history and SolarEdge history."""
     dashboard = GridDashboard()
     dashboard.solar_off = False
+    dashboard.se_battery_history_file = "/dev/null"
+    dashboard.chilicon_off = True
     
     with tempfile.NamedTemporaryFile(mode='w', delete=False) as f_grid:
         valid_time = "2026-05-26T12:00:00"
@@ -255,8 +262,8 @@ def test_generate_hourly_summaries_with_solaredge():
         lines = csv_data.split('\n')
         # Header + 1 data line
         assert len(lines) == 2
-        assert lines[0] == "Hour,Avg_kW,Min_kW,Max_kW,Median_kW,SE_Avg_kW,SE_Max_kW,SE_Energy_kWh"
-        assert "2026-05-26 12:00,2.000,2.000,2.000,2.000,1.500,1.500,1.500" in lines[1]
+        assert lines[0] == "Hour,Avg_kW,Min_kW,Max_kW,Median_kW,SE_Avg_kW,SE_Max_kW,SE_Energy_kWh,Battery_Avg_kW,Battery_SoC,Chillicon_Avg_kW,Chillicon_Max_kW,Chillicon_Energy_kWh"
+        assert "2026-05-26 12:00,2.000,2.000,2.000,2.000,1.500,1.500,1.500,0.000,0.0,0.000,0.000,0.000" in lines[1]
     finally:
         os.remove(grid_path)
         os.remove(se_path)
