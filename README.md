@@ -12,7 +12,8 @@ A robust, 24-hour real-time grid monitoring dashboard using a Rainforest EMU-2 s
 ## Key Features
 - **Real-Time Data Parsing**: Decodes raw XML telemetry (`<InstantaneousDemand>`) directly from the EMU-2 serial port.
 - **Rolling 24-Hour Graph**: Features a dynamic rolling 24-hour X-axis with the newest readings always positioned on the far right, ensuring the graph is always fully populated with historical context.
-- **Persistent Data**: Logs data automatically to `grid_history.csv` every 15 seconds and retroactively reloads the graph immediately upon boot.
+- **Persistent Data**: Logs data automatically to `grid_history.csv` every 15 seconds, SolarEdge PV to `solaredge_history.csv` every 15 minutes, and battery metrics to `solaredge_battery_history.csv` every 15 minutes, retroactively reloading the graph and historical context immediately upon boot.
+- **SolarEdge PV & Battery Integration**: Polls SolarEdge `/currentPowerFlow` to track real-time solar panel output, signed battery charge/discharge rates, and State of Charge (SoC %).
 - **Hands-Free Kiosk Mode**: Configured to boot completely headless and automatically launch into fullscreen without sleeping.
 - **Gemini Background Summaries**: Uses a background thread to call the Gemini 2.5 Flash model (via Vertex AI or Developer API Key) to analyze power trends and render a blue narrative watermark summary directly on the graph background, formatted with smart 80-character line wrapping.
 
@@ -20,7 +21,9 @@ A robust, 24-hour real-time grid monitoring dashboard using a Rainforest EMU-2 s
 
 ## AI Background Summaries & Authentication
 
-The dashboard integrates the **`google-genai`** SDK to query Gemini every 30 minutes in a non-blocking background thread. The generated summary is cached locally to disk (defaulting to `~/gemini_summary.json` if run from outside the repo) and loads instantly on startup.
+The dashboard integrates the **`google-genai`** SDK to query Gemini every 15 minutes in a non-blocking background thread. The generated summary is cached locally to disk (defaulting to `~/gemini_summary.json` if run from outside the repo) and loads instantly on startup. 
+
+The prompt includes hourly aggregated Net Grid import/export statistics, SolarEdge solar generation, and battery stats (`Battery_Avg_kW` average discharge rate and `Battery_SoC` average charge percentage). This enables Gemini to make highly accurate summaries and correctly separate battery dispatch behavior during Puget Sound Energy (PSE) Flex events (reimbursed at a premium rate of **$0.50 / kWh** instead of the standard $0.19 / kWh) from your other solar array's (Chillicon) inferred generation.
 
 ### Authentication Setup
 The dashboard automatically searches for credentials using one of the following methods:
@@ -35,7 +38,7 @@ The dashboard automatically searches for credentials using one of the following 
      ```
 
 ### SolarEdge API Configuration
-To enable SolarEdge PV generation overlay and mathematical analysis in the Gemini prompt, configure your SolarEdge API credentials inside `~/Auth/solaredge_config.json` (or `auth/solaredge_config.json` in the application directory):
+To enable SolarEdge PV and battery storage telemetry overlay and mathematical analysis in the Gemini prompt, configure your SolarEdge API credentials inside `~/Auth/solaredge_config.json` (or `auth/solaredge_config.json` in the application directory):
 ```json
 {
   "api_key": "your_solaredge_api_key",
