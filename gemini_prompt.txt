@@ -15,6 +15,7 @@ The user has a battery storage system and a dual solar setup consisting of:
 3. SolarEdge Battery (measured as Battery_Avg_kW and Battery_SoC).
 4. Rainforest EMU-2 measures Net Grid Import/Export.
 5. Always add a summary for the last 24hrs
+* After a PSE Flex event ends, the battery will immediately begin recharging from the grid or solar until it reaches full capacity. This charging phase draws approximately 0.96 kWh of additional energy (represented by negative Battery_Avg_kW values), which is normal expected system behavior and should be noted in the summary rather than treated as an unexplained home demand spike.
 
 Telemetry & Inference rules:
 * When Chillicon data columns (Chillicon_Avg_kW/Chillicon_Energy_kWh) contain non-zero values, use these ACTUAL measurements directly to report Chillicon performance.
