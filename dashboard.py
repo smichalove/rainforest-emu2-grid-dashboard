@@ -186,6 +186,10 @@ class GridDashboard(tk.Tk):
             self.ax_bar.spines['top'].set_color('none')
             self.ax_bar.spines['bottom'].set_color('none')
             self.ax_bar.set_ylabel('SolarEdge PV (kW)', color='#fbbf24', rotation=270, labelpad=15)
+            
+            # Swap z-order so the main ax (and its overlay text/line plot) sits on top of ax_bar
+            self.ax.set_zorder(self.ax_bar.get_zorder() + 1)
+            self.ax.patch.set_visible(False)  # Must be transparent so ax_bar behind it is visible
         
         # Dotted horizontal line at 0 kW to distinguish importing vs exporting power.
         self.ax.axhline(0, color='gray', linestyle='--') 
@@ -205,7 +209,7 @@ class GridDashboard(tk.Tk):
             alpha=SUMMARY_ALPHA,
             fontfamily='monospace',
             weight='bold',
-            zorder=0.1
+            zorder=10
         )
         
         # Integrate Matplotlib canvas with the Tkinter window.
@@ -217,7 +221,11 @@ class GridDashboard(tk.Tk):
         self.summary_cache_file: str = local_cache if os.path.exists(local_cache) else os.path.join(home_dir, 'gemini_summary.json')
         self.last_summary_time: Optional[datetime.datetime] = None
         
-        # Load cached summary on startup if it exists and is fresh
+        # Resolve LLM integration mode: 'direct' (default) or 'decoupled' (cache consumer)
+        self.llm_mode: str = os.environ.get("LLM_MODE", "direct").lower().strip()
+        logging.info(f"Initialized LLM mode: '{self.llm_mode}'")
+        
+        # Load cached summary on startup
         self.load_cached_summary()
 
         # If historical data is loaded, draw the chart and status label immediately on startup.
@@ -308,6 +316,23 @@ class GridDashboard(tk.Tk):
 
     def load_credentials(self) -> None:
         """Loads credentials and settings from environment or local Auth files."""
+        # Check for local .env file in the script directory and load environment variables
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        env_path = os.path.join(script_dir, ".env")
+        if os.path.exists(env_path):
+            try:
+                with open(env_path, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            k, v = line.split("=", 1)
+                            k = k.strip()
+                            v = v.strip().strip('"').strip("'")
+                            os.environ[k] = v
+                logging.info("Loaded environment variables from local .env file.")
+            except Exception as env_err:
+                logging.warning(f"Could not parse local .env file: {env_err}")
+
         self.solaredge_api_key = os.environ.get("SOLAREDGE_API_KEY")
         self.solaredge_site_id = os.environ.get("SOLAREDGE_SITE_ID")
         self.chilicon_username = os.environ.get("CHILICON_USERNAME")
@@ -907,9 +932,9 @@ class GridDashboard(tk.Tk):
                     
                 width_in_days = 10.0 / (24.0 * 60.0) # 10 minutes
                 # Draw SolarEdge (bottom)
-                self.ax_bar.bar(bar_times, se_heights, width=width_in_days, color='#fbbf24', alpha=0.3, zorder=1, edgecolor='none')
+                self.ax_bar.bar(bar_times, se_heights, width=width_in_days, color='#fbbf24', alpha=0.1, zorder=1, edgecolor='none')
                 # Draw Chillicon (stacked on top of SolarEdge - bright neon yellow)
-                self.ax_bar.bar(bar_times, ch_heights, bottom=se_heights, width=width_in_days, color='#ffff00', alpha=0.8, zorder=1.5, edgecolor='none')
+                self.ax_bar.bar(bar_times, ch_heights, bottom=se_heights, width=width_in_days, color='#ffff00', alpha=0.15, zorder=1.5, edgecolor='none')
                 
                 max_power = max([s + c for s, c in zip(se_heights, ch_heights)]) if all_keys else 1.0
                 self.ax_bar.set_ylim(0, max_power * 3)
@@ -925,23 +950,44 @@ class GridDashboard(tk.Tk):
         self.summary_thread.start()
 
     def summary_loop(self) -> None:
-        """Periodically fetches grid usage summaries from Gemini every 15 minutes."""
-        # Wait 10 seconds for initial startup and history load to settle.
+        """Periodically polls or fetches grid usage summaries based on LLM_MODE."""
+        # Wait 10 seconds for initial startup to settle.
         time.sleep(10)
-        while self.running:
-            try:
-                self.fetch_gemini_summary()
-            except Exception as e:
-                logging.error(f"Failed in summary loop: {e}")
-            
-            # Sleep for 15 minutes (900 seconds), checking self.running every 10 seconds.
-            for _ in range(90):
-                if not self.running:
-                    break
-                time.sleep(10)
+        
+        if self.llm_mode == "decoupled":
+            logging.info("Running in decoupled summary loop (polling cache file).")
+            last_mtime: float = 0.0
+            while self.running:
+                try:
+                    if os.path.exists(self.summary_cache_file):
+                        mtime = os.path.getmtime(self.summary_cache_file)
+                        if mtime > last_mtime:
+                            last_mtime = mtime
+                            self.load_cached_summary()
+                except Exception as e:
+                    logging.error(f"Failed in decoupled summary loop: {e}")
+                
+                # Poll cache file modification time every 10 seconds
+                for _ in range(1):
+                    if not self.running:
+                        break
+                    time.sleep(10)
+        else:
+            logging.info("Running in direct summary loop (querying Gemini API directly).")
+            while self.running:
+                try:
+                    self.fetch_gemini_summary()
+                except Exception as e:
+                    logging.error(f"Failed in direct summary loop: {e}")
+                
+                # Sleep for 15 minutes (900 seconds), checking self.running every 10 seconds.
+                for _ in range(90):
+                    if not self.running:
+                        break
+                    time.sleep(10)
 
     def load_cached_summary(self) -> None:
-        """Loads a previously cached Gemini summary from disk if it is fresh."""
+        """Loads a previously cached Gemini summary from disk based on LLM_MODE configuration."""
         if not os.path.exists(self.summary_cache_file):
             return
             
@@ -953,15 +999,23 @@ class GridDashboard(tk.Tk):
                 
                 if ts_str and summary:
                     ts = datetime.datetime.fromisoformat(ts_str)
-                    now = datetime.datetime.now()
-                    # If it's less than 15 minutes old, load it immediately
-                    if now - ts < datetime.timedelta(minutes=15):
+                    
+                    if self.llm_mode == "decoupled":
+                        # Load cache unconditionally
                         self.last_summary_time = ts
                         self.summary_text_obj.set_text(self.wrap_text(summary.strip()))
-                        logging.info(f"Loaded fresh cached Gemini summary from {ts_str}.")
+                        logging.info(f"Loaded cached Gemini summary from {ts_str} unconditionally.")
                         self.fig.canvas.draw_idle()
                     else:
-                        logging.info("Cached Gemini summary exists but is older than 15 minutes.")
+                        # Load cache only if it is fresh (less than 15 minutes old)
+                        now = datetime.datetime.now()
+                        if now - ts < datetime.timedelta(minutes=15):
+                            self.last_summary_time = ts
+                            self.summary_text_obj.set_text(self.wrap_text(summary.strip()))
+                            logging.info(f"Loaded fresh cached Gemini summary from {ts_str}.")
+                            self.fig.canvas.draw_idle()
+                        else:
+                            logging.info("Cached Gemini summary exists but is older than 15 minutes.")
         except Exception as e:
             logging.error(f"Failed to load cached Gemini summary: {e}")
 

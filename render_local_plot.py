@@ -92,6 +92,10 @@ class OfflineViewer(tk.Tk):
         self.ax_bar.spines['bottom'].set_color('none')
         self.ax_bar.set_ylabel('SolarEdge PV (kW)', color='#fbbf24', rotation=270, labelpad=15)
         
+        # Swap z-order so the main ax (and its overlay text/line plot) sits on top of ax_bar
+        self.ax.set_zorder(self.ax_bar.get_zorder() + 1)
+        self.ax.patch.set_visible(False)  # Must be transparent so ax_bar behind it is visible
+        
         # Dotted horizontal line at 0 kW
         self.ax.axhline(0, color='gray', linestyle='--') 
         
@@ -109,7 +113,7 @@ class OfflineViewer(tk.Tk):
             alpha=SUMMARY_ALPHA,
             fontfamily='monospace',
             weight='bold',
-            zorder=0.1
+            zorder=10
         )
         
         self.canvas: FigureCanvasTkAgg = FigureCanvasTkAgg(self.fig, master=self)
@@ -326,41 +330,43 @@ class OfflineViewer(tk.Tk):
             end_time = self.timestamps[-1] if self.timestamps else datetime.datetime.now()
             start_time = end_time - datetime.timedelta(hours=24)
             
-            from collections import defaultdict
-            grid_se = defaultdict(list)
-            grid_ch = defaultdict(list)
+            # Align both SolarEdge and Chillicon on a regular, forward-filled 10-minute grid
+            bar_times = []
+            se_heights = []
+            ch_heights = []
             
-            for ts, p in zip(self.se_timestamps, self.se_power):
-                if ts >= start_time:
-                    m = (ts.minute // 10) * 10
-                    rounded = ts.replace(minute=m, second=0, microsecond=0)
-                    grid_se[rounded].append(p)
-                    
-            if not self.chilicon_off:
-                for ts, p in zip(self.chilicon_timestamps, self.chilicon_power):
-                    if ts >= start_time:
-                        m = (ts.minute // 10) * 10
-                        rounded = ts.replace(minute=m, second=0, microsecond=0)
-                        grid_ch[rounded].append(p)
+            # Start at start_time rounded down to the nearest 10-minute slot
+            grid_start = start_time.replace(minute=(start_time.minute // 10) * 10, second=0, microsecond=0)
+            current_slot = grid_start
             
-            all_keys = sorted(list(set(list(grid_se.keys()) + list(grid_ch.keys()))))
+            while current_slot <= end_time:
+                bar_times.append(current_slot)
+                
+                # Find most recent SolarEdge power value <= current_slot and within 30 minutes
+                se_val = 0.0
+                for ts, p in zip(self.se_timestamps, self.se_power):
+                    if ts <= current_slot and current_slot - ts <= datetime.timedelta(minutes=30):
+                        se_val = p
+                se_heights.append(se_val)
+                
+                # Find most recent Chillicon power value <= current_slot and within 30 minutes
+                ch_val = 0.0
+                if not self.chilicon_off:
+                    for ts, p in zip(self.chilicon_timestamps, self.chilicon_power):
+                        if ts <= current_slot and current_slot - ts <= datetime.timedelta(minutes=30):
+                            ch_val = p
+                ch_heights.append(ch_val)
+                
+                current_slot += datetime.timedelta(minutes=10)
             
-            if all_keys:
-                bar_times = []
-                se_heights = []
-                ch_heights = []
-                for k in all_keys:
-                    bar_times.append(k)
-                    se_heights.append(sum(grid_se[k])/len(grid_se[k]) if grid_se[k] else 0.0)
-                    ch_heights.append(sum(grid_ch[k])/len(grid_ch[k]) if grid_ch[k] else 0.0)
-                    
+            if bar_times:
                 width_in_days = 10.0 / (24.0 * 60.0) # 10 minutes
                 # Draw SolarEdge (bottom)
-                self.ax_bar.bar(bar_times, se_heights, width=width_in_days, color='#fbbf24', alpha=0.3, zorder=1, edgecolor='none')
+                self.ax_bar.bar(bar_times, se_heights, width=width_in_days, color='#fbbf24', alpha=0.1, zorder=1, edgecolor='none')
                 # Draw Chillicon (stacked on top of SolarEdge - bright neon yellow)
-                self.ax_bar.bar(bar_times, ch_heights, bottom=se_heights, width=width_in_days, color='#ffff00', alpha=0.8, zorder=1.5, edgecolor='none')
+                self.ax_bar.bar(bar_times, ch_heights, bottom=se_heights, width=width_in_days, color='#ffff00', alpha=0.15, zorder=1.5, edgecolor='none')
                 
-                max_power = max([s + c for s, c in zip(se_heights, ch_heights)]) if all_keys else 1.0
+                max_power = max([s + c for s, c in zip(se_heights, ch_heights)]) if bar_times else 1.0
                 self.ax_bar.set_ylim(0, max_power * 3)
             else:
                 self.ax_bar.set_ylim(0, 10)

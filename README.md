@@ -72,6 +72,25 @@ To enable the Chillicon Cloud API integration, configure your login credentials 
 
 ---
 
+## Decoupled Architecture (Pi & Cloud Batch)
+
+For production systems, this repository supports a **decoupled architecture**. This separates the resource-heavy LLM inference from the real-time Tkinter GUI process.
+
+You can configure this using the `LLM_MODE` setting in your `.env` file:
+* **`LLM_MODE=direct` (Default)**: The GUI runs an inline background thread that queries the Gemini API directly every 15 minutes. Best for simple, out-of-the-box local developer testing.
+* **`LLM_MODE=decoupled`**: The GUI runs as a pure cache consumer, disabling internal API calls and polling `gemini_summary.json` every 10 seconds for updates. This lets an external background process update the cache.
+
+### Cloud Batch Staging (Raspberry Pi)
+When running `LLM_MODE=decoupled` on the Raspberry Pi:
+* Run the background script `stage_batch_summary.py` in a separate screen or service session.
+* This script compiles the telemetry data, uploads it to GCS, schedules a **Vertex AI Batch Prediction** job, and polls the job state.
+* **Significant Cost Savings**: Vertex AI Batch predictions offer a **50% discount** per token compared to direct synchronous API calls. Additionally, polling the job status is a metadata query which is **100% free** under Google Cloud, allowing the stager to check frequently without incurring any API polling costs.
+* It persists the active job state to `active_batch_job.json` to safely resume polling even across unexpected reboots (watchdog recovery).
+
+Detailed instructions on how to set up the necessary Google Cloud Storage buckets, service accounts, and permissions for the Vertex AI Batch prediction environment can be found in the [Gemini Photo Batch Workflow repository](https://github.com/smichalove/Gemini_Photo_Batch_Workflow).
+
+---
+
 ## Complete Setup Instructions
 
 ### 0. Clone the Repository
@@ -146,9 +165,21 @@ The script registers OS signal handlers (`SIGINT`, `SIGTERM`), which guarantees 
 - The USB serial interface port (`/dev/ttyACM0`) is released.
 
 To run manually:
+
+#### A. Direct Mode (Standard Inline API)
 ```bash
 export DISPLAY=:0 && python3 dashboard.py
 ```
+
+#### B. Decoupled Mode (Vertex AI Batch)
+1. Start the background staging worker:
+   ```bash
+   ./venv/bin/python -u stage_batch_summary.py > stage_batch.log 2>&1 &
+   ```
+2. Launch the dashboard GUI in cache-polling mode:
+   ```bash
+   LLM_MODE=decoupled export DISPLAY=:0 && ./venv/bin/python -u dashboard.py
+   ```
 *(Note: If you receive a `couldn't connect` error because the HDMI is sitting at the root login screen, inject it using: `sudo XAUTHORITY=/var/run/lightdm/root/:0 DISPLAY=:0 python3 dashboard.py`)*
 
 If you do not have a SolarEdge solar system configured and want to completely disable SolarEdge telemetry querying, history loading, bar chart plotting, and aligned aggregations, run the dashboard using the `--solaroff` option:

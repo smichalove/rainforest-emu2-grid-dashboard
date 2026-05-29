@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
 Name=Grid Dashboard
-Exec=/usr/bin/python3 /home/steven/dashboard.py
+Exec=/home/steven/rainforest-emu2-grid-dashboard/run_dashboard_system.sh
 StartupNotify=false
 Terminal=false
