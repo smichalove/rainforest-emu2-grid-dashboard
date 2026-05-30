@@ -93,53 +93,144 @@ Detailed instructions on how to set up the necessary Google Cloud Storage bucket
 
 ## Local Edge AI (Jetson / Nvidia Hardware) Setup
 
-To perform inference completely offline on local Nvidia hardware (such as an Nvidia Jetson Orin Nano) without cloud API costs or dependencies, the dashboard supports querying a local Ollama server natively using the `--localllm` CLI flag.
+To perform inference completely offline on local Nvidia hardware (such as an Nvidia Jetson Orin Nano) without cloud API costs or dependencies, the dashboard supports a **Jetson-Centric Edge Server Architecture**. 
+
+### Architectural Overview & Reasoning
+
+Instead of running mathematical integrations and LLM queries directly on the Raspberry Pi (which has constrained CPU/memory and is prone to SD card failure under continuous disk writes), the dashboard offloads the heavy lifting to the Jetson Orin:
+
+1. **Computational Offloading:** The Jetson Orin performs all quantitative telemetry math (integrals, peaks, rolling averages, standard deviations, and Pearson correlation coefficients) and runs local LLM inference via Ollama.
+2. **Automated Backup & SD Card Longevity:** On each analysis cycle, the Pi dashboard transfers its telemetry CSVs directly to the Jetson's NVMe SSD using `rsync`. This provides automatic remote backups and protects the Pi's SD card from continuous disk scans.
+3. **Weather-Weighted Modeling:** The Jetson edge server fetches local daily forecasts (temperature and cloud cover percentage) from the free Open-Meteo API. It dynamically scales the expected solar baseline to prevent false "solar deficit" anomaly warnings on overcast days.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    
+    box rgb(30, 41, 59) Cloud & Pi Batch Baseline Pipeline (Asynchronous)
+    participant Stager as stage_batch_summary.py (on Pi)
+    participant GCS as Google Cloud Storage
+    participant Vertex as Vertex AI (Gemini 2.5 Flash)
+    participant Cache as gemini_summary.json (Pi Cache)
+    end
+    
+    box rgb(17, 24, 39) Local Jetson Delta Pipeline (Every 15 mins)
+    participant Pi as Raspberry Pi (dashboard.py)
+    participant JS as Jetson Server (stage_local_summary.py)
+    participant OL as Local Ollama (gemma2:2b)
+    end
+
+    %% Cloud Batch Flow
+    Note over Stager: Asynchronous loop (e.g. 4-hour cycle)
+    Stager->>Stager: Parse local CSVs
+    Stager->>GCS: Upload staging_request.jsonl
+    Stager->>Vertex: Create Batch Prediction Job
+    Vertex-->>GCS: Write predictions.jsonl when done
+    Stager->>GCS: Poll & Download predictions.jsonl
+    Stager->>Cache: Save/Overwrite baseline summary text & timestamp
+    
+    %% Local Delta Flow
+    Note over Pi: Every 15 minutes
+    Pi->>JS: rsync local CSV files to Jetson backup directory
+    Pi->>Cache: Read baseline summary text & timestamp
+    Pi->>JS: HTTP POST /api/analyze (baseline text, timestamp)
+    
+    Note over JS: Math Phase on Jetson
+    JS->>JS: Fetch today's weather forecast from Open-Meteo API
+    JS->>JS: Read backup CSV files locally
+    JS->>JS: Compute delta metrics (kWh/kW) since baseline timestamp
+    JS->>JS: Calculate quantitative stats (std dev, rolling averages)
+    JS->>JS: Adjust solar anomaly thresholds based on cloud cover %
+    JS->>JS: Format comparative prompt using gemma_hybrid_prompt.txt
+    
+    JS->>OL: POST /api/generate (model, system instruct, formatted prompt)
+    OL->>OL: GPU Inference (Gemma 2 2B)
+    OL-->>JS: Return response text
+    
+    JS-->>Pi: HTTP Response (local delta text)
+    Note over Pi: GUI Rendering
+    Pi->>Pi: Update split-screen Matplotlib text & redraw canvas
+```
 
 ### 1. Ollama Installation & Model Setup
-On your Nvidia Jetson or other local NV device:
+On your Nvidia Jetson Orin:
 1. Install Ollama:
    ```bash
    curl -fsSL https://ollama.com/install.sh | sh
    ```
-2. Pull the optimized lightweight model (`gemma2:2b` is recommended for high performance and low memory footprint):
+2. Pull the optimized lightweight model (`gemma2:2b` is recommended for shared unified memory systems):
    ```bash
    ollama pull gemma2:2b
    ```
-3. Expose the Ollama service to your local network (so the Raspberry Pi running the dashboard can communicate with it). 
-   * Edit the systemd service or set the environment variable:
-     ```env
-     OLLAMA_HOST=0.0.0.0
-     ```
-   * *Security Note:* Ensure standard local network and firewall practices are in place when exposing Ollama to your local subnet.
 
-### 2. Verify connection via `curl`
-Before running the dashboard, verify your local LLM is responsive by querying it from the Raspberry Pi (or your developer machine):
+### 2. Configure SSH Public Key & Security Hardening
+Since the Raspberry Pi is a physical kiosk, its local SSH private key is vulnerable to extraction if the device is compromised. To enforce the **Principle of Least Privilege**, we create a dedicated, low-privilege account on the Jetson and restrict the SSH key strictly to `rsync` sync operations.
+
+#### Step A: Create a Restricted User on the Jetson
+On the Jetson, create a user `grid_backup` with no `sudo` privileges and shell login disabled:
 ```bash
-curl http://<your-jetson-ip>:11434/api/generate -d '{
-  "model": "gemma2:2b",
-  "prompt": "Summarize today's solar performance: Generated 25kWh, consumed 15kWh.",
-  "stream": false
-}'
+# Create the user with nologin shell to prevent shell access
+sudo useradd -m -s /usr/sbin/nologin grid_backup
+
+# Create the target backup directory and change ownership
+sudo mkdir -p /home/grid_backup/backups
+sudo chown -R grid_backup:grid_backup /home/grid_backup/backups
 ```
 
-### 3. Configure the Dashboard Environment
-Create or edit the `.env` file in your repository directory on the Raspberry Pi:
+#### Step B: Set Up the SSH Public Key
+1. **Generate SSH key on the Pi** (if not already present):
+   ```bash
+   ssh-keygen -t rsa -b 4096 -N "" -f ~/.ssh/id_rsa
+   ```
+2. **Copy the Pi's public key to the Jetson's new account**:
+   ```bash
+   ssh-copy-id -i ~/.ssh/id_rsa.pub grid_backup@<jetson-ip>
+   ```
+
+#### Step C: Restrict SSH Key Command Execution
+On the Jetson, edit `/home/grid_backup/.ssh/authorized_keys` and prepend options to the Pi's public key (the line beginning with `ssh-rsa ...`) to enforce command restriction. This forces the key to only be usable for `rsync` file syncing to the backups folder using the restricted `rrsync` utility:
+```text
+restrict,command="/usr/bin/rrsync /home/grid_backup/backups/" ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQD...
+```
+* `restrict`: Blocks port forwarding, agent forwarding, X11 forwarding, and shell allocation.
+* `command="..."`: Restricts the incoming SSH connection to ONLY execute rsync commands within the `/home/grid_backup/backups/` directory, preventing interactive terminal access or file reads/writes outside the target directory.
+
+> [!WARNING]
+> **Strict SSH Directory Permissions Required:** SSH will reject public key authentication if directory permissions are too open. If `rsync` still prompts for a password after copying the key, run these commands on the **Jetson** to secure the `grid_backup` SSH configuration folder:
+> ```bash
+> chmod 700 /home/grid_backup/.ssh
+> chmod 600 /home/grid_backup/.ssh/authorized_keys
+> ```
+> If these are group-writeable, the SSH daemon falls back to interactive password prompts, causing the Pi's background daemon sync thread to fail.
+
+### 3. Launching the Jetson Edge Server
+Run the lightweight analysis handler `stage_local_summary.py` on the Jetson:
+```bash
+python3 stage_local_summary.py --port=5000
+```
+This launches a zero-dependency HTTP server that listens on port 5000 for incoming sync metrics triggers.
+
+### 4. Configure Dashboard Environment (Pi)
+Configure the connection properties in the `.env` file on the Pi:
 ```env
-OLLAMA_HOST="http://<your-jetson-ip>:11434/api/generate"
-EDGE_MODEL="gemma2:2b"
+LLM_MODE="decoupled"
+JETSON_HOST="<your-jetson-ip>"
+JETSON_USER="<your-jetson-username>"
+JETSON_BACKUP_PATH="/home/<your-jetson-username>/rainforest-emu2-grid-dashboard/backups/"
+JETSON_PORT=5000
 ```
 
-### 4. Running in Local LLM Mode
-Run the dashboard with the `--localllm` flag to route all summary requests to your local Ollama server rather than Vertex AI:
-```bash
-python3 dashboard.py --localllm
-```
-
-### 5. Native Telemetry Pre-handling (Overcoming 2B Model Constraints)
-To run inference reliably on highly resource-constrained edge hardware with small models (like the **Gemma 2 2B** parameter model), the dashboard implements native Python telemetry pre-calculations:
-* **Token Optimization:** Rather than passing thousands of raw 15-second telemetry rows to the LLM (which would bloat context windows, slow down inference, and exceed GPU memory limits), Python aggregates the CSV data into hourly buckets.
-* **Accuracy & Hallucination Defense:** 2B parameter models are notoriously poor at performing arithmetic and numeric summaries. Python pre-calculates the daily metrics—such as Net Imported/Exported energy, Peak Demands, SolarEdge/Chillicon contributions, and PSE Net Credit calculations—and embeds the exact figures in the prompt template (`gemma_prompt.txt`).
-* **Targeted Prompting:** This constraints-handling ensures the edge LLM is used strictly for what it does best: natural language narrative summarization of already verified statistics, rather than raw computation.
+### 5. Running the Decoupled System
+1. **Start the GUI on the Pi**:
+   ```bash
+   python3 dashboard.py
+   ```
+   In `decoupled` mode, it will poll the baseline summaries locally, run the background `rsync` syncs, and hit the Jetson HTTP server every 15 minutes for local delta updates.
+2. **Start the Cloud Batch Stager (Optional)**:
+   If you want to feed high-fidelity Cloud Vertex AI baselines to the local system, run `stage_batch_summary.py` on the Pi:
+   ```bash
+   python3 stage_batch_summary.py
+   ```
 
 ---
 

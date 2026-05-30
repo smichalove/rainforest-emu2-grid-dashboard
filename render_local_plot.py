@@ -12,7 +12,7 @@ from matplotlib.collections import LineCollection
 from typing import List, Any
 
 # Match settings from main dashboard.py
-SUMMARY_FONT_SIZE: int = 11
+SUMMARY_FONT_SIZE: int = 10
 SUMMARY_ALPHA: float = 0.55
 SUMMARY_COLOR: str = 'deepskyblue'
 IMPORT_COLOR: str = '#f43f5e'  # Modern rose red
@@ -248,23 +248,29 @@ class OfflineViewer(tk.Tk):
             print(f"Failed to read Chillicon history file: {e}")
 
     def load_cached_summary(self) -> None:
-        """Loads local gemini_summary.json and sets the watermark."""
-        cache_file = 'gemini_summary.json'
+        """Loads local merged_summary.json or gemini_summary.json and sets the watermark."""
+        cache_file = 'merged_summary.json'
         if not os.path.exists(cache_file):
-            print("No local gemini_summary.json found.")
+            cache_file = 'gemini_summary.json'
+            
+        if not os.path.exists(cache_file):
+            print("No local summary file found.")
             return
             
         try:
-            with open(cache_file, 'r') as f:
+            with open(cache_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 summary = data.get("summary")
                 if summary:
                     self.summary_text_obj.set_text(self.wrap_text(summary.strip()))
-                    print("Loaded cached Gemini summary.")
+                    print(f"Loaded cached summary from {cache_file}.")
         except Exception as e:
             print(f"Failed to load cache: {e}")
 
-    def wrap_text(self, text: str, width: int = 80) -> str:
+
+    def wrap_text(self, text: str, width: int = 100) -> str:
+        # Normalize carriage returns and other line endings to standard newlines
+        text = text.replace('\r\n', '\n').replace('\r', '\n')
         paragraphs = text.split('\n\n')
         wrapped_paragraphs = []
         for para in paragraphs:

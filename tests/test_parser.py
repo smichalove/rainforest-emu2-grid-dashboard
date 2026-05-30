@@ -304,3 +304,94 @@ def test_load_credentials():
     finally:
         os.remove(temp_path)
 
+
+# --- Additional Tests for Jetson Edge Server Architecture ---
+
+def test_parse_timestamp():
+    """Test parse_timestamp parses multiple valid format naive datetimes."""
+    from stage_local_summary import parse_timestamp as local_parse_ts
+    
+    # ISO Format
+    ts1 = local_parse_ts("2026-05-30T10:06:13.120731")
+    assert ts1 is not None
+    assert ts1.year == 2026 and ts1.month == 5 and ts1.day == 30 and ts1.hour == 10 and ts1.minute == 6
+    
+    # Custom format with spaces
+    ts2 = local_parse_ts("2026-05-30 10:06:13")
+    assert ts2 is not None
+    assert ts2.year == 2026 and ts2.month == 5 and ts2.day == 30 and ts2.hour == 10 and ts2.minute == 6
+
+
+@patch('urllib.request.urlopen')
+def test_fetch_weather_mock(mock_urlopen):
+    """Test fetch_weather mocks Open-Meteo REST API call and parses it correctly."""
+    from stage_local_summary import fetch_weather
+    
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = b'{"daily_units":{"temperature_2m_max":"C"},"daily":{"time":["2026-05-30"],"temperature_2m_max":[18.5],"cloud_cover_mean":[45.0]}}'
+    mock_urlopen.return_value.__enter__.return_value = mock_resp
+    
+    temp, cloud = fetch_weather()
+    assert temp == 18.5
+    assert cloud == 45.0
+
+
+def test_calculate_solar_correlation():
+    """Test calculate_solar_correlation computes accurate Pearson correlation."""
+    from stage_local_summary import calculate_solar_correlation
+    import math
+    
+    with tempfile.NamedTemporaryFile(mode='w', delete=False) as f_se, \
+         tempfile.NamedTemporaryFile(mode='w', delete=False) as f_ch:
+        
+        # Write matching timestamps with perfect positive linear correlation (r = 1.0)
+        base_time = datetime.datetime(2026, 5, 30, 12, 0)
+        for i in range(10):
+            ts = (base_time + datetime.timedelta(minutes=i*15)).isoformat()
+            f_se.write(f"{ts},{1.0 + i}\n")
+            f_ch.write(f"{ts},{2.0 + i * 2},{50.0}\n")
+            
+        se_path = f_se.name
+        ch_path = f_ch.name
+        
+    try:
+        r = calculate_solar_correlation(se_path, ch_path)
+        assert abs(r - 1.0) < 1e-5
+    finally:
+        os.remove(se_path)
+        os.remove(ch_path)
+
+
+@patch('urllib.request.urlopen')
+@patch('stage_local_summary.calculate_deltas')
+@patch('stage_local_summary.calculate_grid_stats')
+@patch('stage_local_summary.calculate_solar_tod_stats')
+@patch('stage_local_summary.calculate_solar_correlation')
+@patch('stage_local_summary.fetch_weather')
+@patch('stage_local_summary.DEFAULT_MODEL', 'gemma2:2b')
+def test_run_analysis_workflow(mock_weather, mock_corr, mock_tod, mock_grid, mock_deltas, mock_urlopen):
+    """Test run_analysis_workflow coordinates stats, weather, and local Ollama queries."""
+    from stage_local_summary import run_analysis_workflow
+    
+    mock_weather.return_value = (16.0, 50.0)
+    mock_corr.return_value = 0.95
+    mock_tod.return_value = (2.0, 0.2)
+    mock_grid.return_value = (1.5, 0.5)
+    mock_deltas.return_value = {
+        "delta_import": 1.2,
+        "delta_export": 0.0,
+        "delta_peak": 2.5,  # (2.5 - 1.5)/0.5 = 2.0
+        "delta_solar": 3.0,
+        "delta_bat_charge": 0.5,
+        "delta_bat_discharge": 0.4
+    }
+    
+    # Mock Ollama API response
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = b'{"response":"System operating within baseline limits"}'
+    mock_urlopen.return_value.__enter__.return_value = mock_resp
+    
+    result = run_analysis_workflow("2026-05-30 10:00:00", "Baseline Summary Text")
+    assert result is not None
+    assert "response" in result
+    assert result["response"] == "System operating within baseline limits"

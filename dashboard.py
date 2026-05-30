@@ -51,7 +51,7 @@ except ImportError:
 BAUD: int = 115200
 
 # Gemini Summary Display Settings
-SUMMARY_FONT_SIZE: int = 11
+SUMMARY_FONT_SIZE: int = 10
 SUMMARY_ALPHA: float = 0.55
 SUMMARY_COLOR: str = 'deepskyblue'
 
@@ -248,6 +248,16 @@ class GridDashboard(tk.Tk):
             self.llm_mode = "direct"
         logging.info(f"Initialized LLM mode: '{self.llm_mode}' (local_llm={self.local_llm})")
         
+        # Initialize text buffers for baseline and local delta rendering
+        self.baseline_text: str = ""
+        self.local_delta_text: str = ""
+        
+        # Load Jetson network configs
+        self.jetson_host: str = os.environ.get("JETSON_HOST", "localhost")
+        self.jetson_user: str = os.environ.get("JETSON_USER", "nvidia")
+        self.jetson_backup_path: str = os.environ.get("JETSON_BACKUP_PATH", "~/rainforest-emu2-grid-dashboard/backups/")
+        self.jetson_port: int = int(os.environ.get("JETSON_PORT", "5000"))
+        
         # Load cached summary on startup
         self.load_cached_summary()
 
@@ -275,6 +285,10 @@ class GridDashboard(tk.Tk):
 
         # Start background thread to poll Chillicon every 10 minutes.
         self.start_chilicon_loop()
+
+        # Start background thread for local delta tracking in decoupled mode
+        if self.llm_mode == "decoupled":
+            self.start_local_delta_loop()
 
         # Register OS signal handlers for clean teardown on termination signals (SIGINT, SIGTERM)
         signal.signal(signal.SIGINT, self.handle_signal)
@@ -1029,17 +1043,17 @@ class GridDashboard(tk.Tk):
                     if self.llm_mode == "decoupled":
                         # Load cache unconditionally
                         self.last_summary_time = ts
-                        self.summary_text_obj.set_text(self.wrap_text(summary.strip()))
+                        self.baseline_text = summary.strip()
+                        self.update_summary_display()
                         logging.info(f"Loaded cached Gemini summary from {ts_str} unconditionally.")
-                        self.fig.canvas.draw_idle()
                     else:
                         # Load cache only if it is fresh (less than 15 minutes old)
                         now = datetime.datetime.now()
                         if now - ts < datetime.timedelta(minutes=15):
                             self.last_summary_time = ts
-                            self.summary_text_obj.set_text(self.wrap_text(summary.strip()))
+                            self.baseline_text = summary.strip()
+                            self.update_summary_display()
                             logging.info(f"Loaded fresh cached Gemini summary from {ts_str}.")
-                            self.fig.canvas.draw_idle()
                         else:
                             logging.info("Cached Gemini summary exists but is older than 15 minutes.")
         except Exception as e:
@@ -1529,7 +1543,7 @@ class GridDashboard(tk.Tk):
         except Exception as e:
             logging.error(f"Error fetching summary from Gemini: {e}")
 
-    def wrap_text(self, text: str, width: int = 80) -> str:
+    def wrap_text(self, text: str, width: int = 100) -> str:
         """Wraps text lines to a maximum width while preserving layout and lists.
 
         This method splits the incoming text by double newlines into paragraphs,
@@ -1543,6 +1557,8 @@ class GridDashboard(tk.Tk):
         Returns:
             The wrapped text block with line breaks inserted.
         """
+        # Normalize carriage returns and other line endings to standard newlines
+        text = text.replace('\r\n', '\n').replace('\r', '\n')
         paragraphs = text.split('\n\n')
         wrapped_paragraphs = []
         for para in paragraphs:
@@ -1578,14 +1594,159 @@ class GridDashboard(tk.Tk):
         return '\n\n'.join(wrapped_paragraphs)
 
     def update_background_summary(self, text: str) -> None:
-        """Updates the background summary text on the main thread.
+        """Updates the background summary text on the main thread."""
+        self.baseline_text = text
+        self.update_summary_display()
 
-        Args:
-            text: The new summary text block to render in the background.
-        """
-        wrapped_text = self.wrap_text(text)
+    def update_summary_display(self) -> None:
+        """Merges baseline and local delta summaries and renders them in the Matplotlib text widget."""
+        full_text = ""
+        if hasattr(self, 'baseline_text') and self.baseline_text:
+            clean_baseline = self.baseline_text.strip()
+            marker = "[Live Local Delta (Jetson)"
+            if marker in clean_baseline:
+                clean_baseline = clean_baseline.split(marker)[0].strip()
+            full_text += clean_baseline
+            
+        if hasattr(self, 'local_delta_text') and self.local_delta_text:
+            if full_text:
+                full_text += "\n\n"
+            full_text += self.local_delta_text.strip()
+            
+        wrapped_text = self.wrap_text(full_text)
         self.summary_text_obj.set_text(wrapped_text)
         self.fig.canvas.draw_idle()
+        
+        # Save the merged summary to disk for offline viewing tools (view_dashboard.sh)
+        try:
+            merged_payload = {
+                "timestamp": self.last_summary_time.isoformat() if self.last_summary_time else datetime.datetime.now().isoformat(),
+                "summary": full_text
+            }
+            merged_file = os.path.join(os.path.dirname(self.summary_cache_file), "merged_summary.json")
+            with open(merged_file, "w", encoding="utf-8") as mf:
+                json.dump(merged_payload, mf, indent=4)
+        except Exception as write_err:
+            logging.error(f"Failed to write merged summary to disk: {write_err}")
+
+
+    def parse_timestamp(self, ts_str: str) -> Optional[datetime.datetime]:
+        """Robust parser for naive datetime strings."""
+        ts_str = ts_str.strip().replace('\x00', '')
+        for fmt in (
+            "%Y-%m-%dT%H:%M:%S.%f",
+            "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M:%S",
+            "%Y-%m-%d %H:%M:%S.%f"
+        ):
+            try:
+                return datetime.datetime.strptime(ts_str, fmt)
+            except ValueError:
+                continue
+        try:
+            return datetime.datetime.fromisoformat(ts_str)
+        except ValueError:
+            return None
+
+    def start_local_delta_loop(self) -> None:
+        """Spawns the background thread to poll local deltas from the Jetson server."""
+        self.local_delta_thread = threading.Thread(target=self.local_delta_loop, daemon=True)
+        self.local_delta_thread.start()
+
+    def local_delta_loop(self) -> None:
+        """Runs the 15-minute sync loop, performing SCP and hitting the Jetson server."""
+        import subprocess
+        import shutil
+        
+        # Initial sleep for 15 seconds to allow dashboard startup to settle
+        time.sleep(15)
+        
+        logging.info("Starting dashboard local delta sync loop...")
+        while self.running:
+            try:
+                # 1. Sync CSVs to Jetson
+                logging.info("Local Delta Loop: Syncing CSV history files to Jetson...")
+                files_to_sync = []
+                for f_path in (self.history_file, self.se_history_file, self.se_battery_history_file, self.chilicon_history_file):
+                    if os.path.exists(f_path):
+                        files_to_sync.append(f_path)
+                        
+                if files_to_sync:
+                    if self.jetson_host == "localhost":
+                        # Local copy
+                        dest_dir = os.path.expanduser(self.jetson_backup_path) if self.jetson_backup_path.startswith("~") else self.jetson_backup_path
+                        os.makedirs(dest_dir, exist_ok=True)
+                        for f_path in files_to_sync:
+                            try:
+                                shutil.copy(f_path, dest_dir)
+                            except Exception as copy_err:
+                                logging.error(f"Local Delta Loop: Failed to copy {f_path} locally: {copy_err}")
+                    else:
+                        # Remote rsync for delta-transfer efficiency
+                        dest = f"{self.jetson_user}@{self.jetson_host}:{self.jetson_backup_path}"
+                        cmd = ["rsync", "-aqz"] + files_to_sync + [dest]
+                        try:
+                            subprocess.run(cmd, check=True, timeout=30)
+                            logging.info(f"Local Delta Loop: Successfully synced CSVs to Jetson via rsync: {dest}")
+                        except Exception as rsync_err:
+                            logging.error(f"Local Delta Loop: rsync failed: {rsync_err}")
+                
+                # 2. Check if baseline summary cache file exists
+                if os.path.exists(self.summary_cache_file):
+                    with open(self.summary_cache_file, 'r') as f:
+                        cache_data = json.load(f)
+                    
+                    ts_str = cache_data.get("timestamp")
+                    baseline_text = cache_data.get("summary", "")
+                    
+                    clean_baseline = baseline_text
+                    marker = "[Live Local Delta (Jetson)"
+                    if marker in clean_baseline:
+                        clean_baseline = clean_baseline.split(marker)[0].strip()
+                        
+                    if ts_str:
+                        # 3. Post request to Jetson server
+                        url = f"http://{self.jetson_host}:{self.jetson_port}/api/analyze"
+                        payload = {
+                            "baseline_timestamp": ts_str,
+                            "baseline_text": clean_baseline
+                        }
+                        req_data = json.dumps(payload).encode('utf-8')
+                        req = urllib.request.Request(
+                            url,
+                            data=req_data,
+                            headers={'Content-Type': 'application/json'}
+                        )
+                        
+                        try:
+                            logging.info(f"Local Delta Loop: Requesting analysis from Jetson server at {url}...")
+                            with urllib.request.urlopen(req, timeout=120.0) as response:
+                                res_body = response.read().decode('utf-8')
+                                res_data = json.loads(res_body)
+                                llm_response = res_data.get("response", "").strip()
+                                
+                                if llm_response:
+                                    checked_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                                    delta_text = f"[Live Local Delta (Jetson) | Checked: {checked_time}]:\n{llm_response}"
+                                    
+                                    self.local_delta_text = delta_text
+                                    self.after(0, self.update_summary_display)
+                                    logging.info("Local Delta Loop: Successfully updated GUI summary text.")
+                                else:
+                                    logging.warning("Local Delta Loop: Received empty response from Jetson server.")
+                        except Exception as post_err:
+                            logging.error(f"Local Delta Loop: HTTP analysis query failed: {post_err}")
+                    else:
+                        logging.warning("Local Delta Loop: Baseline summary cache timestamp is empty.")
+                else:
+                    logging.info("Local Delta Loop: Baseline summary cache file not found yet.")
+            except Exception as loop_err:
+                logging.error(f"Local Delta Loop: Unexpected error: {loop_err}")
+                
+            for _ in range(90):
+                if not self.running:
+                    break
+                time.sleep(10)
 
     def destroy(self) -> None:
         """Cleanly destroys the dashboard application, stopping threads and closing serial ports.
