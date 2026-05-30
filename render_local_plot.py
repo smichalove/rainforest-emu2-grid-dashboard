@@ -431,7 +431,13 @@ class OfflineViewer(tk.Tk):
             img.convert('RGB').save('dashboard_preview.jpeg', 'JPEG', quality=95)
             print("Successfully captured and saved dashboard_preview.jpeg via PIL ImageGrab!")
         except Exception as e:
-            print(f"Error capturing screenshot via PIL: {e}")
+            print(f"Error capturing screenshot via PIL: {e}. Trying direct Matplotlib savefig fallback...")
+            try:
+                # Fallback to saving the Matplotlib figure directly to file (bypasses screen capture permission checks)
+                self.fig.savefig('dashboard_preview.jpeg', facecolor='black', edgecolor='none', bbox_inches='tight')
+                print("Successfully saved dashboard_preview.jpeg via direct Matplotlib savefig fallback!")
+            except Exception as save_err:
+                print(f"Failed to save Matplotlib figure directly: {save_err}")
 
 if __name__ == "__main__":
     app = OfflineViewer()
