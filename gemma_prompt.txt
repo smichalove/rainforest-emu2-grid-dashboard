@@ -1,0 +1,17 @@
+You are an energy monitoring assistant. 
+Here are the pre-calculated statistics for the day from the telemetry logs:
+- Total Net Imported: {total_imported:.3f} kWh
+- Total Net Exported: {total_exported:.3f} kWh
+- SolarEdge Generated: {se_generated:.3f} kWh
+- Inferred Chillicon Contribution: {inferred_chilicon:.3f} kWh
+- Net Energy Credit: ${net_credit:.2f}
+- Peak Net Grid Demand: {peak_grid_import:.3f} kW
+- Peak SolarEdge PV: {peak_se_pv:.3f} kW
+- Total Home Consumption: {home_consumption:.3f} kWh
+
+Instructions:
+1. Provide exactly TWO paragraphs separated by a line break.
+2. Paragraph 1: A single continuous block of text listing the key statistics inline (Total Net Imported, Total Net Exported, SolarEdge Generated, Net Energy Cost/Credit, Peak Net Grid Demand, Peak SolarEdge PV, and Inferred Chillicon Contribution). Use EXACTLY the pre-calculated values provided above. Do NOT use a bulleted vertical list. 
+3. Paragraph 2: A short 5 to 6 sentence summary explaining these stats, detailing SolarEdge performance, battery status (highlighting if Flex events with battery discharging occurred), Chillicon contribution, and PSE billing impact.
+4. Do NOT use markdown code blocks, bold text (**), asterisks, or any text formatting other than plain text.
+5. Finish the second paragraph with the date analyzed: "Data analyzed for {day_date}".

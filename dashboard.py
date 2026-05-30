@@ -1,24 +1,30 @@
-import tkinter as tk
-import serial
-import xml.etree.ElementTree as ET
-import time
-import threading
-import logging
-import datetime
 import csv
-import os
-import json
-import signal
-import textwrap
-import statistics
-import urllib.request
-import sys
+import datetime
 from collections import defaultdict
-import matplotlib.dates as mdates
-from matplotlib.figure import Figure
+import http.cookiejar
+import json
+import logging
+import os
+import re
+import signal
+import statistics
+import sys
+import textwrap
+import threading
+import time
+from typing import Any, List, Optional
+import urllib.error
+import urllib.request
+import xml.etree.ElementTree as ET
+
+# Third-party libraries
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.collections import LineCollection
-from typing import List, Any, Optional
+import matplotlib.dates as mdates
+from matplotlib.figure import Figure
+import serial
+import serial.tools.list_ports
+import tkinter as tk
 
 # Setup logging to keep track of serial port communication and errors.
 home_dir: str = os.path.expanduser('~')
@@ -28,13 +34,18 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(message)s'
 )
 
-# Try to import Google GenAI library. If not installed, log a warning but run GUI without summaries.
+# Try to import Google GenAI and HTTPX libraries. If not installed, log a warning
+# but run GUI without Vertex AI summaries.
 GENAI_AVAILABLE = False
 try:
     from google import genai
+    from google.genai import types
+    import httpx
     GENAI_AVAILABLE = True
 except ImportError:
-    logging.warning("google-genai package is not installed. Gemini background summaries will be disabled.")
+    logging.warning(
+        "google-genai or httpx package is not installed. Gemini/Vertex AI background summaries will be disabled."
+    )
 
 # Rainforest EMU-2 hardware communication settings
 BAUD: int = 115200
@@ -68,6 +79,16 @@ class GridDashboard(tk.Tk):
         lc (LineCollection): Matplotlib LineCollection plot element.
         summary_text_obj (Any): Matplotlib Text object for displaying background summaries.
         canvas (FigureCanvasTkAgg): Canvas widget connecting matplotlib and Tkinter.
+        solar_off (bool): If True, suppresses SolarEdge polling and plotting.
+        chilicon_off (bool): If True, suppresses Chillicon polling and plotting.
+        local_llm (bool): If True, uses local Ollama instead of Vertex AI.
+        solaredge_api_key (Optional[str]): API key for SolarEdge.
+        solaredge_site_id (Optional[str]): Site ID for SolarEdge.
+        chilicon_username (Optional[str]): Username for Chillicon login.
+        chilicon_password (Optional[str]): Password for Chillicon login.
+        chilicon_installation_hash (Optional[str]): Installation hash for Chillicon API.
+        summary_cache_file (str): File path for local summary cache.
+        last_summary_time (Optional[datetime.datetime]): Timestamp of last successful summary query.
     """
     solar_off = False
 
@@ -96,6 +117,7 @@ class GridDashboard(tk.Tk):
         # Check command line flags
         self.solar_off: bool = "--solaroff" in sys.argv
         self.chilicon_off: bool = "--chiliconoff" in sys.argv
+        self.local_llm: bool = "--localllm" in sys.argv
         
         # SolarEdge PV and Battery In-memory arrays and paths
         self.se_timestamps: List[datetime.datetime] = []
@@ -217,13 +239,14 @@ class GridDashboard(tk.Tk):
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
         # Summary cache settings to prevent redundant API queries on restart
-        local_cache: str = os.path.join(script_dir, 'gemini_summary.json')
-        self.summary_cache_file: str = local_cache if os.path.exists(local_cache) else os.path.join(home_dir, 'gemini_summary.json')
+        self.summary_cache_file: str = os.path.join(script_dir, 'gemini_summary.json')
         self.last_summary_time: Optional[datetime.datetime] = None
         
         # Resolve LLM integration mode: 'direct' (default) or 'decoupled' (cache consumer)
         self.llm_mode: str = os.environ.get("LLM_MODE", "direct").lower().strip()
-        logging.info(f"Initialized LLM mode: '{self.llm_mode}'")
+        if self.local_llm:
+            self.llm_mode = "direct"
+        logging.info(f"Initialized LLM mode: '{self.llm_mode}' (local_llm={self.local_llm})")
         
         # Load cached summary on startup
         self.load_cached_summary()
@@ -292,10 +315,9 @@ class GridDashboard(tk.Tk):
         now: datetime.datetime = datetime.datetime.now()
         # Only load the last 24 hours to prevent chart congestion and excessive memory usage.
         cutoff: datetime.datetime = now - datetime.timedelta(days=1)
-        
         try:
             with open(self.history_file, 'r') as f:
-                reader = csv.reader(f)
+                reader = csv.reader(line.replace('\x00', '') for line in f)
                 for row in reader:
                     if len(row) == 2:
                         try:
@@ -396,7 +418,7 @@ class GridDashboard(tk.Tk):
             logging.info("Loading SolarEdge PV history from CSV...")
             try:
                 with open(self.se_history_file, 'r') as f:
-                    reader = csv.reader(f)
+                    reader = csv.reader(line.replace('\x00', '') for line in f)
                     for row in reader:
                         if len(row) == 2:
                             try:
@@ -418,7 +440,7 @@ class GridDashboard(tk.Tk):
             logging.info("Loading SolarEdge battery history from CSV...")
             try:
                 with open(self.se_battery_history_file, 'r') as f:
-                    reader = csv.reader(f)
+                    reader = csv.reader(line.replace('\x00', '') for line in f)
                     for row in reader:
                         if len(row) == 3:
                             try:
@@ -450,7 +472,7 @@ class GridDashboard(tk.Tk):
             logging.info("Loading Chillicon history from CSV...")
             try:
                 with open(self.chilicon_history_file, 'r') as f:
-                    reader = csv.reader(f)
+                    reader = csv.reader(line.replace('\x00', '') for line in f)
                     for row in reader:
                         if len(row) == 3:
                             try:
@@ -471,8 +493,11 @@ class GridDashboard(tk.Tk):
                 logging.error(f"Failed to read Chillicon history file: {e}")
 
     def chilicon_login(self) -> bool:
-        """Logs into Chilicon Cloud and stores session cookies."""
-        import re
+        """Logs into Chilicon Cloud and stores session cookies.
+
+        Returns:
+            True if the login succeeded and cookies were stored, False otherwise.
+        """
         if not self.chilicon_username or not self.chilicon_password:
             logging.error("Chillicon credentials not set. Cannot log in.")
             return False
@@ -520,7 +545,6 @@ class GridDashboard(tk.Tk):
             return
 
         if self.chilicon_opener is None:
-            import http.cookiejar
             cj = http.cookiejar.CookieJar()
             self.chilicon_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
             if not self.chilicon_login():
@@ -707,8 +731,10 @@ class GridDashboard(tk.Tk):
         
         Scans all available COM/TTY ports and returns the first one that appears
         to be a USB CDC device (like ttyACM) or has Rainforest in the manufacturer name.
+
+        Returns:
+            The device path of the serial port (e.g., '/dev/ttyACM0').
         """
-        import serial.tools.list_ports
         ports = serial.tools.list_ports.comports()
         for p in ports:
             # Rainforest meters typically enumerate as USB CDC devices (ttyACM)
@@ -1022,7 +1048,8 @@ class GridDashboard(tk.Tk):
     def generate_hourly_summaries(self) -> str:
         """Parses the entire historical CSV files and computes hourly min, max, avg, and median.
         
-        Returns a compact CSV string representation of Net Grid and SolarEdge PV data bucketed by hour.
+        Returns:
+            A compact CSV string representation of Net Grid and SolarEdge PV data bucketed by hour.
         """
         if not os.path.exists(self.history_file):
             return ""
@@ -1030,7 +1057,7 @@ class GridDashboard(tk.Tk):
         hourly_data = defaultdict(list)
         try:
             with open(self.history_file, 'r') as f:
-                reader = csv.reader(f)
+                reader = csv.reader(line.replace('\x00', '') for line in f)
                 for row in reader:
                     if len(row) == 2:
                         ts_str = row[0].strip().replace('\x00', '')
@@ -1051,7 +1078,7 @@ class GridDashboard(tk.Tk):
         if not self.solar_off and os.path.exists(self.se_history_file):
             try:
                 with open(self.se_history_file, 'r') as f:
-                    reader = csv.reader(f)
+                    reader = csv.reader(line.replace('\x00', '') for line in f)
                     for row in reader:
                         if len(row) == 2:
                             ts_str = row[0].strip().replace('\x00', '')
@@ -1070,7 +1097,7 @@ class GridDashboard(tk.Tk):
         if not self.solar_off and os.path.exists(self.se_battery_history_file):
             try:
                 with open(self.se_battery_history_file, 'r') as f:
-                    reader = csv.reader(f)
+                    reader = csv.reader(line.replace('\x00', '') for line in f)
                     for row in reader:
                         if len(row) == 3:
                             ts_str = row[0].strip().replace('\x00', '')
@@ -1090,7 +1117,7 @@ class GridDashboard(tk.Tk):
         if not self.chilicon_off and os.path.exists(self.chilicon_history_file):
             try:
                 with open(self.chilicon_history_file, 'r') as f:
-                    reader = csv.reader(f)
+                    reader = csv.reader(line.replace('\x00', '') for line in f)
                     for row in reader:
                         if len(row) == 3:
                             ts_str = row[0].strip().replace('\x00', '')
@@ -1159,8 +1186,8 @@ class GridDashboard(tk.Tk):
         Prepares the usage data as a compact CSV string, calls the Gemini model via
         Vertex AI client, and updates the background dashboard visualization.
         """
-        if not GENAI_AVAILABLE:
-            logging.warning("google-genai package not imported; skipping Gemini summary.")
+        if not self.local_llm and not GENAI_AVAILABLE:
+            logging.warning("google-genai or httpx package is not imported; skipping Gemini summary.")
             return
 
         # Ensure we have data points to summarize
@@ -1181,6 +1208,182 @@ class GridDashboard(tk.Tk):
             if not csv_data or len(csv_data.split('\n')) < 2:
                 logging.warning("No historical data available for Gemini summary.")
                 return
+
+            if self.local_llm:
+                logging.info("Initiating native local Jetson Ollama API call...")
+                
+                # --- Configuration & Environment Setup ---
+                # Attempt to parse local .env file manually if python-dotenv isn't loaded globally.
+                # This ensures we dynamically fetch the active Jetson IP and Model without hardcoding.
+                env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+                ollama_host = os.environ.get("OLLAMA_HOST")
+                model_name = os.environ.get("EDGE_MODEL", "gemma2:2b")
+                
+                if not ollama_host and os.path.exists(env_path):
+                    try:
+                        with open(env_path, 'r') as f:
+                            for line in f:
+                                if line.strip().startswith("OLLAMA_HOST="):
+                                    ollama_host = line.split("=", 1)[1].strip().strip('"').strip("'")
+                                elif line.strip().startswith("EDGE_MODEL="):
+                                    model_name = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    except Exception as env_err:
+                        logging.warning(f"Could not parse local .env file for Ollama config: {env_err}")
+                
+                # Fallback to localhost if no network IP was specified
+                if not ollama_host:
+                    ollama_host = "http://localhost:11434/api/generate"
+
+                # --- Prompt Template Loading ---
+                prompt_path: str = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gemma_prompt.txt")
+                if not os.path.exists(prompt_path):
+                    logging.error(f"Required local prompt template not found at: {prompt_path}")
+                    return
+
+                try:
+                    with open(prompt_path, 'r', encoding='utf-8') as pf:
+                        prompt_template: str = pf.read()
+                except Exception as pe:
+                    logging.error(f"Failed to read Ollama prompt file {prompt_path}. Error: {pe}")
+                    return
+
+                # --- Natively Calculate Grid Telemetry Statistics ---
+                # To minimize LLM token overhead on edge devices, we calculate the absolute 
+                # min/max/sums natively in Python instead of asking the LLM to aggregate the CSV.
+                reader = csv.reader(csv_data.splitlines())
+                next(reader)  # skip header
+                
+                total_imported = 0.0
+                total_exported = 0.0
+                se_generated = 0.0
+                battery_discharged = 0.0
+                battery_charged = 0.0
+                chilicon_generated = 0.0
+                inferred_chilicon = 0.0
+                
+                peak_grid_import = 0.0
+                peak_grid_export = 0.0
+                peak_se_pv = 0.0
+                
+                day_date_str = "N/A"
+                
+                rows = list(reader)
+                if rows:
+                    day_date_str = rows[-1][0][:10]
+                    
+                for row in rows:
+                    if len(row) < 13:
+                        continue
+                    
+                    avg_kw = float(row[1])
+                    min_kw = float(row[2])
+                    max_kw = float(row[3])
+                    se_avg = float(row[5])
+                    se_max = float(row[6])
+                    se_energy = float(row[7])
+                    bat_avg = float(row[8])
+                    ch_avg = float(row[10])
+                    ch_energy = float(row[12])
+                    
+                    # 1. Grid Imports / Exports (kWh)
+                    if avg_kw > 0:
+                        total_imported += avg_kw * 1.0
+                    else:
+                        total_exported += abs(avg_kw) * 1.0
+                        
+                    # Peaks
+                    if max_kw > 0:
+                        peak_grid_import = max(peak_grid_import, max_kw)
+                    if min_kw < 0:
+                        peak_grid_export = max(peak_grid_export, abs(min_kw))
+                        
+                    # 2. SolarEdge Generated
+                    se_generated += se_energy
+                    peak_se_pv = max(peak_se_pv, se_max)
+                    
+                    # 3. Battery Activity
+                    if bat_avg > 0:
+                        battery_discharged += bat_avg * 1.0
+                    else:
+                        battery_charged += abs(bat_avg) * 1.0
+                        
+                    # 4. Chillicon Generated
+                    chilicon_generated += ch_energy
+                    
+                    # 5. Inferred Chillicon
+                    if avg_kw < 0:
+                        grid_export_rate = abs(avg_kw)
+                        inferred_rate = grid_export_rate - se_avg - max(0.0, bat_avg)
+                        if inferred_rate > 0:
+                            inferred_chilicon += inferred_rate * 1.0
+                            
+                # Net Billing Impact
+                import_cost = total_imported * 0.19
+                export_credit = total_exported * 0.19
+                flex_bonus = battery_discharged * 0.31
+                net_credit = export_credit - import_cost + flex_bonus
+                
+                # Estimate Home Consumption
+                total_solar = se_generated + (chilicon_generated if chilicon_generated > 0 else inferred_chilicon)
+                home_consumption = total_solar + total_imported - total_exported + battery_discharged - battery_charged
+                if home_consumption < 0:
+                    home_consumption = 0.0
+                
+                # Hydrate the prompt template with native telemetry
+                prompt: str = prompt_template.format(
+                    total_imported=total_imported,
+                    total_exported=total_exported,
+                    se_generated=se_generated,
+                    inferred_chilicon=inferred_chilicon,
+                    net_credit=net_credit,
+                    peak_grid_import=peak_grid_import,
+                    peak_se_pv=peak_se_pv,
+                    home_consumption=home_consumption,
+                    day_date=day_date_str
+                )
+
+                # --- Execute Native HTTP POST to Jetson ---
+                payload = {"model": model_name, "prompt": prompt, "stream": False}
+                req = urllib.request.Request(
+                    ollama_host, 
+                    data=json.dumps(payload).encode('utf-8'), 
+                    headers={'Content-Type': 'application/json'}
+                )
+                
+                start_time = time.time()
+                try:
+                    # Execute synchronous HTTP POST, blocking this background thread
+                    with urllib.request.urlopen(req, timeout=120.0) as response:
+                        result = json.loads(response.read().decode('utf-8'))
+                        elapsed = time.time() - start_time
+                        summary_text = result.get('response', '').strip()
+                        
+                        if summary_text:
+                            # Append metadata proving the edge model was used
+                            retrieved_time = now.strftime("%Y-%m-%d %H:%M:%S")
+                            summary_text += f"\n\n[Edge Model: {model_name} | Generated: {retrieved_time} | Inference Time: {elapsed:.1f}s]"
+                            
+                            # Cache the summary to disk
+                            try:
+                                with open(self.summary_cache_file, 'w') as f:
+                                    json.dump({
+                                        "timestamp": now.isoformat(),
+                                        "summary": summary_text
+                                    }, f)
+                                logging.info("Cached new Local Jetson summary to disk.")
+                            except Exception as cache_err:
+                                logging.error(f"Failed to cache local summary to disk: {cache_err}")
+                            
+                            # Cache and update GUI safely on main thread
+                            self.last_summary_time = now
+                            self.after(0, self.update_background_summary, summary_text)
+                            logging.info(f"Local Jetson summary successfully generated in {elapsed:.1f}s.")
+                            
+                            # Return early, bypassing the Vertex AI fallback
+                            return
+                except Exception as ollama_err:
+                    logging.error(f"Local Ollama API failed: {ollama_err}")
+                    return
 
             # 2. Check for API key (via Environment variable or local .env file)
             api_key = os.environ.get("GEMINI_API_KEY")
@@ -1218,10 +1421,6 @@ class GridDashboard(tk.Tk):
             if not api_key and not has_service_account:
                 logging.warning("Neither GEMINI_API_KEY nor GOOGLE_APPLICATION_CREDENTIALS is set; skipping Gemini summary.")
                 return
-
-            from google import genai
-            from google.genai import types
-            import httpx
 
             # 5. Initialize client based on available auth method
             model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")

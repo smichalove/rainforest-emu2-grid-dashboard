@@ -127,6 +127,7 @@ def test_read_serial_exception_recovery(mock_sleep, mock_serial):
 def test_fetch_gemini_summary_backoff(mock_sleep, mock_genai_client):
     """Hermetic test proving Gemini API native exponential backoff."""
     dashboard = GridDashboard()
+    dashboard.local_llm = False
     dashboard.usage = [1.0] * 20
     dashboard.timestamps = [datetime.datetime.now()] * 20
     dashboard.solaredge_api_key = None
