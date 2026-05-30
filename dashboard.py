@@ -1231,7 +1231,7 @@ class GridDashboard(tk.Tk):
                 # This ensures we dynamically fetch the active Jetson IP and Model without hardcoding.
                 env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
                 ollama_host = os.environ.get("OLLAMA_HOST")
-                model_name = os.environ.get("EDGE_MODEL", "gemma2:2b")
+                model_name = os.environ.get("EDGE_MODEL", "gemma2-edge")
                 
                 if not ollama_host and os.path.exists(env_path):
                     try:

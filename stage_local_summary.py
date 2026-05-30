@@ -34,7 +34,7 @@ SE_BATTERY_HISTORY: str = os.path.join(BACKUP_DIR, "solaredge_battery_history.cs
 CHILICON_HISTORY: str = os.path.join(BACKUP_DIR, "chilicon_history.csv")
 
 # Model configuration
-DEFAULT_MODEL: str = os.environ.get("EDGE_MODEL", "gemma2:2b")
+DEFAULT_MODEL: str = os.environ.get("EDGE_MODEL", "gemma2-edge")
 OLLAMA_ENDPOINT: str = os.environ.get("OLLAMA_HOST", "http://localhost:11434/api/generate")
 
 # Default coordinates for weather (Seattle area)
