@@ -117,7 +117,7 @@ sequenceDiagram
     box rgb(17, 24, 39) Local Jetson Delta Pipeline (Every 15 mins)
     participant Pi as Raspberry Pi (dashboard.py)
     participant JS as Jetson Server (stage_local_summary.py)
-    participant OL as Local Ollama (gemma2:2b)
+    participant OL as Local Ollama (gemma2-edge)
     end
 
     %% Cloud Batch Flow
@@ -144,7 +144,7 @@ sequenceDiagram
     JS->>JS: Format comparative prompt using gemma_hybrid_prompt.txt
     
     JS->>OL: POST /api/generate (model, system instruct, formatted prompt)
-    OL->>OL: GPU Inference (Gemma 2 2B)
+    OL->>OL: GPU Inference (Gemma 2 9B - gemma2-edge)
     OL-->>JS: Return response text
     
     JS-->>Pi: HTTP Response (local delta text)
@@ -154,14 +154,74 @@ sequenceDiagram
 
 ### 1. Ollama Installation & Model Setup
 On your Nvidia Jetson Orin:
-1. Install Ollama:
-   ```bash
-   curl -fsSL https://ollama.com/install.sh | sh
-   ```
-2. Pull the optimized lightweight model (`gemma2:2b` is recommended for shared unified memory systems):
-   ```bash
-   ollama pull gemma2:2b
-   ```
+
+#### Step A: Install Ollama
+Install the official Ollama service (which supports ARM64/JetPack out of the box):
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+#### Step B: Allocate Swap Space on the SSD
+The upgraded 9B model (`gemma2:9b` or `gemma2-edge`) can exhaust the shared unified memory of a Jetson Orin (such as an Orin Nano 4GB or 8GB), causing the inference runner process to crash (e.g., returning EOF or exit code -1). To prevent this, configure a 4GB swap space on the SSD:
+```bash
+# 1. Allocate a 4GB file
+sudo fallocate -l 4G /swapfile
+
+# 2. Secure file permissions
+sudo chmod 600 /swapfile
+
+# 3. Format as swap space
+sudo mkswap /swapfile
+
+# 4. Activate it instantly
+sudo swapon /swapfile
+
+# 5. Persist across system reboots
+echo '/swapfile swap swap defaults 0 0' | sudo tee -a /etc/fstab
+```
+
+#### Step C: Build the Optimized Custom Model (`gemma2-edge`)
+To avoid memory exhaustion or connection timeouts on unified memory hardware, run a custom model using a `Modelfile` to restrict the context window (`num_ctx 1024`) and limit prediction length (`num_predict 512`):
+```bash
+# 1. Pull the 3-bit weight map of Gemma 2 9B
+ollama pull gemma2:9b-instruct-q3_K_M
+
+# 2. Create the Modelfile with optimized limits
+cat << 'EOF' > Modelfile
+FROM gemma2:9b-instruct-q3_K_M
+PARAMETER num_ctx 1024
+PARAMETER num_predict 512
+EOF
+
+# 3. Register the custom edge-optimized model
+ollama create gemma2-edge -f Modelfile
+```
+
+#### Step D: Jetson-Stats (`jtop`) Installation
+Install `jetson-stats` to monitor system resources, memory consumption, and GPU utilization:
+```bash
+# 1. Install pip
+sudo apt update
+sudo apt install -y python3-pip
+
+# 2. Install jetson-stats via pip
+sudo pip3 install jetson-stats
+
+# 3. Restart the telemetry service
+sudo systemctl restart jtop.service
+```
+*(Note: You may need to reboot the board or re-login for the command group changes to take effect.)*
+
+#### Step E: Grant Hardware-Acceleration Access
+To ensure background daemon services (like `grid_backup` running the stager script) can access the GPU hooks via JetPack without permission errors, add the daemon user and your primary user to the `video` group:
+```bash
+# 1. Add current user and backup daemon user to the video group
+sudo usermod -aG video $USER
+sudo usermod -aG video grid_backup
+
+# 2. Restart Ollama to pick up the new group permissions
+sudo systemctl restart ollama
+```
 
 ### 2. Configure SSH Public Key & Security Hardening
 Since the Raspberry Pi is a physical kiosk, its local SSH private key is vulnerable to extraction if the device is compromised. To enforce the **Principle of Least Privilege**, we create a dedicated, low-privilege account on the Jetson and restrict the SSH key strictly to `rsync` sync operations.
