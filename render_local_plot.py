@@ -5,11 +5,14 @@ import json
 import datetime
 import sys
 import textwrap
+import math
+from collections import defaultdict
 import matplotlib.dates as mdates
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.collections import LineCollection
-from typing import List, Any
+from typing import List, Any, Tuple, Optional, Dict
+import urllib.request
 
 # Match settings from main dashboard.py
 SUMMARY_FONT_SIZE: int = 10
@@ -17,6 +20,33 @@ SUMMARY_ALPHA: float = 0.55
 SUMMARY_COLOR: str = 'deepskyblue'
 IMPORT_COLOR: str = '#f43f5e'  # Modern rose red
 EXPORT_COLOR: str = '#00ff00'  # Classic neon green
+EXPECTED_SOLAR_COLOR: str = '#ffff00' # Bright yellow for expected weather-modulated solar
+CONSUMPTION_COLOR: str = '#d946ef'    # Neon purple/magenta for household consumption
+
+
+# Load environment configuration if present
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+env_path = os.path.join(SCRIPT_DIR, ".env")
+if os.path.exists(env_path):
+    try:
+        with open(env_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ[k.strip()] = v.strip().strip('"').strip("'")
+    except Exception as e:
+        print(f"Could not load .env file: {e}")
+
+DEFAULT_LAT: str = os.environ.get("WEATHER_LAT", "47.5760")
+DEFAULT_LON: str = os.environ.get("WEATHER_LON", "-122.0193")
+
+# Seattle late May weather fallbacks
+DEFAULT_WEATHER_FALLBACK: Dict[str, float] = {
+    "cloud_cover": 45.0,
+    "sunrise_hour": 5.25,
+    "sunset_hour": 21.25
+}
 
 class OfflineViewer(tk.Tk):
     """Offline viewer that renders the historical grid telemetry for a screenshot."""
@@ -29,8 +59,11 @@ class OfflineViewer(tk.Tk):
         # Configure windowed fullscreen/maximized size for easy screenshotting
         self.geometry("1024x768")
         
+        self.live_mode: bool = "--live" in sys.argv
+        
         self.bind("<Escape>", lambda e: self.destroy())
-        self.bind("<Button-1>", lambda e: self.destroy())
+        if not self.live_mode:
+            self.bind("<Button-1>", lambda e: self.destroy())
 
         self.usage: List[float] = []
         self.timestamps: List[datetime.datetime] = []
@@ -44,43 +77,84 @@ class OfflineViewer(tk.Tk):
         self.load_history()
         self.load_solaredge_history()
         self.load_chilicon_history()
+        self.weather_map = self.fetch_historical_weather()
 
-        # UI Text label configuration
+        # Create a container frame for the two-column header layout
+        self.header_frame: tk.Frame = tk.Frame(self, bg='black')
+        self.header_frame.pack(fill=tk.X, padx=20, pady=10)
+
+        # Left column (Time and Weather)
+        self.left_header: tk.Frame = tk.Frame(self.header_frame, bg='black')
+        self.left_header.pack(side=tk.LEFT, anchor='nw')
+
+        self.time_label: tk.Label = tk.Label(
+            self.left_header, text="00:00", font=('Helvetica', 32, 'bold'), bg='black', fg='deepskyblue', anchor='w'
+        )
+        self.time_label.pack(anchor='w', pady=(0, 2))
+
+        self.date_label: tk.Label = tk.Label(
+            self.left_header, text="", font=('Helvetica', 12, 'bold'), bg='black', fg='#a0aec0', anchor='w'
+        )
+        self.date_label.pack(anchor='w', pady=(0, 2))
+
+        self.weather_label: tk.Label = tk.Label(
+            self.left_header, text="Weather: N/A", font=('Helvetica', 14, 'bold'), bg='black', fg='#fbbf24', anchor='w'
+        )
+        self.weather_label.pack(anchor='w', pady=(0, 2))
+
+        # Right column (SolarEdge and Chillicon + Grid status)
+        self.right_header: tk.Frame = tk.Frame(self.header_frame, bg='black')
+        self.right_header.pack(side=tk.RIGHT, anchor='ne')
+
         latest_val = self.usage[-1] if self.usage else 0.0
         status = "Combined Solar Export (PV)" if latest_val < 0 else "Importing (Grid)"
         color = EXPORT_COLOR if latest_val < 0 else IMPORT_COLOR
         text = f"{latest_val:.3f} kW | {status}"
 
         self.status_label: tk.Label = tk.Label(
-            self, text=text, font=('Helvetica', 36, 'bold'), bg='black', fg=color
+            self.right_header, text=text, font=('Helvetica', 32, 'bold'), bg='black', fg=color, anchor='e'
         )
-        self.status_label.pack(pady=5)
+        self.status_label.pack(anchor='e', pady=(0, 2))
 
         latest_pv = self.se_power[-1] if self.se_power else 0.0
         self.sub_status_label: tk.Label = tk.Label(
-            self, text=f"SolarEdge PV: {latest_pv:.3f} kW", font=('Helvetica', 20, 'bold'), bg='black', fg='#fbbf24'
+            self.right_header, text=f"SolarEdge PV: {latest_pv:.3f} kW", font=('Helvetica', 16, 'bold'), bg='black', fg='#fbbf24', anchor='e'
         )
-        self.sub_status_label.pack(pady=2)
+        self.sub_status_label.pack(anchor='e', pady=(0, 2))
 
         self.chilicon_status_label: tk.Label = tk.Label(
-            self, text="", font=('Helvetica', 20, 'bold'), bg='black', fg='#ffff00'
+            self.right_header, text="", font=('Helvetica', 16, 'bold'), bg='black', fg='#ffff00', anchor='e'
         )
         if not self.chilicon_off:
-            self.chilicon_status_label.pack(pady=2)
+            self.chilicon_status_label.pack(anchor='e', pady=(0, 2))
             latest_ch = self.chilicon_power[-1] if self.chilicon_power else 0.0
             self.chilicon_status_label.config(text=f"Chillicon PV: {latest_ch:.3f} kW")
 
-        # Matplotlib figure setup
-        self.fig: Figure = Figure(figsize=(5, 3), dpi=100, facecolor='black')
-        self.fig.subplots_adjust(left=0.15, right=0.95, top=0.95, bottom=0.15)
+        # AI Summary text label below the header frame
+        self.summary_label: tk.Label = tk.Label(
+            self, text="Awaiting AI Analysis...", font=('Courier', 11, 'bold'),
+            bg='black', fg=SUMMARY_COLOR, justify='left', anchor='nw',
+            wraplength=980
+        )
+        self.summary_label.pack(fill=tk.X, padx=20, pady=(5, 10))
+
+        # Matplotlib figure setup - expanded size for two subplots
+        self.fig: Figure = Figure(figsize=(8, 6), dpi=100, facecolor='black')
         
-        self.ax: Any = self.fig.add_subplot(111)
+        # We place both axes in the same rect so they overlap and swap visibility
+        rect = [0.08, 0.12, 0.88, 0.82]
+        
+        # Slide 1 Axis (Time Domain)
+        self.ax = self.fig.add_axes(rect)
         self.ax.set_facecolor('black')
         self.ax.tick_params(colors='white')
         self.ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
         self.fig.autofmt_xdate()
         self.ax.spines['bottom'].set_color('white')
         self.ax.spines['left'].set_color('white')
+        self.ax.spines['top'].set_color('black')
+        self.ax.spines['right'].set_color('black')
+        
         # Secondary axes for SolarEdge bar chart along the bottom
         self.ax_bar = self.ax.twinx()
         self.ax_bar.set_ylim(0, 10)  # Fixed arbitrary high limit so bars stay at bottom
@@ -90,9 +164,9 @@ class OfflineViewer(tk.Tk):
         self.ax_bar.spines['left'].set_color('none')
         self.ax_bar.spines['top'].set_color('none')
         self.ax_bar.spines['bottom'].set_color('none')
-        self.ax_bar.set_ylabel('SolarEdge PV (kW)', color='#fbbf24', rotation=270, labelpad=15)
+        self.ax_bar.set_ylabel('Total Solar PV (kW)', color='#fbbf24', rotation=270, labelpad=15)
         
-        # Swap z-order so the main ax (and its overlay text/line plot) sits on top of ax_bar
+        # Swap z-order so the main ax sits on top of ax_bar
         self.ax.set_zorder(self.ax_bar.get_zorder() + 1)
         self.ax.patch.set_visible(False)  # Must be transparent so ax_bar behind it is visible
         
@@ -103,28 +177,47 @@ class OfflineViewer(tk.Tk):
         self.lc: LineCollection = LineCollection([], linewidths=1.8, zorder=3)
         self.ax.add_collection(self.lc)
         
-        # Background summary text watermark
-        self.summary_text_obj: Any = self.ax.text(
-            0.02, 0.95, "",
-            transform=self.ax.transAxes,
-            ha='left', va='top',
-            fontsize=SUMMARY_FONT_SIZE,
-            color=SUMMARY_COLOR,
-            alpha=SUMMARY_ALPHA,
-            fontfamily='monospace',
-            weight='bold',
-            zorder=10
-        )
+        # Slide 2 Axis (Frequency Domain)
+        self.ax_freq = self.fig.add_axes(rect, facecolor='black')
+        self.ax_freq.tick_params(colors='white')
+        self.ax_freq.spines['bottom'].set_color('white')
+        self.ax_freq.spines['left'].set_color('white')
+        self.ax_freq.spines['right'].set_color('none')
+        self.ax_freq.spines['top'].set_color('none')
+        self.ax_freq.set_xlabel('Frequency (Cycles per Day)', color='white', fontsize=9)
+        self.ax_freq.set_ylabel('Spectral Amplitude (kW)', color='white', fontsize=9)
+        self.ax_freq.set_visible(False) # Invisible by default
+
+        
+        # State variables for Slide Rotation
+        self.current_slide: int = 2 if "--slide2" in sys.argv else 1
+        self.local_time_text: str = "Awaiting AI Analysis..."
+        self.local_dft_text: str = "Awaiting Frequency Domain Analysis..."
+        self.preview_filename: str = "dashboard_preview_slide2.jpeg" if self.current_slide == 2 else "dashboard_preview.jpeg"
         
         self.canvas: FigureCanvasTkAgg = FigureCanvasTkAgg(self.fig, master=self)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # Update initial slide visibility
+        if self.current_slide == 2:
+            self.ax.set_visible(False)
+            self.ax_bar.set_visible(False)
+            self.ax_freq.set_visible(True)
+        else:
+            self.ax.set_visible(True)
+            self.ax_bar.set_visible(True)
+            self.ax_freq.set_visible(False)
 
         # Load cached summary and draw the plot
         self.load_cached_summary()
         self.update_chart()
 
-        # Schedule automatic screenshot generation after window loads
-        self.after(1500, self.save_screenshot)
+        # Schedule automatic screenshot generation or live polling loop
+        if self.live_mode:
+            self.after(2000, self.poll_remote_data)
+            self.after(29000, self.rotate_slides)
+        else:
+            self.after(1500, self.save_screenshot)
 
     def load_history(self) -> None:
         """Loads data from local grid_history.csv file."""
@@ -247,25 +340,295 @@ class OfflineViewer(tk.Tk):
         except Exception as e:
             print(f"Failed to read Chillicon history file: {e}")
 
+    def fetch_historical_weather(self, lat: str = DEFAULT_LAT, lon: str = DEFAULT_LON) -> Dict[str, Dict[str, Any]]:
+        """Fetches daily average cloud cover, sunrise, and sunset times from Open-Meteo API.
+
+        Args:
+            lat: Latitude of target location.
+            lon: Longitude of target location.
+
+        Returns:
+            A dictionary mapping date string "YYYY-MM-DD" to weather parameters.
+        """
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&past_days=5&daily=cloud_cover_mean,sunrise,sunset&timezone=auto"
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                res = json.loads(response.read().decode('utf-8'))
+                daily = res.get("daily", {})
+                times = daily.get("time", [])
+                cloud_covers = daily.get("cloud_cover_mean", [])
+                sunrises = daily.get("sunrise", [])
+                sunsets = daily.get("sunset", [])
+                
+                weather_data = {}
+                for i, t_str in enumerate(times):
+                    sr_hour, ss_hour = 5.25, 21.25
+                    if i < len(sunrises) and sunrises[i]:
+                        try:
+                            sr_dt = datetime.datetime.fromisoformat(sunrises[i])
+                            sr_hour = sr_dt.hour + sr_dt.minute / 60.0
+                        except Exception:
+                            pass
+                    if i < len(sunsets) and sunsets[i]:
+                        try:
+                            ss_dt = datetime.datetime.fromisoformat(sunsets[i])
+                            ss_hour = ss_dt.hour + ss_dt.minute / 60.0
+                        except Exception:
+                            pass
+                    cc = cloud_covers[i] if (i < len(cloud_covers) and cloud_covers[i] is not None) else 45.0
+                    
+                    weather_data[t_str] = {
+                        "cloud_cover": cc,
+                        "sunrise_hour": sr_hour,
+                        "sunset_hour": ss_hour
+                    }
+                return weather_data
+        except Exception as e:
+            print(f"Error fetching historical weather in offline viewer: {e}")
+            return {}
+
+    def rotate_slides(self) -> None:
+        """Rotates active slide state and refreshes chart visibility.
+
+        Raises:
+            None.
+        """
+        if self.current_slide == 1:
+            self.current_slide = 2
+        else:
+            self.current_slide = 1
+        self.update_slide_visibility()
+        self.after(29000, self.rotate_slides)
+
+    def update_slide_visibility(self) -> None:
+        """Toggles the visibility of time-series axes and frequency-domain axes.
+
+        Raises:
+            None.
+        """
+        if self.current_slide == 1:
+            self.ax.set_visible(True)
+            self.ax_bar.set_visible(True)
+            self.ax_freq.set_visible(False)
+        else:
+            self.ax.set_visible(False)
+            self.ax_bar.set_visible(False)
+            self.ax_freq.set_visible(True)
+            
+        self.load_cached_summary()
+        self.fig.canvas.draw_idle()
+
+    def poll_remote_data(self) -> None:
+        """Periodically syncs history files from the Raspberry Pi and reloads them."""
+        import subprocess
+        import threading
+        
+        def run_sync() -> None:
+            try:
+                print("Live polling: Syncing telemetry logs from Raspberry Pi...")
+                files_to_sync = [
+                    "grid_history.csv",
+                    "solaredge_history.csv",
+                    "chilicon_history.csv",
+                    "solaredge_battery_history.csv",
+                    "merged_summary.json"
+                ]
+                
+                # Fetch each key file from Raspberry Pi
+                for f in files_to_sync:
+                    cmd = ["scp", f"steven@rainforestpi:~/rainforest-emu2-grid-dashboard/{f}", f"./{f}"]
+                    subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                
+                # Request UI update in Tkinter main thread
+                self.after(0, self.reload_and_refresh)
+            except Exception as e:
+                print(f"Error syncing remote data: {e}")
+                
+        # Run sync in background daemon thread
+        threading.Thread(target=run_sync, daemon=True).start()
+        
+        # Schedule next poll in 10 seconds
+        self.after(10000, self.poll_remote_data)
+
+    def reload_and_refresh(self) -> None:
+        """Reloads all datasets and updates the Tkinter UI and matplotlib canvas."""
+        print("Reloading local data and refreshing canvas...")
+        
+        self.usage = []
+        self.timestamps = []
+        self.se_power = []
+        self.se_timestamps = []
+        self.chilicon_power = []
+        self.chilicon_timestamps = []
+        
+        self.load_history()
+        self.load_solaredge_history()
+        self.load_chilicon_history()
+        self.weather_map = self.fetch_historical_weather()
+        
+        # Update UI Text labels
+        latest_val = self.usage[-1] if self.usage else 0.0
+        status = "Combined Solar Export (PV)" if latest_val < 0 else "Importing (Grid)"
+        color = EXPORT_COLOR if latest_val < 0 else IMPORT_COLOR
+        text = f"{latest_val:.3f} kW | {status}"
+        self.status_label.config(text=text, fg=color)
+        
+        latest_pv = self.se_power[-1] if self.se_power else 0.0
+        self.sub_status_label.config(text=f"SolarEdge PV: {latest_pv:.3f} kW")
+        
+        if not self.chilicon_off:
+            latest_ch = self.chilicon_power[-1] if self.chilicon_power else 0.0
+            self.chilicon_status_label.config(text=f"Chillicon PV: {latest_ch:.3f} kW")
+            
+        # Load summary watermark
+        self.load_cached_summary()
+        
+        # Redraw charts
+        self.update_chart()
+
+    def fetch_live_weather(self, lat: str = DEFAULT_LAT, lon: str = DEFAULT_LON) -> Dict[str, Optional[float]]:
+        """Fetches the live weather (current temp, weather code, cloud cover) from Open-Meteo API.
+
+        Args:
+            lat: Latitude of target location.
+            lon: Longitude of target location.
+
+        Returns:
+            A dictionary containing:
+            - "temp": float (current temperature in °C) or None
+            - "weather_code": float (WMO code) or None
+            - "cloud_cover": float (0-100) or None
+
+        Raises:
+            None: All exceptions (e.g. urllib.error.URLError) are caught internally and logged.
+        """
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,weather_code,cloud_cover&timezone=auto"
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=5) as response:
+                res = json.loads(response.read().decode('utf-8'))
+                current = res.get("current", {})
+                return {
+                    "temp": current.get("temperature_2m"),
+                    "weather_code": current.get("weather_code"),
+                    "cloud_cover": current.get("cloud_cover")
+                }
+        except Exception as e:
+            print(f"Error fetching live weather: {e}")
+            return {}
+
     def load_cached_summary(self) -> None:
-        """Loads local merged_summary.json or gemini_summary.json and sets the watermark."""
+        """Loads local weather and sets the clock/weather watermarks and AI summaries."""
+        # 1. Update Time/Date Widgets
+        if self.timestamps:
+            latest_dt = self.timestamps[-1]
+            time_str = latest_dt.strftime("%H:%M")
+            date_str = latest_dt.strftime("%A, %b %d, %Y")
+        else:
+            time_str = "N/A"
+            date_str = "N/A"
+            
+        self.time_label.config(text=time_str)
+        self.date_label.config(text=date_str)
+        
+        # 2. Fetch live weather (temp, weather code, cloud cover)
+        live_weather = self.fetch_live_weather()
+        temp = live_weather.get("temp")
+        wcode = live_weather.get("weather_code")
+        cloud_cover = live_weather.get("cloud_cover")
+        
+        # Determine cache file path and load summary
         cache_file = 'merged_summary.json'
         if not os.path.exists(cache_file):
             cache_file = 'gemini_summary.json'
             
-        if not os.path.exists(cache_file):
-            print("No local summary file found.")
-            return
+        summary = ""
+        dft_explanation = ""
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    summary = data.get("summary", "").strip()
+                    dft_explanation = data.get("dft_explanation", "").strip()
+            except Exception as e:
+                print(f"Failed to load cache: {e}")
+                
+        # Update internal summary variables
+        if summary:
+            self.local_time_text = summary
+        if dft_explanation:
+            self.local_dft_text = dft_explanation
             
-        try:
-            with open(cache_file, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                summary = data.get("summary")
-                if summary:
-                    self.summary_text_obj.set_text(self.wrap_text(summary.strip()))
-                    print(f"Loaded cached summary from {cache_file}.")
-        except Exception as e:
-            print(f"Failed to load cache: {e}")
+        # Select active summary based on current slide
+        active_summary = self.local_time_text if self.current_slide == 1 else self.local_dft_text
+        self.summary_label.config(text=active_summary)
+        
+        # If live fetch failed, fallback to cache metrics
+        if temp is None or wcode is None:
+            print("Live weather fetch failed or incomplete; checking cache fallback...")
+            if os.path.exists(cache_file):
+                try:
+                    with open(cache_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        metrics = data.get("metrics", {})
+                        if temp is None:
+                            temp = metrics.get("temp_max")
+                        if cloud_cover is None:
+                            cloud_cover = metrics.get("cloud_cover")
+                        # Since weather code isn't in metrics, estimate wcode from cloud cover
+                        if wcode is None and cloud_cover is not None:
+                            cc = float(cloud_cover)
+                            if cc < 10:
+                                wcode = 0
+                            elif cc < 30:
+                                wcode = 1
+                            elif cc < 60:
+                                wcode = 2
+                            else:
+                                wcode = 3
+                except Exception as e:
+                    print(f"Failed to read cache fallback: {e}")
+        
+        # 3. Update Weather Widgets
+        if temp is not None:
+            temp_str = f"{temp:.1f}°C"
+        else:
+            temp_str = "N/A"
+            
+        if wcode is not None:
+            if wcode == 0:
+                sky_desc = "Clear"
+            elif wcode == 1:
+                sky_desc = "Mainly Clear"
+            elif wcode == 2:
+                sky_desc = "Partly Cloudy"
+            elif wcode == 3:
+                sky_desc = "Overcast"
+            elif wcode in (45, 48):
+                sky_desc = "Foggy"
+            elif wcode in (51, 53, 55):
+                sky_desc = "Drizzle"
+            elif wcode in (61, 63, 65):
+                sky_desc = "Rainy"
+            elif wcode in (80, 81, 82):
+                sky_desc = "Chance of Rain"
+            elif wcode in (71, 73, 75, 77, 85, 86):
+                sky_desc = "Snowy"
+            elif wcode in (95, 96, 99):
+                sky_desc = "Thunderstorm"
+            else:
+                sky_desc = "Cloudy"
+            
+            if cloud_cover is not None:
+                sky_str = f"{sky_desc} ({int(cloud_cover)}%)"
+            else:
+                sky_str = sky_desc
+        else:
+            sky_str = "N/A"
+            
+        self.weather_label.config(text=f"{temp_str} | {sky_str}")
+
 
 
     def wrap_text(self, text: str, width: int = 100) -> str:
@@ -302,6 +665,162 @@ class OfflineViewer(tk.Tk):
                 
         return '\n\n'.join(wrapped_paragraphs)
 
+    def _local_interpolate_gaps(self, series: List[Optional[float]]) -> List[float]:
+        """Fills missing elements (None) in a list using linear interpolation."""
+        n = len(series)
+        result = list(series)
+        non_none_indices = [i for i, x in enumerate(series) if x is not None]
+        if not non_none_indices:
+            return [0.0] * n
+            
+        first_valid_idx = non_none_indices[0]
+        last_valid_idx = non_none_indices[-1]
+        
+        for i in range(first_valid_idx):
+            result[i] = series[first_valid_idx]
+        for i in range(last_valid_idx + 1, n):
+            result[i] = series[last_valid_idx]
+            
+        for i in range(first_valid_idx + 1, last_valid_idx):
+            if result[i] is None:
+                prev_idx = i - 1
+                while prev_idx >= first_valid_idx and result[prev_idx] is None:
+                    prev_idx -= 1
+                next_idx = i + 1
+                while next_idx <= last_valid_idx and result[next_idx] is None:
+                    next_idx += 1
+                    
+                val_prev = result[prev_idx]
+                val_next = result[next_idx]
+                ratio = (i - prev_idx) / (next_idx - prev_idx)
+                result[i] = val_prev + ratio * (val_next - val_prev)
+                
+        return [float(x) for x in result]
+
+    def align_and_compute_spectrum(self) -> Tuple[List[float], List[float], List[float], List[float], List[float]]:
+        """Aligns historical telemetry on a uniform hourly grid and computes the DTFT spectrum."""
+        if not self.timestamps:
+            return [], [], [], [], []
+            
+        min_ts = min(self.timestamps).replace(minute=0, second=0, microsecond=0)
+        max_ts = max(self.timestamps).replace(minute=0, second=0, microsecond=0)
+        total_hours = int((max_ts - min_ts).total_seconds() / 3600.0) + 1
+        
+        target_dts = [min_ts + datetime.timedelta(hours=i) for i in range(total_hours)]
+        
+        # Build raw series with gaps
+        grid_map = defaultdict(list)
+        for ts, val in zip(self.timestamps, self.usage):
+            grid_map[ts.strftime("%Y-%m-%d %H:00")].append(val)
+            
+        # SolarEdge
+        se_map = defaultdict(list)
+        for ts, val in zip(self.se_timestamps, self.se_power):
+            se_map[ts.strftime("%Y-%m-%d %H:00")].append(val)
+            
+        # Chillicon
+        ch_map = defaultdict(list)
+        for ts, val in zip(self.chilicon_timestamps, self.chilicon_power):
+            ch_map[ts.strftime("%Y-%m-%d %H:00")].append(val)
+            
+        grid_raw: List[Optional[float]] = []
+        solar_raw: List[Optional[float]] = []
+        expected_solar_series: List[float] = []
+        
+        PEAK_SOLAR_CAPACITY: float = 5.0
+        
+        for dt in target_dts:
+            key = dt.strftime("%Y-%m-%d %H:00")
+            g_vals = grid_map[key]
+            grid_raw.append(sum(g_vals) / len(g_vals) if g_vals else None)
+            
+            s_val = 0.0
+            se_vals = se_map[key]
+            if se_vals:
+                s_val += sum(se_vals) / len(se_vals)
+            if not self.chilicon_off:
+                ch_vals = ch_map[key]
+                if ch_vals:
+                    s_val += sum(ch_vals) / len(ch_vals)
+            
+            # If no data is available for both, mark as None to interpolate
+            if not se_vals and (self.chilicon_off or not ch_map[key]):
+                solar_raw.append(None)
+            else:
+                solar_raw.append(s_val)
+                
+            # Model expected solar profile
+            date_key = dt.strftime("%Y-%m-%d")
+            day_weather = self.weather_map.get(date_key, DEFAULT_WEATHER_FALLBACK)
+            cloud_cover = day_weather["cloud_cover"]
+            sr_hour = day_weather["sunrise_hour"]
+            ss_hour = day_weather["sunset_hour"]
+            
+            # Decimal hour of day
+            h = dt.hour + dt.minute / 60.0
+            if sr_hour < h < ss_hour:
+                clear_sky = PEAK_SOLAR_CAPACITY * math.sin(math.pi * (h - sr_hour) / (ss_hour - sr_hour))
+            else:
+                clear_sky = 0.0
+                
+            modulation = (100.0 - cloud_cover) / 100.0
+            expected_solar_series.append(clear_sky * modulation)
+                
+        grid_series = self._local_interpolate_gaps(grid_raw)
+        solar_series = self._local_interpolate_gaps(solar_raw)
+        
+        # Calculate household consumption (Load = Grid + Solar)
+        consumption_series = [g + s for g, s in zip(grid_series, solar_series)]
+        
+        # Run DTFT spectrum analysis for frequencies 0.1 to 4.0 cycles per day
+        freqs = [0.05 + 0.01 * i for i in range(400)]
+        
+        # Compute DTFT
+        grid_amp = []
+        solar_amp = []
+        expected_solar_amp = []
+        consumption_amp = []
+        
+        n_samples = len(grid_series)
+        if n_samples > 0:
+            for f in freqs:
+                omega = (2.0 * math.pi * f) / 24.0
+                
+                # Grid
+                re_g, im_g = 0.0, 0.0
+                for n in range(n_samples):
+                    re_g += grid_series[n] * math.cos(omega * n)
+                    im_g += -grid_series[n] * math.sin(omega * n)
+                grid_amp.append(2.0 * math.sqrt(re_g**2 + im_g**2) / n_samples)
+                
+                # Solar
+                re_s, im_s = 0.0, 0.0
+                for n in range(n_samples):
+                    re_s += solar_series[n] * math.cos(omega * n)
+                    im_s += -solar_series[n] * math.sin(omega * n)
+                solar_amp.append(2.0 * math.sqrt(re_s**2 + im_s**2) / n_samples)
+                
+                # Expected Solar
+                re_es, im_es = 0.0, 0.0
+                for n in range(n_samples):
+                    re_es += expected_solar_series[n] * math.cos(omega * n)
+                    im_es += -expected_solar_series[n] * math.sin(omega * n)
+                expected_solar_amp.append(2.0 * math.sqrt(re_es**2 + im_es**2) / n_samples)
+                
+                # Household Consumption (Load)
+                re_c, im_c = 0.0, 0.0
+                for n in range(n_samples):
+                    re_c += consumption_series[n] * math.cos(omega * n)
+                    im_c += -consumption_series[n] * math.sin(omega * n)
+                consumption_amp.append(2.0 * math.sqrt(re_c**2 + im_c**2) / n_samples)
+        else:
+            grid_amp = [0.0] * len(freqs)
+            solar_amp = [0.0] * len(freqs)
+            expected_solar_amp = [0.0] * len(freqs)
+            consumption_amp = [0.0] * len(freqs)
+            
+        return freqs, grid_amp, solar_amp, expected_solar_amp, consumption_amp
+
     def update_chart(self) -> None:
         """Draws the dynamic line plot and scales the axes."""
         if len(self.usage) > 1:
@@ -310,6 +829,10 @@ class OfflineViewer(tk.Tk):
             colors = []
             widths = []
             for i in range(len(self.usage) - 1):
+                t1, t2 = self.timestamps[i], self.timestamps[i+1]
+                # Skip segment connection if there is a gap > 10 minutes (power outage or log halt)
+                if (t2 - t1).total_seconds() > 600:
+                    continue
                 y1, y2 = self.usage[i], self.usage[i+1]
                 segments.append(((x_nums[i], y1), (x_nums[i+1], y2)))
                 avg_y = (y1 + y2) / 2.0
@@ -386,13 +909,40 @@ class OfflineViewer(tk.Tk):
         if self.usage:
             y_min = min(self.usage)
             y_max = max(self.usage)
-            padding = max(abs(y_max - y_min) * 0.2, 0.5)
-            self.ax.set_ylim(min(0, y_min - padding), max(0, y_max + padding))
+            # Increase top padding to leave the top portion of the plot completely free for text watermarks
+            y_range = max(y_max - y_min, 1.0)
+            y_lim_min = min(0.0, y_min - 0.15 * y_range)
+            y_lim_max = max(0.0, y_max + 0.85 * y_range)
+            self.ax.set_ylim(y_lim_min, y_lim_max)
+            
+        # Draw the frequency spectrum on the bottom subplot
+        self.ax_freq.clear()
+        self.ax_freq.set_facecolor('black')
+        self.ax_freq.tick_params(colors='white')
+        self.ax_freq.spines['bottom'].set_color('white')
+        self.ax_freq.spines['left'].set_color('white')
+        self.ax_freq.spines['right'].set_color('none')
+        self.ax_freq.spines['top'].set_color('none')
+        self.ax_freq.set_xlabel('Frequency (Cycles per Day)', color='white', fontsize=9)
+        self.ax_freq.set_ylabel('Spectral Amplitude (kW)', color='white', fontsize=9)
+        
+        freqs, grid_amp, solar_amp, expected_solar_amp, consumption_amp = self.align_and_compute_spectrum()
+        if freqs:
+            self.ax_freq.plot(freqs, grid_amp, color=IMPORT_COLOR, label='Grid Spectrum', linewidth=1.5)
+            self.ax_freq.plot(freqs, solar_amp, color='#fbbf24', label='Solar Spectrum (Actual)', linewidth=1.5)
+            self.ax_freq.plot(freqs, expected_solar_amp, color=EXPECTED_SOLAR_COLOR, linestyle='--', label='Expected Solar (Weather Modulated)', linewidth=1.3)
+            self.ax_freq.plot(freqs, consumption_amp, color=EXPECTED_SOLAR_COLOR if 'CONSUMPTION_COLOR' not in globals() else CONSUMPTION_COLOR, label='Household Consumption (Load)', linewidth=1.5)
+            # Highlight physical rhythms (diurnal = 1.0, semi-diurnal = 2.0)
+            self.ax_freq.axvline(1.0, color='deepskyblue', linestyle='--', alpha=0.5, label='24h Diurnal')
+            self.ax_freq.axvline(2.0, color='violet', linestyle='--', alpha=0.5, label='12h Semi-Diurnal')
+            self.ax_freq.set_xlim(0.1, 4.0)
+            self.ax_freq.grid(color='gray', linestyle=':', alpha=0.3)
+            self.ax_freq.legend(facecolor='black', edgecolor='white', labelcolor='white', fontsize=8)
             
         self.fig.canvas.draw()
 
     def save_screenshot(self) -> None:
-        """Programmatically captures the TK window and saves it to dashboard_preview.jpeg."""
+        """Programmatically captures the TK window and saves it to the preview filename."""
         self.attributes('-topmost', True)
         self.lift()
         self.focus_force()
@@ -415,27 +965,31 @@ class OfflineViewer(tk.Tk):
             try:
                 # Use macOS's built-in screencapture tool which handles Retina scaling and coordinates cleanly.
                 # Format: screencapture -o -t jpg -R x,y,w,h output.jpeg
-                cmd = ["screencapture", "-o", "-t", "jpg", "-R", f"{x},{y},{w},{h}", "dashboard_preview.jpeg"]
+                cmd = ["screencapture", "-o", "-t", "jpg", "-R", f"{x},{y},{w},{h}", self.preview_filename]
                 subprocess.run(cmd, check=True)
-                print("Successfully captured and saved dashboard_preview.jpeg via macOS screencapture!")
+                print(f"Successfully captured and saved {self.preview_filename} via macOS screencapture!")
             except Exception as e:
                 print(f"macOS screencapture failed: {e}. Trying PIL fallback...")
                 self._pil_fallback(x, y, w, h)
         else:
             self._pil_fallback(x, y, w, h)
+            
+        if "--close" in sys.argv:
+            print("Auto-closing window as requested by --close option.")
+            self.destroy()
 
     def _pil_fallback(self, x: int, y: int, w: int, h: int) -> None:
         from PIL import ImageGrab
         try:
             img = ImageGrab.grab(bbox=(x, y, x + w, y + h))
-            img.convert('RGB').save('dashboard_preview.jpeg', 'JPEG', quality=95)
-            print("Successfully captured and saved dashboard_preview.jpeg via PIL ImageGrab!")
+            img.convert('RGB').save(self.preview_filename, 'JPEG', quality=95)
+            print(f"Successfully captured and saved {self.preview_filename} via PIL ImageGrab!")
         except Exception as e:
             print(f"Error capturing screenshot via PIL: {e}. Trying direct Matplotlib savefig fallback...")
             try:
                 # Fallback to saving the Matplotlib figure directly to file (bypasses screen capture permission checks)
-                self.fig.savefig('dashboard_preview.jpeg', facecolor='black', edgecolor='none', bbox_inches='tight')
-                print("Successfully saved dashboard_preview.jpeg via direct Matplotlib savefig fallback!")
+                self.fig.savefig(self.preview_filename, facecolor='black', edgecolor='none', bbox_inches='tight')
+                print(f"Successfully saved {self.preview_filename} via direct Matplotlib savefig fallback!")
             except Exception as save_err:
                 print(f"Failed to save Matplotlib figure directly: {save_err}")
 

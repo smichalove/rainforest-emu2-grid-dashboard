@@ -593,9 +593,9 @@ def main() -> None:
                             except ValueError:
                                 cache_time = datetime.datetime.strptime(ts_str.split(".")[0].replace("T", " "), "%Y-%m-%d %H:%M:%S")
                                 
-                        if cache_time and (datetime.datetime.now() - cache_time < datetime.timedelta(minutes=30)):
+                        if cache_time and (datetime.datetime.now() - cache_time < datetime.timedelta(hours=4)):
                             is_cache_fresh = True
-                            print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Local cache is still fresh (< 30m). Skipping run.")
+                            print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Local cache is still fresh (< 4h). Skipping run.")
                 except Exception as e:
                     print(f"Failed to check cache state: {e}")
             
@@ -605,8 +605,8 @@ def main() -> None:
         except Exception as e:
             print(f"Loop Exception: {e}")
             
-        print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Sleeping for 30 minutes...")
-        time.sleep(30 * 60)
+        print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Sleeping for 4 hours...")
+        time.sleep(4 * 3600)
 
 if __name__ == "__main__":
     main()

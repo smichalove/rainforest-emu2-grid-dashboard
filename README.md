@@ -1,6 +1,7 @@
 # EMU-2 Grid Dashboard
 
-![EMU-2 Grid Dashboard Preview](dashboard_preview.jpeg)
+![EMU-2 Grid Dashboard Preview - Slide 1 (Time Domain)](dashboard_preview.jpeg)
+![EMU-2 Grid Dashboard Preview - Slide 2 (Frequency Domain)](dashboard_preview_slide2.jpeg)
 
 A robust, 24-hour real-time grid monitoring dashboard using a Rainforest EMU-2 smart meter connected to a Raspberry Pi. It automatically boots into a fullscreen kiosk mode over HDMI, safely bypasses modern Wayland graphic quirks, and seamlessly persists data to a CSV to survive power outages.
 
@@ -99,9 +100,9 @@ To perform inference completely offline on local Nvidia hardware (such as an Nvi
 
 Instead of running mathematical integrations and LLM queries directly on the Raspberry Pi (which has constrained CPU/memory and is prone to SD card failure under continuous disk writes), the dashboard offloads the heavy lifting to the Jetson Orin:
 
-1. **Computational Offloading:** The Jetson Orin performs all quantitative telemetry math (integrals, peaks, rolling averages, standard deviations, and Pearson correlation coefficients) and runs local LLM inference via Ollama.
+1. **Computational Offloading:** The Jetson Orin performs all quantitative telemetry math (integrals, peaks, rolling averages, standard deviations, and Pearson correlation coefficients), computes a **Discrete Fourier Transform (DFT)** to analyze 24-hour diurnal and 12-hour bimodal sinus rhythms, calculates time-domain curve slopes (derivatives) over 3-hour windows, and runs local LLM inference via Ollama.
 2. **Automated Backup & SD Card Longevity:** On each analysis cycle, the Pi dashboard transfers its telemetry CSVs directly to the Jetson's NVMe SSD using `rsync`. This provides automatic remote backups and protects the Pi's SD card from continuous disk scans.
-3. **Weather-Weighted Modeling:** The Jetson edge server fetches local daily forecasts (temperature and cloud cover percentage) from the free Open-Meteo API. It dynamically scales the expected solar baseline to prevent false "solar deficit" anomaly warnings on overcast days.
+3. **Predictor-Driven Modeling:** The Jetson edge server fetches local forecasts (temperature, cloud cover, sunrise, and sunset) from the Open-Meteo API. It dynamically calculates the daylight duration (length of day) to scale solar sinus width expectations, classifies day types (weekday vs. weekend demand profiles), and monitors recent curve slopes to ground the local edge model within its 2048-token context window.
 
 ```mermaid
 sequenceDiagram
@@ -144,7 +145,7 @@ sequenceDiagram
     JS->>JS: Format comparative prompt using gemma_hybrid_prompt.txt
     
     JS->>OL: POST /api/generate (model, system instruct, formatted prompt)
-    OL->>OL: GPU Inference (Gemma 2 9B - gemma2-edge)
+    OL->>OL: GPU Inference (Gemma 2 2B - gemma2-edge)
     OL-->>JS: Return response text
     
     JS-->>Pi: HTTP Response (local delta text)
@@ -181,15 +182,15 @@ echo '/swapfile swap swap defaults 0 0' | sudo tee -a /etc/fstab
 ```
 
 #### Step C: Build the Optimized Custom Model (`gemma2-edge`)
-To avoid memory exhaustion or connection timeouts on unified memory hardware, run a custom model using a `Modelfile` to restrict the context window (`num_ctx 1024`) and limit prediction length (`num_predict 512`):
+To avoid memory exhaustion or connection timeouts on unified memory hardware, run a custom model using a `Modelfile` to define a healthy context window (`num_ctx 2048`) and limit prediction length (`num_predict 512`) on the 2B model:
 ```bash
-# 1. Pull the 3-bit weight map of Gemma 2 9B
-ollama pull gemma2:9b-instruct-q3_K_M
+# 1. Pull the 2B quantized weight map
+ollama pull gemma2:2b-instruct-q4_K_M
 
 # 2. Create the Modelfile with optimized limits
 cat << 'EOF' > Modelfile
-FROM gemma2:9b-instruct-q3_K_M
-PARAMETER num_ctx 1024
+FROM gemma2:2b-instruct-q4_K_M
+PARAMETER num_ctx 2048
 PARAMETER num_predict 512
 EOF
 
@@ -424,3 +425,32 @@ Based on Vertex AI pricing for `gemini-2.5-flash`:
 
 ## Development & Security
 - Always run `gitleaks` prior to committing or syncing any changes to GitHub.
+
+---
+
+## Mathematical & Frequency-Domain Grounding (DFT & Slopes)
+
+To give the local edge LLM a deep physical understanding of the electrical system, the Jetson Edge Server translates raw time-domain CSV logs into the frequency domain using a zero-dependency Discrete Fourier Transform (DFT) and computes time-domain rate-of-change slopes.
+
+### 1. Discrete Fourier Transform (Diurnal & Semi-Diurnal Harmonics)
+For a 48-hour time series of hourly measurements $x = [x_0, \dots, x_{47}]$, we compute the complex DFT coefficient $X_k$ for specific frequency bins $k$:
+* **Solar Diurnal Rhythm ($k = 2$):** Analyzes the 24-hour cycle. The amplitude $A_{24}$ represents the strength of the solar day (collapsing to near zero on overcast days). The phase angle $\phi_{24}$ is converted to the exact peak solar hour of day (e.g. 13.2h).
+* **Grid Semi-Diurnal Rhythm ($k = 4$):** Analyzes the 12-hour cycle (morning and evening bimodal peaks). The Grid Bimodality Ratio ($A_{12}/A_{24}$) indicates if the house is following normal bimodal usage peaks (ratio > 1.0) or flatlining due to continuous EV charging or massive exports (ratio < 0.5).
+
+### 2. Peak Hour of Day Mapping
+A cosine component peaks when the phase argument equals zero. The peak hour of day $H_{\text{peak}}$ is mapped from the start hour of the series $H_{\text{start}}$ and the phase angle $\phi_k$ (in radians):
+$$H_{\text{peak}} = \left(H_{\text{start}} - \phi_k \cdot \frac{T}{2\pi}\right) \pmod T$$
+Where $T$ is the period length in hours (24.0 for diurnal, 12.0 for semi-diurnal).
+
+### 3. Rate-of-Change Slopes (Derivatives)
+To capture sudden cloud shading drops (occlusions) or rapid appliance startups, the server calculates the first derivative over the last 3 hours. Using a 3-point linear regression slope (least-squares fit), the mathematics simplifies to:
+$$\text{Slope} = \frac{x_{N-1} - x_{N-3}}{2} \quad \text{(kW/hr)}$$
+This filters out single-point sensor noise while providing a smooth average rate of change.
+
+### 4. Few-Shot Logical Test Cases
+To guide the LLM's reasoning engine contextually, few-shot examples representing normal operations, solar occlusion collapses, and grid flatline anomalies are embedded in `gemma_hybrid_prompt.txt`. This ensures the model treats the metrics as physical bounds and produces deterministic, concise outputs.
+
+## Future Scalability & Memory Management
+To prevent long-term file I/O latency, memory spikes, or SD card wear from infinitely expanding telemetry logs on the Raspberry Pi kiosk, a future roadmap has been drafted:
+* See [retention_and_memory_management_plan.md](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/planning/retention_and_memory_management_plan.md) for architectural options (including logrotate + tail primitives, SQLite databases, and hourly analytics compression) to optimize resource consumption and downstream ML performance on local networks.
+

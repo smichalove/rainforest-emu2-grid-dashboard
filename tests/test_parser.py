@@ -328,12 +328,14 @@ def test_fetch_weather_mock(mock_urlopen):
     from stage_local_summary import fetch_weather
     
     mock_resp = MagicMock()
-    mock_resp.read.return_value = b'{"daily_units":{"temperature_2m_max":"C"},"daily":{"time":["2026-05-30"],"temperature_2m_max":[18.5],"cloud_cover_mean":[45.0]}}'
+    mock_resp.read.return_value = b'{"daily_units":{"temperature_2m_max":"C"},"daily":{"time":["2026-05-30"],"temperature_2m_max":[18.5],"cloud_cover_mean":[45.0],"sunrise":["2026-05-30T05:15"],"sunset":["2026-05-30T21:30"]}}'
     mock_urlopen.return_value.__enter__.return_value = mock_resp
     
-    temp, cloud = fetch_weather()
+    temp, cloud, sunrise, sunset = fetch_weather()
     assert temp == 18.5
     assert cloud == 45.0
+    assert sunrise == "2026-05-30T05:15"
+    assert sunset == "2026-05-30T21:30"
 
 
 def test_calculate_solar_correlation():
@@ -373,7 +375,7 @@ def test_run_analysis_workflow(mock_weather, mock_corr, mock_tod, mock_grid, moc
     """Test run_analysis_workflow coordinates stats, weather, and local Ollama queries."""
     from stage_local_summary import run_analysis_workflow
     
-    mock_weather.return_value = (16.0, 50.0)
+    mock_weather.return_value = (16.0, 50.0, "2026-05-30T05:15", "2026-05-30T21:30")
     mock_corr.return_value = 0.95
     mock_tod.return_value = (2.0, 0.2)
     mock_grid.return_value = (1.5, 0.5)

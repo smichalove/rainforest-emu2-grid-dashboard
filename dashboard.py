@@ -4,6 +4,7 @@ from collections import defaultdict
 import http.cookiejar
 import json
 import logging
+import math
 import os
 import re
 import signal
@@ -12,7 +13,7 @@ import sys
 import textwrap
 import threading
 import time
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Dict, Tuple
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -55,9 +56,20 @@ SUMMARY_FONT_SIZE: int = 10
 SUMMARY_ALPHA: float = 0.55
 SUMMARY_COLOR: str = 'deepskyblue'
 
+DEFAULT_LAT: str = os.environ.get("WEATHER_LAT", "47.5760")
+DEFAULT_LON: str = os.environ.get("WEATHER_LON", "-122.0193")
+
+DEFAULT_WEATHER_FALLBACK: Dict[str, float] = {
+    "cloud_cover": 45.0,
+    "sunrise_hour": 5.25,
+    "sunset_hour": 21.25
+}
+
 # Color tokens for grid status and line plot
 IMPORT_COLOR: str = '#f43f5e'  # Modern rose/crimson red
 EXPORT_COLOR: str = '#00ff00'  # Classic neon green
+EXPECTED_SOLAR_COLOR: str = '#ffff00' # Bright yellow for expected weather-modulated solar
+CONSUMPTION_COLOR: str = '#d946ef'    # Neon purple/magenta for household consumption
 
 class GridDashboard(tk.Tk):
     """A fullscreen Tkinter dashboard application that visualizes real-time power grid usage.
@@ -92,6 +104,13 @@ class GridDashboard(tk.Tk):
     """
     solar_off = False
 
+    @property
+    def data_lock(self) -> threading.Lock:
+        """Get or initialize the data lock for thread-safe list operations."""
+        if '_data_lock' not in self.__dict__:
+            self.__dict__['_data_lock'] = threading.Lock()
+        return self.__dict__['_data_lock']
+
     def __init__(self) -> None:
         """Initializes the GridDashboard window, plot, and background serial reader.
 
@@ -113,6 +132,11 @@ class GridDashboard(tk.Tk):
         # In-memory arrays to hold data points for plotting.
         self.usage: List[float] = []
         self.timestamps: List[datetime.datetime] = []
+        
+        # Latest status text and color parsed from serial telemetry
+        self.latest_status_text: str = "Waiting for data..."
+        self.latest_status_color: str = "white"
+        self.solar_bars_dirty: bool = True
         
         # Check command line flags
         self.solar_off: bool = "--solaroff" in sys.argv
@@ -153,6 +177,9 @@ class GridDashboard(tk.Tk):
         local_chilicon_history: str = os.path.join(script_dir, 'chilicon_history.csv')
         self.chilicon_history_file: str = local_chilicon_history if os.path.exists(local_chilicon_history) or not os.path.exists(os.path.join(home_dir, 'chilicon_history.csv')) else os.path.join(home_dir, 'chilicon_history.csv')
         
+        self.last_weather_fetch_time: Optional[datetime.datetime] = None
+        self.cached_weather: Dict[str, Optional[float]] = {}
+        
         self.load_credentials()
         
         # Reload historical data from CSV so the graph survives power interruptions.
@@ -160,34 +187,70 @@ class GridDashboard(tk.Tk):
         self.load_solaredge_history()
         self.load_chilicon_history()
 
-        # UI Text label configuration.
-        self.status_label: tk.Label = tk.Label(
-            self, text="Waiting for data...", font=('Helvetica', 36, 'bold'), bg='black', fg='white'
+        # Create a container frame for the two-column header layout
+        self.header_frame: tk.Frame = tk.Frame(self, bg='black')
+        self.header_frame.pack(fill=tk.X, padx=20, pady=10)
+
+        # Left column (Time and Weather)
+        self.left_header: tk.Frame = tk.Frame(self.header_frame, bg='black')
+        self.left_header.pack(side=tk.LEFT, anchor='nw')
+
+        self.time_label: tk.Label = tk.Label(
+            self.left_header, text="00:00", font=('Helvetica', 32, 'bold'), bg='black', fg='deepskyblue', anchor='w'
         )
-        self.status_label.pack(pady=5)
-        
+        self.time_label.pack(anchor='w', pady=(0, 2))
+
+        self.date_label: tk.Label = tk.Label(
+            self.left_header, text="", font=('Helvetica', 12, 'bold'), bg='black', fg='#a0aec0', anchor='w'
+        )
+        self.date_label.pack(anchor='w', pady=(0, 2))
+
+        self.weather_label: tk.Label = tk.Label(
+            self.left_header, text="Weather: N/A", font=('Helvetica', 14, 'bold'), bg='black', fg='#fbbf24', anchor='w'
+        )
+        self.weather_label.pack(anchor='w', pady=(0, 2))
+
+        # Right column (SolarEdge and Chillicon + Grid status)
+        self.right_header: tk.Frame = tk.Frame(self.header_frame, bg='black')
+        self.right_header.pack(side=tk.RIGHT, anchor='ne')
+
+        self.status_label: tk.Label = tk.Label(
+            self.right_header, text="Waiting for data...", font=('Helvetica', 32, 'bold'), bg='black', fg='white', anchor='e'
+        )
+        self.status_label.pack(anchor='e', pady=(0, 2))
+
         self.sub_status_label: tk.Label = tk.Label(
-            self, text="", font=('Helvetica', 20, 'bold'), bg='black', fg='#fbbf24'
+            self.right_header, text="", font=('Helvetica', 16, 'bold'), bg='black', fg='#fbbf24', anchor='e'
         )
         if not self.solar_off:
-            self.sub_status_label.pack(pady=2)
+            self.sub_status_label.pack(anchor='e', pady=(0, 2))
             latest_pv = self.se_power[-1] if self.se_power else 0.0
             self.sub_status_label.config(text=f"SolarEdge PV: {latest_pv:.3f} kW")
 
         self.chilicon_status_label: tk.Label = tk.Label(
-            self, text="", font=('Helvetica', 20, 'bold'), bg='black', fg='#ffff00'
+            self.right_header, text="", font=('Helvetica', 16, 'bold'), bg='black', fg='#ffff00', anchor='e'
         )
         if not self.chilicon_off:
-            self.chilicon_status_label.pack(pady=2)
+            self.chilicon_status_label.pack(anchor='e', pady=(0, 2))
             latest_ch = self.chilicon_power[-1] if self.chilicon_power else 0.0
             self.chilicon_status_label.config(text=f"Chillicon PV: {latest_ch:.3f} kW")
 
+        # AI Summary text label below the header frame
+        self.summary_label: tk.Label = tk.Label(
+            self, text="Awaiting AI Analysis...", font=('Courier', 11, 'bold'),
+            bg='black', fg=SUMMARY_COLOR, justify='left', anchor='nw',
+            wraplength=1200
+        )
+        self.summary_label.pack(fill=tk.X, padx=20, pady=(5, 10))
+
         # Matplotlib figure setup.
         self.fig: Figure = Figure(figsize=(5, 3), dpi=100, facecolor='black')
-        # Adjust margins so that labels and ticks fit comfortably on fullscreen displays.
-        self.fig.subplots_adjust(left=0.15, right=0.95, top=0.95, bottom=0.15)
         
-        self.ax: Any = self.fig.add_subplot(111)
+        # We place both axes in the same rect so they overlap and swap visibility
+        rect = [0.08, 0.12, 0.88, 0.82]
+        
+        # Slide 1 Axis (Time Domain)
+        self.ax = self.fig.add_axes(rect)
         self.ax.set_facecolor('black')
         self.ax.tick_params(colors='white')
         self.ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M'))
@@ -197,10 +260,10 @@ class GridDashboard(tk.Tk):
         self.ax.spines['top'].set_color('black')
         self.ax.spines['right'].set_color('black')
         
-        # Secondary axes for SolarEdge bar chart along the bottom
+        # Secondary axes for SolarEdge bar chart along the bottom of Slide 1
         if not self.solar_off:
             self.ax_bar = self.ax.twinx()
-            self.ax_bar.set_ylim(0, 10)  # Fixed arbitrary high limit so bars stay at bottom
+            self.ax_bar.set_ylim(0, 10)
             self.ax_bar.tick_params(colors='#fbbf24')
             self.ax_bar.yaxis.set_label_position('right')
             self.ax_bar.spines['right'].set_color('#fbbf24')
@@ -209,30 +272,37 @@ class GridDashboard(tk.Tk):
             self.ax_bar.spines['bottom'].set_color('none')
             self.ax_bar.set_ylabel('SolarEdge PV (kW)', color='#fbbf24', rotation=270, labelpad=15)
             
-            # Swap z-order so the main ax (and its overlay text/line plot) sits on top of ax_bar
             self.ax.set_zorder(self.ax_bar.get_zorder() + 1)
-            self.ax.patch.set_visible(False)  # Must be transparent so ax_bar behind it is visible
+            self.ax.patch.set_visible(False)
         
-        # Dotted horizontal line at 0 kW to distinguish importing vs exporting power.
+        # Dotted horizontal line at 0 kW
         self.ax.axhline(0, color='gray', linestyle='--') 
         
-        # LineCollection to draw a plot line with dynamic colors and sleeker thickness.
+        # LineCollection for Slide 1
         self.lc: LineCollection = LineCollection([], linewidths=1.8, zorder=2)
         self.ax.add_collection(self.lc)
         
-        # Text object to display Gemini-generated summary in the background of the axes.
-        # Uses axes coordinates (transAxes) to place the text in the top-left corner.
-        self.summary_text_obj: Any = self.ax.text(
-            0.02, 0.95, "",
-            transform=self.ax.transAxes,
-            ha='left', va='top',
-            fontsize=SUMMARY_FONT_SIZE,
-            color=SUMMARY_COLOR,
-            alpha=SUMMARY_ALPHA,
-            fontfamily='monospace',
-            weight='bold',
-            zorder=10
-        )
+        # Slide 2 Axis (Frequency Domain)
+        self.ax_freq = self.fig.add_axes(rect, facecolor='black')
+        self.ax_freq.tick_params(colors='white')
+        self.ax_freq.spines['bottom'].set_color('white')
+        self.ax_freq.spines['left'].set_color('white')
+        self.ax_freq.spines['right'].set_color('none')
+        self.ax_freq.spines['top'].set_color('none')
+        self.ax_freq.set_xlabel('Frequency (Cycles per Day)', color='white', fontsize=9)
+        self.ax_freq.set_ylabel('Spectral Amplitude (kW)', color='white', fontsize=9)
+        self.ax_freq.set_visible(False) # Invisible by default
+        
+        # State variables for Slide Rotation
+        self.current_slide: int = 1
+        self.local_time_text: str = "Awaiting AI Analysis..."
+        self.local_dft_text: str = "Awaiting Frequency Domain Analysis..."
+        
+        # Fetch initial daily weather parameters (5 days forecast)
+        self.weather_map: Dict[str, Dict[str, Any]] = self.fetch_historical_weather()
+        
+        # Schedule slide rotation loop (every 29 seconds)
+        self.after(29000, self.rotate_slides)
         
         # Integrate Matplotlib canvas with the Tkinter window.
         self.canvas: FigureCanvasTkAgg = FigureCanvasTkAgg(self.fig, master=self)
@@ -267,6 +337,8 @@ class GridDashboard(tk.Tk):
             status: str = "Combined Solar Export (PV)" if latest_val < 0 else "Importing (Grid)"
             color: str = EXPORT_COLOR if latest_val < 0 else IMPORT_COLOR
             text: str = f"{latest_val:.3f} kW | {status}"
+            self.latest_status_text = text
+            self.latest_status_color = color
             self.update_chart(text, color)
 
         # Initialize serial reference to None before thread runs.
@@ -296,6 +368,9 @@ class GridDashboard(tk.Tk):
 
         # Start periodic check of signals to ensure responsiveness in Tkinter mainloop
         self.check_signals()
+
+        # Start the real-time 2-second GUI polling and rendering loop
+        self.start_fast_render_loop()
 
     def hex_to_signed_int(self, hex_str: str, bits: int = 32) -> int:
         """Converts a hexadecimal string representation of a number into a signed integer.
@@ -342,8 +417,9 @@ class GridDashboard(tk.Tk):
                                 continue
                             ts: datetime.datetime = datetime.datetime.fromisoformat(ts_str)
                             if ts > cutoff:
-                                self.timestamps.append(ts)
-                                self.usage.append(float(val_str))
+                                with self.data_lock:
+                                    self.timestamps.append(ts)
+                                    self.usage.append(float(val_str))
                         except Exception as parse_err:
                             logging.warning(f"Skipping corrupted history row: {row} - Error: {parse_err}")
             logging.info(f"Loaded {len(self.usage)} historical points.")
@@ -598,15 +674,16 @@ class GridDashboard(tk.Tk):
                     
                     logging.info(f"Chillicon current power: {power_kw:.3f} kW, Daily Energy: {energy_wh:.1f} Wh")
                     
-                    self.chilicon_timestamps.append(now)
-                    self.chilicon_power.append(power_kw)
-                    self.chilicon_energy.append(energy_wh)
-                    
-                    cutoff = now - datetime.timedelta(days=1)
-                    while self.chilicon_timestamps and self.chilicon_timestamps[0] < cutoff:
-                        self.chilicon_timestamps.pop(0)
-                        self.chilicon_power.pop(0)
-                        self.chilicon_energy.pop(0)
+                    with self.data_lock:
+                        self.chilicon_timestamps.append(now)
+                        self.chilicon_power.append(power_kw)
+                        self.chilicon_energy.append(energy_wh)
+                        
+                        cutoff = now - datetime.timedelta(days=1)
+                        while self.chilicon_timestamps and self.chilicon_timestamps[0] < cutoff:
+                            self.chilicon_timestamps.pop(0)
+                            self.chilicon_power.pop(0)
+                            self.chilicon_energy.pop(0)
                         
                     try:
                         with open(self.chilicon_history_file, 'a') as f:
@@ -615,6 +692,7 @@ class GridDashboard(tk.Tk):
                     except Exception as file_err:
                         logging.error(f"Failed to write Chillicon history: {file_err}")
                     
+                    self.solar_bars_dirty = True
                     self.after(0, lambda: self.chilicon_status_label.config(text=f"Chillicon PV: {power_kw:.3f} kW"))
                     self.after(0, lambda: self.update_chart(self.status_label.cget("text"), self.status_label.cget("fg")))
                 else:
@@ -669,11 +747,12 @@ class GridDashboard(tk.Tk):
                 
                 logging.info(f"SolarEdge PV current power: {power_kw:.3f} kW")
                 
-                self.se_timestamps.append(now)
-                self.se_power.append(power_kw)
-                if len(self.se_power) > self.max_points:
-                    self.se_power.pop(0)
-                    self.se_timestamps.pop(0)
+                with self.data_lock:
+                    self.se_timestamps.append(now)
+                    self.se_power.append(power_kw)
+                    if len(self.se_power) > self.max_points:
+                        self.se_power.pop(0)
+                        self.se_timestamps.pop(0)
                 
                 try:
                     with open(self.se_history_file, 'a') as f:
@@ -698,14 +777,15 @@ class GridDashboard(tk.Tk):
                     
                 logging.info(f"SolarEdge Storage status: {status}, raw power: {raw_battery_kw:.3f} kW (signed: {battery_kw:.3f} kW), SoC: {battery_soc:.1f}%")
                 
-                self.se_battery_timestamps.append(now)
-                self.se_battery_power.append(battery_kw)
-                self.se_battery_soc.append(battery_soc)
-                
-                if len(self.se_battery_power) > self.max_points:
-                    self.se_battery_power.pop(0)
-                    self.se_battery_timestamps.pop(0)
-                    self.se_battery_soc.pop(0)
+                with self.data_lock:
+                    self.se_battery_timestamps.append(now)
+                    self.se_battery_power.append(battery_kw)
+                    self.se_battery_soc.append(battery_soc)
+                    
+                    if len(self.se_battery_power) > self.max_points:
+                        self.se_battery_power.pop(0)
+                        self.se_battery_timestamps.pop(0)
+                        self.se_battery_soc.pop(0)
                     
                 try:
                     with open(self.se_battery_history_file, 'a') as f:
@@ -715,6 +795,7 @@ class GridDashboard(tk.Tk):
                     logging.error(f"Failed to write SolarEdge battery history: {file_err}")
                 
                 # Redraw is handled dynamically when update_chart runs, or we trigger it explicitly
+                self.solar_bars_dirty = True
                 self.after(0, lambda: self.sub_status_label.config(text=f"SolarEdge PV: {power_kw:.3f} kW"))
                 self.after(0, lambda: self.update_chart(self.status_label.cget("text"), self.status_label.cget("fg")))
                 
@@ -846,13 +927,14 @@ class GridDashboard(tk.Tk):
                 
                 # Append the new reading to memory arrays.
                 now_ts: datetime.datetime = datetime.datetime.now()
-                self.usage.append(actual_kw)
-                self.timestamps.append(now_ts)
-                
-                # Ensure the arrays do not grow indefinitely and cause OOM.
-                if len(self.usage) > self.max_points:
-                    self.usage.pop(0)
-                    self.timestamps.pop(0)
+                with self.data_lock:
+                    self.usage.append(actual_kw)
+                    self.timestamps.append(now_ts)
+                    
+                    # Ensure the arrays do not grow indefinitely and cause OOM.
+                    if len(self.usage) > self.max_points:
+                        self.usage.pop(0)
+                        self.timestamps.pop(0)
                     
                 # Append the telemetry point to the local CSV log.
                 try:
@@ -867,8 +949,12 @@ class GridDashboard(tk.Tk):
                 color: str = EXPORT_COLOR if actual_kw < 0 else IMPORT_COLOR
                 text: str = f"{actual_kw:.3f} kW | {status}"
                 
-                # Safely execute GUI modifications on the main thread using after().
-                self.after(0, self.update_chart, text, color)
+                # Save status text and color as state variables.
+                self.latest_status_text = text
+                self.latest_status_color = color
+                
+                # Safely execute status label modifications immediately on the main thread using after().
+                self.after(0, lambda: self.status_label.config(text=text, fg=color))
         except ET.ParseError as e:
             logging.warning(f"Fragmented XML dropped: {e}")
             return
@@ -883,6 +969,400 @@ class GridDashboard(tk.Tk):
         """
         self.after(0, lambda: self.status_label.config(text=text))
 
+    def fetch_live_weather(self, lat: str = DEFAULT_LAT, lon: str = DEFAULT_LON) -> Dict[str, Optional[float]]:
+        """Fetches the live weather from Open-Meteo API, cached for 15 minutes.
+
+        Args:
+            lat: Latitude of target location.
+            lon: Longitude of target location.
+
+        Returns:
+            A dictionary containing:
+            - "temp": float or None
+            - "weather_code": float or None
+            - "cloud_cover": float or None
+
+        Raises:
+            None: All exceptions (e.g. urllib.error.URLError) are caught internally.
+        """
+        now = datetime.datetime.now()
+        if (hasattr(self, 'last_weather_fetch_time') and 
+            self.last_weather_fetch_time is not None and 
+            hasattr(self, 'cached_weather') and 
+            self.cached_weather and 
+            (now - self.last_weather_fetch_time).total_seconds() < 900):
+            return self.cached_weather
+
+        url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,weather_code,cloud_cover&timezone=auto"
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=5) as response:
+                res = json.loads(response.read().decode('utf-8'))
+                current = res.get("current", {})
+                data = {
+                    "temp": current.get("temperature_2m"),
+                    "weather_code": current.get("weather_code"),
+                    "cloud_cover": current.get("cloud_cover")
+                }
+                self.cached_weather = data
+                self.last_weather_fetch_time = now
+                return data
+        except Exception as e:
+            logging.error(f"Error fetching live weather: {e}")
+            if hasattr(self, 'cached_weather') and self.cached_weather:
+                return self.cached_weather
+            return {}
+
+    def fetch_historical_weather(self, lat: str = DEFAULT_LAT, lon: str = DEFAULT_LON) -> Dict[str, Dict[str, Any]]:
+        """Fetches daily average cloud cover, sunrise, and sunset times from Open-Meteo API.
+
+        Args:
+            lat: Latitude of target location.
+            lon: Longitude of target location.
+
+        Returns:
+            A dictionary mapping date string "YYYY-MM-DD" to weather parameters.
+
+        Raises:
+            None: All exceptions are caught internally and logged.
+        """
+        url: str = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&past_days=5&daily=cloud_cover_mean,sunrise,sunset&timezone=auto"
+        try:
+            req: urllib.request.Request = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=10) as response:
+                res: Dict[str, Any] = json.loads(response.read().decode('utf-8'))
+                daily: Dict[str, Any] = res.get("daily", {})
+                times: List[str] = daily.get("time", [])
+                cloud_covers: List[Optional[float]] = daily.get("cloud_cover_mean", [])
+                sunrises: List[str] = daily.get("sunrise", [])
+                sunsets: List[str] = daily.get("sunset", [])
+                
+                weather_data: Dict[str, Dict[str, Any]] = {}
+                for i, t_str in enumerate(times):
+                    sr_hour: float = 5.25
+                    ss_hour: float = 21.25
+                    if i < len(sunrises) and sunrises[i]:
+                        try:
+                            sr_dt: datetime.datetime = datetime.datetime.fromisoformat(sunrises[i])
+                            sr_hour = sr_dt.hour + sr_dt.minute / 60.0
+                        except Exception:
+                            pass
+                    if i < len(sunsets) and sunsets[i]:
+                        try:
+                            ss_dt: datetime.datetime = datetime.datetime.fromisoformat(sunsets[i])
+                            ss_hour = ss_dt.hour + ss_dt.minute / 60.0
+                        except Exception:
+                            pass
+                    cc: float = cloud_covers[i] if (i < len(cloud_covers) and cloud_covers[i] is not None) else 45.0
+                    
+                    weather_data[t_str] = {
+                        "cloud_cover": cc,
+                        "sunrise_hour": sr_hour,
+                        "sunset_hour": ss_hour
+                    }
+                return weather_data
+        except Exception as e:
+            logging.error(f"Error fetching historical weather in main dashboard: {e}")
+            return {}
+
+    def _local_interpolate_gaps(self, series: List[Optional[float]]) -> List[float]:
+        """Fills missing elements (None) in a list using linear interpolation.
+
+        Args:
+            series: A list of floats that may contain None elements.
+
+        Returns:
+            A list of floats with all None elements replaced by interpolated values.
+
+        Raises:
+            None.
+        """
+        n: int = len(series)
+        result: List[Optional[float]] = list(series)
+        non_none_indices: List[int] = [i for i, x in enumerate(series) if x is not None]
+        if not non_none_indices:
+            return [0.0] * n
+            
+        first_valid_idx: int = non_none_indices[0]
+        last_valid_idx: int = non_none_indices[-1]
+        
+        # Forward and backward fill edges
+        for i in range(first_valid_idx):
+            result[i] = series[first_valid_idx]
+        for i in range(last_valid_idx + 1, n):
+            result[i] = series[last_valid_idx]
+            
+        # Linear interpolation for middle gaps
+        for i in range(first_valid_idx + 1, last_valid_idx):
+            if result[i] is None:
+                prev_idx: int = i - 1
+                while prev_idx >= first_valid_idx and result[prev_idx] is None:
+                    prev_idx -= 1
+                next_idx: int = i + 1
+                while next_idx <= last_valid_idx and result[next_idx] is None:
+                    next_idx += 1
+                    
+                val_prev: float = result[prev_idx]  # type: ignore
+                val_next: float = result[next_idx]  # type: ignore
+                ratio: float = (i - prev_idx) / (next_idx - prev_idx)
+                result[i] = val_prev + ratio * (val_next - val_prev)
+                
+        return [float(x) for x in result]  # type: ignore
+
+    def align_and_compute_spectrum(self) -> Tuple[List[float], List[float], List[float], List[float], List[float]]:
+        """Aligns historical telemetry on a uniform hourly grid and computes the DTFT spectrum.
+
+        Returns:
+            A tuple of five lists:
+            - freqs: frequencies in cycles per day
+            - grid_amp: spectral amplitude of grid usage (kW)
+            - solar_amp: spectral amplitude of total solar generation (kW)
+            - expected_solar_amp: spectral amplitude of expected solar generation (kW)
+            - consumption_amp: spectral amplitude of household consumption (kW)
+
+        Raises:
+            None.
+        """
+        with self.data_lock:
+            timestamps_copy = list(self.timestamps)
+            usage_copy = list(self.usage)
+            se_timestamps_copy = list(self.se_timestamps)
+            se_power_copy = list(self.se_power)
+            chilicon_timestamps_copy = list(self.chilicon_timestamps)
+            chilicon_power_copy = list(self.chilicon_power)
+
+        if not timestamps_copy:
+            return [], [], [], [], []
+            
+        min_ts: datetime.datetime = min(self.timestamps).replace(minute=0, second=0, microsecond=0)
+        max_ts: datetime.datetime = max(self.timestamps).replace(minute=0, second=0, microsecond=0)
+        total_hours: int = int((max_ts - min_ts).total_seconds() / 3600.0) + 1
+        
+        target_dts: List[datetime.datetime] = [min_ts + datetime.timedelta(hours=i) for i in range(total_hours)]
+        
+        # Build raw series with gaps
+        grid_map: Dict[str, List[float]] = defaultdict(list)
+        for ts, val in zip(timestamps_copy, usage_copy):
+            grid_map[ts.strftime("%Y-%m-%d %H:00")].append(val)
+            
+        # SolarEdge
+        se_map: Dict[str, List[float]] = defaultdict(list)
+        for ts, val in zip(se_timestamps_copy, se_power_copy):
+            se_map[ts.strftime("%Y-%m-%d %H:00")].append(val)
+            
+        # Chillicon
+        ch_map: Dict[str, List[float]] = defaultdict(list)
+        for ts, val in zip(chilicon_timestamps_copy, chilicon_power_copy):
+            ch_map[ts.strftime("%Y-%m-%d %H:00")].append(val)
+            
+        grid_raw: List[Optional[float]] = []
+        solar_raw: List[Optional[float]] = []
+        expected_solar_series: List[float] = []
+        
+        PEAK_SOLAR_CAPACITY: float = 5.0
+        
+        for dt in target_dts:
+            key: str = dt.strftime("%Y-%m-%d %H:00")
+            g_vals: List[float] = grid_map[key]
+            grid_raw.append(sum(g_vals) / len(g_vals) if g_vals else None)
+            
+            s_val: float = 0.0
+            se_vals: List[float] = se_map[key]
+            if se_vals:
+                s_val += sum(se_vals) / len(se_vals)
+            if not self.chilicon_off:
+                ch_vals: List[float] = ch_map[key]
+                if ch_vals:
+                    s_val += sum(ch_vals) / len(ch_vals)
+            
+            # If no data is available for both, mark as None to interpolate
+            if not se_vals and (self.chilicon_off or not ch_map[key]):
+                solar_raw.append(None)
+            else:
+                solar_raw.append(s_val)
+                
+            # Model expected solar profile
+            date_key: str = dt.strftime("%Y-%m-%d")
+            day_weather: Dict[str, float] = self.weather_map.get(date_key, DEFAULT_WEATHER_FALLBACK)
+            cloud_cover: float = day_weather["cloud_cover"]
+            sr_hour: float = day_weather["sunrise_hour"]
+            ss_hour: float = day_weather["sunset_hour"]
+            
+            # Decimal hour of day
+            h: float = dt.hour + dt.minute / 60.0
+            if sr_hour < h < ss_hour:
+                clear_sky: float = PEAK_SOLAR_CAPACITY * math.sin(math.pi * (h - sr_hour) / (ss_hour - sr_hour))
+            else:
+                clear_sky = 0.0
+                
+            modulation: float = (100.0 - cloud_cover) / 100.0
+            expected_solar_series.append(clear_sky * modulation)
+                
+        grid_series: List[float] = self._local_interpolate_gaps(grid_raw)
+        solar_series: List[float] = self._local_interpolate_gaps(solar_raw)
+        
+        # Calculate household consumption (Load = Grid + Solar)
+        consumption_series: List[float] = [g + s for g, s in zip(grid_series, solar_series)]
+        
+        # Run DTFT spectrum analysis for frequencies 0.1 to 4.0 cycles per day
+        freqs: List[float] = [0.05 + 0.01 * i for i in range(400)]
+        
+        # Compute DTFT
+        grid_amp: List[float] = []
+        solar_amp: List[float] = []
+        expected_solar_amp: List[float] = []
+        consumption_amp: List[float] = []
+        
+        n_samples: int = len(grid_series)
+        if n_samples > 0:
+            for f in freqs:
+                omega: float = (2.0 * math.pi * f) / 24.0
+                
+                # Grid
+                re_g: float = 0.0
+                im_g: float = 0.0
+                for n in range(n_samples):
+                    re_g += grid_series[n] * math.cos(omega * n)
+                    im_g += -grid_series[n] * math.sin(omega * n)
+                grid_amp.append(2.0 * math.sqrt(re_g**2 + im_g**2) / n_samples)
+                
+                # Solar
+                re_s: float = 0.0
+                im_s: float = 0.0
+                for n in range(n_samples):
+                    re_s += solar_series[n] * math.cos(omega * n)
+                    im_s += -solar_series[n] * math.sin(omega * n)
+                solar_amp.append(2.0 * math.sqrt(re_s**2 + im_s**2) / n_samples)
+                
+                # Expected Solar
+                re_es: float = 0.0
+                im_es: float = 0.0
+                for n in range(n_samples):
+                    re_es += expected_solar_series[n] * math.cos(omega * n)
+                    im_es += -expected_solar_series[n] * math.sin(omega * n)
+                expected_solar_amp.append(2.0 * math.sqrt(re_es**2 + im_es**2) / n_samples)
+                
+                # Household Consumption (Load)
+                re_c: float = 0.0
+                im_c: float = 0.0
+                for n in range(n_samples):
+                    re_c += consumption_series[n] * math.cos(omega * n)
+                    im_c += -consumption_series[n] * math.sin(omega * n)
+                consumption_amp.append(2.0 * math.sqrt(re_c**2 + im_c**2) / n_samples)
+        else:
+            grid_amp = [0.0] * len(freqs)
+            solar_amp = [0.0] * len(freqs)
+            expected_solar_amp = [0.0] * len(freqs)
+            consumption_amp = [0.0] * len(freqs)
+            
+        return freqs, grid_amp, solar_amp, expected_solar_amp, consumption_amp
+
+    def rotate_slides(self) -> None:
+        """Rotates the active slide and updates axis visibility and the AI summary display.
+
+        Raises:
+            None.
+        """
+        if self.current_slide == 1:
+            self.current_slide = 2
+        else:
+            self.current_slide = 1
+        
+        self.update_slide_visibility()
+        self.after(29000, self.rotate_slides)
+
+    def update_slide_visibility(self) -> None:
+        """Swaps the visibility of the time-domain and frequency-domain subplots and updates the AI summary text.
+
+        Raises:
+            None.
+        """
+        if self.current_slide == 1:
+            self.ax.set_visible(True)
+            if hasattr(self, 'ax_bar') and self.ax_bar is not None:
+                self.ax_bar.set_visible(True)
+            self.ax_freq.set_visible(False)
+        else:
+            self.ax.set_visible(False)
+            if hasattr(self, 'ax_bar') and self.ax_bar is not None:
+                self.ax_bar.set_visible(False)
+            self.ax_freq.set_visible(True)
+            
+        self.update_summary_display()
+        # Trigger an immediate redraw of the new slide so it updates instantly
+        self.solar_bars_dirty = True
+        self.update_chart(self.status_label.cget("text"), self.status_label.cget("fg"))
+
+    def update_weather_display(self) -> None:
+        """Fetches and updates the weather display widget text."""
+        live_weather = self.fetch_live_weather()
+        temp = live_weather.get("temp")
+        wcode = live_weather.get("weather_code")
+        cloud_cover = live_weather.get("cloud_cover")
+        
+        # Fallback to cache file if live query is empty
+        if temp is None or wcode is None:
+            cache_file = self.summary_cache_file
+            if os.path.exists(cache_file):
+                try:
+                    with open(cache_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        metrics = data.get("metrics", {})
+                        if temp is None:
+                            temp = metrics.get("temp_max")
+                        if cloud_cover is None:
+                            cloud_cover = metrics.get("cloud_cover")
+                        if wcode is None and cloud_cover is not None:
+                            cc = float(cloud_cover)
+                            if cc < 10:
+                                wcode = 0
+                            elif cc < 30:
+                                wcode = 1
+                            elif cc < 60:
+                                wcode = 2
+                            else:
+                                wcode = 3
+                except Exception:
+                    pass
+                    
+        if temp is not None:
+            temp_str = f"{temp:.1f}°C"
+        else:
+            temp_str = "N/A"
+            
+        if wcode is not None:
+            if wcode == 0:
+                sky_desc = "Clear"
+            elif wcode == 1:
+                sky_desc = "Mainly Clear"
+            elif wcode == 2:
+                sky_desc = "Partly Cloudy"
+            elif wcode == 3:
+                sky_desc = "Overcast"
+            elif wcode in (45, 48):
+                sky_desc = "Foggy"
+            elif wcode in (51, 53, 55):
+                sky_desc = "Drizzle"
+            elif wcode in (61, 63, 65):
+                sky_desc = "Rainy"
+            elif wcode in (80, 81, 82):
+                sky_desc = "Chance of Rain"
+            elif wcode in (71, 73, 75, 77, 85, 86):
+                sky_desc = "Snowy"
+            elif wcode in (95, 96, 99):
+                sky_desc = "Thunderstorm"
+            else:
+                sky_desc = "Cloudy"
+            
+            if cloud_cover is not None:
+                sky_str = f"{sky_desc} ({int(cloud_cover)}%)"
+            else:
+                sky_str = sky_desc
+        else:
+            sky_str = "N/A"
+            
+        self.weather_label.config(text=f"{temp_str} | {sky_str}")
+
     def update_chart(self, label_text: str, color: str) -> None:
         """Updates the status text label and redraws the grid usage graph.
 
@@ -896,93 +1376,173 @@ class GridDashboard(tk.Tk):
         """
         self.status_label.config(text=label_text, fg=color)
         
-        # Build segments and dynamically color/size them: red for importing (>0 kW), green for exporting (<0 kW).
-        # We draw the neon green line slightly thinner (1.3) than the rose red line (1.8) to balance visual weight.
-        if len(self.usage) > 1:
-            x_nums = mdates.date2num(self.timestamps)
-            segments = []
-            colors = []
-            widths = []
-            for i in range(len(self.usage) - 1):
-                y1, y2 = self.usage[i], self.usage[i+1]
-                segments.append(((x_nums[i], y1), (x_nums[i+1], y2)))
-                avg_y = (y1 + y2) / 2.0
-                if avg_y > 0:
-                    colors.append(IMPORT_COLOR)
-                    widths.append(1.8)
-                else:
-                    colors.append(EXPORT_COLOR)
-                    widths.append(1.3)
-            self.lc.set_segments(segments)
-            self.lc.set_colors(colors)
-            self.lc.set_linewidths(widths)
-        else:
-            self.lc.set_segments([])
+        t0 = time.perf_counter()
         
-        # Rolling 24-hour X-axis where the newest data is always on the far right.
-        now: datetime.datetime = datetime.datetime.now()
-        start_time: datetime.datetime = now - datetime.timedelta(hours=24)
-        self.ax.set_xlim(start_time, now)
-        
-        # Dynamically scale Y-axis with some margin above and below minimum/maximum points.
-        if self.usage:
-            y_min: float = min(self.usage)
-            y_max: float = max(self.usage)
-            padding: float = max(abs(y_max - y_min) * 0.2, 0.5)
-            self.ax.set_ylim(min(0, y_min - padding), max(0, y_max + padding))
+        if self.current_slide == 1:
+            # Thread-safe copy of telemetry data lists
+            with self.data_lock:
+                usage_copy = list(self.usage)
+                timestamps_copy = list(self.timestamps)
+                se_timestamps_copy = list(self.se_timestamps)
+                se_power_copy = list(self.se_power)
+                chilicon_timestamps_copy = list(self.chilicon_timestamps)
+                chilicon_power_copy = list(self.chilicon_power)
             
-        # Draw SolarEdge and Chillicon stacked bars on secondary Y-axis
-        if not self.solar_off and hasattr(self, 'ax_bar'):
-            self.ax_bar.clear()
-            self.ax_bar.tick_params(colors='#fbbf24')
-            self.ax_bar.yaxis.set_label_position('right')
-            self.ax_bar.spines['right'].set_color('#fbbf24')
-            self.ax_bar.spines['left'].set_color('none')
-            self.ax_bar.spines['top'].set_color('none')
-            self.ax_bar.spines['bottom'].set_color('none')
-            self.ax_bar.set_ylabel('Total Solar PV (kW)', color='#fbbf24', rotation=270, labelpad=15)
-            
-            # Align both SolarEdge and Chillicon on a 10-minute grid
-            grid_se = defaultdict(list)
-            grid_ch = defaultdict(list)
-            
-            for ts, p in zip(self.se_timestamps, self.se_power):
-                if ts >= start_time:
-                    m = (ts.minute // 10) * 10
-                    rounded = ts.replace(minute=m, second=0, microsecond=0)
-                    grid_se[rounded].append(p)
-                    
-            if not self.chilicon_off:
-                for ts, p in zip(self.chilicon_timestamps, self.chilicon_power):
-                    if ts >= start_time:
-                        m = (ts.minute // 10) * 10
-                        rounded = ts.replace(minute=m, second=0, microsecond=0)
-                        grid_ch[rounded].append(p)
-            
-            all_keys = sorted(list(set(list(grid_se.keys()) + list(grid_ch.keys()))))
-            
-            if all_keys:
-                bar_times = []
-                se_heights = []
-                ch_heights = []
-                for k in all_keys:
-                    bar_times.append(k)
-                    se_heights.append(sum(grid_se[k])/len(grid_se[k]) if grid_se[k] else 0.0)
-                    ch_heights.append(sum(grid_ch[k])/len(grid_ch[k]) if grid_ch[k] else 0.0)
-                    
-                width_in_days = 10.0 / (24.0 * 60.0) # 10 minutes
-                # Draw SolarEdge (bottom)
-                self.ax_bar.bar(bar_times, se_heights, width=width_in_days, color='#fbbf24', alpha=0.1, zorder=1, edgecolor='none')
-                # Draw Chillicon (stacked on top of SolarEdge - bright neon yellow)
-                self.ax_bar.bar(bar_times, ch_heights, bottom=se_heights, width=width_in_days, color='#ffff00', alpha=0.15, zorder=1.5, edgecolor='none')
-                
-                max_power = max([s + c for s, c in zip(se_heights, ch_heights)]) if all_keys else 1.0
-                self.ax_bar.set_ylim(0, max_power * 3)
+            # Build segments and dynamically color/size them: red for importing (>0 kW), green for exporting (<0 kW).
+            if len(usage_copy) > 1:
+                x_nums = mdates.date2num(timestamps_copy)
+                segments = []
+                colors = []
+                widths = []
+                for i in range(len(usage_copy) - 1):
+                    t1, t2 = timestamps_copy[i], timestamps_copy[i+1]
+                    # Skip segment connection if there is a gap > 10 minutes (power outage or log halt)
+                    if (t2 - t1).total_seconds() > 600:
+                        continue
+                    y1, y2 = usage_copy[i], usage_copy[i+1]
+                    segments.append(((x_nums[i], y1), (x_nums[i+1], y2)))
+                    avg_y = (y1 + y2) / 2.0
+                    if avg_y > 0:
+                        colors.append(IMPORT_COLOR)
+                        widths.append(1.8)
+                    else:
+                        colors.append(EXPORT_COLOR)
+                        widths.append(1.3)
+                self.lc.set_segments(segments)
+                self.lc.set_colors(colors)
+                self.lc.set_linewidths(widths)
             else:
-                self.ax_bar.set_ylim(0, 10)
+                self.lc.set_segments([])
             
-        # Efficiently queue a redraw request on the matplotlib GUI canvas.
-        self.fig.canvas.draw_idle()
+            # Rolling 24-hour X-axis where the newest data is always on the far right.
+            now: datetime.datetime = datetime.datetime.now()
+            start_time: datetime.datetime = now - datetime.timedelta(hours=24)
+            self.ax.set_xlim(start_time, now)
+            
+            # Dynamically scale Y-axis with some margin above and below minimum/maximum points.
+            if usage_copy:
+                y_min: float = min(usage_copy)
+                y_max: float = max(usage_copy)
+                # Increase top padding to leave the top portion of the plot completely free for text watermarks
+                y_range: float = max(y_max - y_min, 1.0)
+                y_lim_min: float = min(0.0, y_min - 0.15 * y_range)
+                y_lim_max: float = max(0.0, y_max + 0.85 * y_range)
+                self.ax.set_ylim(y_lim_min, y_lim_max)
+                
+            # Draw SolarEdge and Chillicon stacked bars on secondary Y-axis
+            if not self.solar_off and hasattr(self, 'ax_bar'):
+                if getattr(self, 'solar_bars_dirty', True):
+                    self.ax_bar.clear()
+                    self.ax_bar.tick_params(colors='#fbbf24')
+                    self.ax_bar.yaxis.set_label_position('right')
+                    self.ax_bar.spines['right'].set_color('#fbbf24')
+                    self.ax_bar.spines['left'].set_color('none')
+                    self.ax_bar.spines['top'].set_color('none')
+                    self.ax_bar.spines['bottom'].set_color('none')
+                    self.ax_bar.set_ylabel('Total Solar PV (kW)', color='#fbbf24', rotation=270, labelpad=15)
+                    
+                    # Align both SolarEdge and Chillicon on a 10-minute grid
+                    grid_se = defaultdict(list)
+                    grid_ch = defaultdict(list)
+                    
+                    for ts, p in zip(se_timestamps_copy, se_power_copy):
+                        if ts >= start_time:
+                            m = (ts.minute // 10) * 10
+                            rounded = ts.replace(minute=m, second=0, microsecond=0)
+                            grid_se[rounded].append(p)
+                            
+                    if not self.chilicon_off:
+                        for ts, p in zip(chilicon_timestamps_copy, chilicon_power_copy):
+                            if ts >= start_time:
+                                m = (ts.minute // 10) * 10
+                                rounded = ts.replace(minute=m, second=0, microsecond=0)
+                                grid_ch[rounded].append(p)
+                    
+                    all_keys = sorted(list(set(list(grid_se.keys()) + list(grid_ch.keys()))))
+                    
+                    if all_keys:
+                        bar_times = []
+                        se_heights = []
+                        ch_heights = []
+                        for k in all_keys:
+                            bar_times.append(k)
+                            se_heights.append(sum(grid_se[k])/len(grid_se[k]) if grid_se[k] else 0.0)
+                            ch_heights.append(sum(grid_ch[k])/len(grid_ch[k]) if grid_ch[k] else 0.0)
+                            
+                        width_in_days = 10.0 / (24.0 * 60.0) # 10 minutes
+                        # Draw SolarEdge (bottom)
+                        self.ax_bar.bar(bar_times, se_heights, width=width_in_days, color='#fbbf24', alpha=0.1, zorder=1, edgecolor='none')
+                        # Draw Chillicon (stacked on top of SolarEdge - bright neon yellow)
+                        self.ax_bar.bar(bar_times, ch_heights, bottom=se_heights, width=width_in_days, color='#ffff00', alpha=0.15, zorder=1.5, edgecolor='none')
+                        
+                        max_power = max([s + c for s, c in zip(se_heights, ch_heights)]) if all_keys else 1.0
+                        self.ax_bar.set_ylim(0, max_power * 3)
+                    else:
+                        self.ax_bar.set_ylim(0, 10)
+                    self.solar_bars_dirty = False
+            
+            # Request redraw on matplotlib canvas
+            self.fig.canvas.draw()
+            t1 = time.perf_counter()
+            logging.info(f"Matplotlib canvas draw took {(t1 - t0)*1000:.2f} ms (current_slide=1)")
+            
+        elif self.current_slide == 2:
+            # Draw the frequency spectrum on self.ax_freq
+            self.ax_freq.clear()
+            self.ax_freq.set_facecolor('black')
+            self.ax_freq.tick_params(colors='white')
+            self.ax_freq.spines['bottom'].set_color('white')
+            self.ax_freq.spines['left'].set_color('white')
+            self.ax_freq.spines['right'].set_color('none')
+            self.ax_freq.spines['top'].set_color('none')
+            self.ax_freq.set_xlabel('Frequency (Cycles per Day)', color='white', fontsize=9)
+            self.ax_freq.set_ylabel('Spectral Amplitude (kW)', color='white', fontsize=9)
+            
+            freqs, grid_amp, solar_amp, expected_solar_amp, consumption_amp = self.align_and_compute_spectrum()
+            if freqs:
+                self.ax_freq.plot(freqs, grid_amp, color=IMPORT_COLOR, label='Grid Spectrum', linewidth=1.5)
+                self.ax_freq.plot(freqs, solar_amp, color='#fbbf24', label='Solar Spectrum (Actual)', linewidth=1.5)
+                self.ax_freq.plot(freqs, expected_solar_amp, color=EXPECTED_SOLAR_COLOR, linestyle='--', label='Expected Solar (Weather Modulated)', linewidth=1.3)
+                self.ax_freq.plot(freqs, consumption_amp, color=CONSUMPTION_COLOR, label='Household Consumption (Load)', linewidth=1.5)
+                # Highlight physical rhythms (diurnal = 1.0, semi-diurnal = 2.0)
+                self.ax_freq.axvline(1.0, color='deepskyblue', linestyle='--', alpha=0.5, label='24h Diurnal')
+                self.ax_freq.axvline(2.0, color='violet', linestyle='--', alpha=0.5, label='12h Semi-Diurnal')
+                self.ax_freq.set_xlim(0.1, 4.0)
+                self.ax_freq.grid(color='gray', linestyle=':', alpha=0.3)
+                self.ax_freq.legend(facecolor='black', edgecolor='white', labelcolor='white', fontsize=8)
+                
+            self.fig.canvas.draw()
+            t1 = time.perf_counter()
+            logging.info(f"Matplotlib canvas draw took {(t1 - t0)*1000:.2f} ms (current_slide=2)")
+
+    def start_fast_render_loop(self) -> None:
+        """Starts the periodic real-time GUI render loop."""
+        logging.info("Starting real-time 2-second GUI render loop.")
+        self.fast_render_loop()
+
+    def fast_render_loop(self) -> None:
+        """Tkinter loop running every 2 seconds to refresh time, weather, and redraw Slide 1 if active."""
+        if not self.running:
+            return
+            
+        try:
+            # 1. Update Time Widget
+            now_dt = datetime.datetime.now()
+            time_str = now_dt.strftime("%H:%M")
+            date_str = now_dt.strftime("%A, %b %d, %Y")
+            self.time_label.config(text=time_str)
+            self.date_label.config(text=date_str)
+            
+            # 2. Update Weather Widget (uses Open-Meteo cache)
+            self.update_weather_display()
+            
+            # 3. Redraw Slide 1 if active
+            if self.current_slide == 1:
+                self.update_chart(self.latest_status_text, self.latest_status_color)
+        except Exception as e:
+            logging.error(f"Error in fast_render_loop: {e}")
+            
+        self.after(2000, self.fast_render_loop)
 
     def start_summary_loop(self) -> None:
         """Spawns the background thread to fetch Gemini summaries periodically."""
@@ -1027,37 +1587,47 @@ class GridDashboard(tk.Tk):
                     time.sleep(10)
 
     def load_cached_summary(self) -> None:
-        """Loads a previously cached Gemini summary from disk based on LLM_MODE configuration."""
-        if not os.path.exists(self.summary_cache_file):
-            return
-            
-        try:
-            with open(self.summary_cache_file, 'r') as f:
-                data = json.load(f)
-                ts_str = data.get("timestamp")
-                summary = data.get("summary")
-                
-                if ts_str and summary:
-                    ts = datetime.datetime.fromisoformat(ts_str)
+        """Loads previously cached summaries (both time-domain and frequency-domain) from disk.
+
+        Raises:
+            None.
+        """
+        loaded: bool = False
+        if os.path.exists(self.summary_cache_file):
+            try:
+                with open(self.summary_cache_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    ts_str = data.get("timestamp")
+                    summary = data.get("summary", "")
+                    dft_explanation = data.get("dft_explanation", "")
                     
-                    if self.llm_mode == "decoupled":
-                        # Load cache unconditionally
-                        self.last_summary_time = ts
-                        self.baseline_text = summary.strip()
-                        self.update_summary_display()
-                        logging.info(f"Loaded cached Gemini summary from {ts_str} unconditionally.")
-                    else:
-                        # Load cache only if it is fresh (less than 15 minutes old)
-                        now = datetime.datetime.now()
-                        if now - ts < datetime.timedelta(minutes=15):
+                    if ts_str and summary:
+                        ts = self.parse_timestamp(ts_str)
+                        if ts:
                             self.last_summary_time = ts
-                            self.baseline_text = summary.strip()
-                            self.update_summary_display()
-                            logging.info(f"Loaded fresh cached Gemini summary from {ts_str}.")
-                        else:
-                            logging.info("Cached Gemini summary exists but is older than 15 minutes.")
-        except Exception as e:
-            logging.error(f"Failed to load cached Gemini summary: {e}")
+                            
+                            # Split baseline and local delta if possible, or just set baseline
+                            marker = "[Live Local Delta (Jetson)"
+                            if marker in summary:
+                                self.baseline_text = summary.split(marker)[0].strip()
+                                self.local_delta_text = marker + summary.split(marker)[1]
+                            else:
+                                self.baseline_text = summary.strip()
+                                self.local_delta_text = ""
+                            
+                            if dft_explanation:
+                                self.local_dft_text = dft_explanation.strip()
+                            else:
+                                self.local_dft_text = "Awaiting Frequency Domain Analysis..."
+                                
+                            loaded = True
+                            logging.info("Loaded cached Gemini summary and local explanations from disk.")
+            except Exception as e:
+                logging.error(f"Failed to load cached summary: {e}")
+            except Exception as e:
+                logging.error(f"Failed to load cached Gemini summary: {e}")
+                
+        self.update_summary_display()
 
     def generate_hourly_summaries(self) -> str:
         """Parses the entire historical CSV files and computes hourly min, max, avg, and median.
@@ -1599,33 +2169,51 @@ class GridDashboard(tk.Tk):
         self.update_summary_display()
 
     def update_summary_display(self) -> None:
-        """Merges baseline and local delta summaries and renders them in the Matplotlib text widget."""
+        """Merges baseline and local delta summaries and renders them in the Tkinter label widget."""
         full_text = ""
-        if hasattr(self, 'baseline_text') and self.baseline_text:
-            clean_baseline = self.baseline_text.strip()
-            marker = "[Live Local Delta (Jetson)"
-            if marker in clean_baseline:
-                clean_baseline = clean_baseline.split(marker)[0].strip()
-            full_text += clean_baseline
-            
-        if hasattr(self, 'local_delta_text') and self.local_delta_text:
-            if full_text:
-                full_text += "\n\n"
-            full_text += self.local_delta_text.strip()
-            
-        wrapped_text = self.wrap_text(full_text)
-        self.summary_text_obj.set_text(wrapped_text)
+        if self.current_slide == 1:
+            if hasattr(self, 'baseline_text') and self.baseline_text:
+                clean_baseline = self.baseline_text.strip()
+                marker = "[Live Local Delta (Jetson)"
+                if marker in clean_baseline:
+                    clean_baseline = clean_baseline.split(marker)[0].strip()
+                full_text += clean_baseline
+                
+            if hasattr(self, 'local_delta_text') and self.local_delta_text:
+                if full_text:
+                    full_text += "\n\n"
+                full_text += self.local_delta_text.strip()
+        else:
+            # Slide 2: Frequency-domain AI explanation
+            if hasattr(self, 'local_dft_text') and self.local_dft_text:
+                full_text = self.local_dft_text.strip()
+            else:
+                full_text = "Awaiting Frequency Domain Analysis..."
+                
+        self.summary_label.config(text=full_text)
         self.fig.canvas.draw_idle()
         
         # Save the merged summary to disk for offline viewing tools (view_dashboard.sh)
         try:
+            time_domain_summary = ""
+            if hasattr(self, 'baseline_text') and self.baseline_text:
+                clean_baseline = self.baseline_text.strip()
+                marker = "[Live Local Delta (Jetson)"
+                if marker in clean_baseline:
+                    clean_baseline = clean_baseline.split(marker)[0].strip()
+                time_domain_summary += clean_baseline
+            if hasattr(self, 'local_delta_text') and self.local_delta_text:
+                if time_domain_summary:
+                    time_domain_summary += "\n\n"
+                time_domain_summary += self.local_delta_text.strip()
+
             merged_payload = {
                 "timestamp": self.last_summary_time.isoformat() if self.last_summary_time else datetime.datetime.now().isoformat(),
-                "summary": full_text
+                "summary": time_domain_summary,
+                "dft_explanation": self.local_dft_text if hasattr(self, 'local_dft_text') else ""
             }
-            merged_file = os.path.join(os.path.dirname(self.summary_cache_file), "merged_summary.json")
-            with open(merged_file, "w", encoding="utf-8") as mf:
-                json.dump(merged_payload, mf, indent=4)
+            with open(self.summary_cache_file, "w", encoding="utf-8") as f:
+                json.dump(merged_payload, f, indent=4)
         except Exception as write_err:
             logging.error(f"Failed to write merged summary to disk: {write_err}")
 
@@ -1691,55 +2279,62 @@ class GridDashboard(tk.Tk):
                         except Exception as rsync_err:
                             logging.error(f"Local Delta Loop: rsync failed: {rsync_err}")
                 
-                # 2. Check if baseline summary cache file exists
+                # 2. Check if baseline summary cache file exists or use fallback
+                ts_str = None
+                clean_baseline = ""
                 if os.path.exists(self.summary_cache_file):
-                    with open(self.summary_cache_file, 'r') as f:
-                        cache_data = json.load(f)
-                    
-                    ts_str = cache_data.get("timestamp")
-                    baseline_text = cache_data.get("summary", "")
-                    
-                    clean_baseline = baseline_text
-                    marker = "[Live Local Delta (Jetson)"
-                    if marker in clean_baseline:
-                        clean_baseline = clean_baseline.split(marker)[0].strip()
+                    try:
+                        with open(self.summary_cache_file, 'r') as f:
+                            cache_data = json.load(f)
+                        ts_str = cache_data.get("timestamp")
+                        baseline_text = cache_data.get("summary", "")
                         
-                    if ts_str:
-                        # 3. Post request to Jetson server
-                        url = f"http://{self.jetson_host}:{self.jetson_port}/api/analyze"
-                        payload = {
-                            "baseline_timestamp": ts_str,
-                            "baseline_text": clean_baseline
-                        }
-                        req_data = json.dumps(payload).encode('utf-8')
-                        req = urllib.request.Request(
-                            url,
-                            data=req_data,
-                            headers={'Content-Type': 'application/json'}
-                        )
+                        clean_baseline = baseline_text
+                        marker = "[Live Local Delta (Jetson)"
+                        if marker in clean_baseline:
+                            clean_baseline = clean_baseline.split(marker)[0].strip()
+                    except Exception as err:
+                        logging.error(f"Local Delta Loop: Error reading cache file: {err}")
+                
+                if not ts_str:
+                    # Fallback to 24 hours ago if the cache file doesn't exist or is invalid yet
+                    ts_str = (datetime.datetime.now() - datetime.timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
+                    logging.info(f"Local Delta Loop: Baseline cache not found/valid. Using 24h fallback timestamp: {ts_str}")
+
+                # 3. Post request to Jetson server
+                url = f"http://{self.jetson_host}:{self.jetson_port}/api/analyze"
+                payload = {
+                    "baseline_timestamp": ts_str,
+                    "baseline_text": clean_baseline
+                }
+                req_data = json.dumps(payload).encode('utf-8')
+                req = urllib.request.Request(
+                    url,
+                    data=req_data,
+                    headers={'Content-Type': 'application/json'}
+                )
+                
+                try:
+                    logging.info(f"Local Delta Loop: Requesting analysis from Jetson server at {url}...")
+                    with urllib.request.urlopen(req, timeout=120.0) as response:
+                        res_body = response.read().decode('utf-8')
+                        res_data = json.loads(res_body)
+                        llm_response = res_data.get("response", "").strip()
+                        dft_explanation = res_data.get("dft_explanation", "").strip()
                         
-                        try:
-                            logging.info(f"Local Delta Loop: Requesting analysis from Jetson server at {url}...")
-                            with urllib.request.urlopen(req, timeout=120.0) as response:
-                                res_body = response.read().decode('utf-8')
-                                res_data = json.loads(res_body)
-                                llm_response = res_data.get("response", "").strip()
-                                
-                                if llm_response:
-                                    checked_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                    delta_text = f"[Live Local Delta (Jetson) | Checked: {checked_time}]:\n{llm_response}"
-                                    
-                                    self.local_delta_text = delta_text
-                                    self.after(0, self.update_summary_display)
-                                    logging.info("Local Delta Loop: Successfully updated GUI summary text.")
-                                else:
-                                    logging.warning("Local Delta Loop: Received empty response from Jetson server.")
-                        except Exception as post_err:
-                            logging.error(f"Local Delta Loop: HTTP analysis query failed: {post_err}")
-                    else:
-                        logging.warning("Local Delta Loop: Baseline summary cache timestamp is empty.")
-                else:
-                    logging.info("Local Delta Loop: Baseline summary cache file not found yet.")
+                        if llm_response:
+                            checked_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            delta_text = f"[Live Local Delta (Jetson) | Checked: {checked_time}]:\n{llm_response}"
+                            
+                            self.local_delta_text = delta_text
+                            if dft_explanation:
+                                self.local_dft_text = dft_explanation
+                            self.after(0, self.update_summary_display)
+                            logging.info("Local Delta Loop: Successfully updated GUI summary text.")
+                        else:
+                            logging.warning("Local Delta Loop: Received empty response from Jetson server.")
+                except Exception as post_err:
+                    logging.error(f"Local Delta Loop: HTTP analysis query failed: {post_err}")
             except Exception as loop_err:
                 logging.error(f"Local Delta Loop: Unexpected error: {loop_err}")
                 

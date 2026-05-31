@@ -6,7 +6,6 @@ scp steven@Rainforestpi:~/rainforest-emu2-grid-dashboard/solaredge_history.csv /
 scp steven@Rainforestpi:~/rainforest-emu2-grid-dashboard/solaredge_battery_history.csv /Users/treven/Documents/rainforest-emu2-grid-dashboard/
 scp steven@Rainforestpi:~/rainforest-emu2-grid-dashboard/chilicon_history.csv /Users/treven/Documents/rainforest-emu2-grid-dashboard/
 scp steven@Rainforestpi:~/rainforest-emu2-grid-dashboard/gemini_summary.json /Users/treven/Documents/rainforest-emu2-grid-dashboard/
-scp steven@Rainforestpi:~/rainforest-emu2-grid-dashboard/merged_summary.json /Users/treven/Documents/rainforest-emu2-grid-dashboard/ || true
 
 
 echo "Launching local dashboard renderer..."
