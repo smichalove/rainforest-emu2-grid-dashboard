@@ -71,6 +71,10 @@ EXPORT_COLOR: str = '#00ff00'  # Classic neon green
 EXPECTED_SOLAR_COLOR: str = '#ffff00' # Bright yellow for expected weather-modulated solar
 CONSUMPTION_COLOR: str = '#d946ef'    # Neon purple/magenta for household consumption
 
+# Slide Rotation Interval Settings (in milliseconds)
+SLIDE_1_DURATION_MS: int = 58000  # Stays up for 58 seconds to allow background processing
+SLIDE_2_DURATION_MS: int = 29000  # Stays up for 29 seconds
+
 class GridDashboard(tk.Tk):
     """A fullscreen Tkinter dashboard application that visualizes real-time power grid usage.
 
@@ -301,8 +305,8 @@ class GridDashboard(tk.Tk):
         # Fetch initial daily weather parameters (5 days forecast)
         self.weather_map: Dict[str, Dict[str, Any]] = self.fetch_historical_weather()
         
-        # Schedule slide rotation loop (every 29 seconds)
-        self.after(29000, self.rotate_slides)
+        # Schedule slide rotation loop (initially SLIDE_1_DURATION_MS)
+        self.after(SLIDE_1_DURATION_MS, self.rotate_slides)
         
         # Integrate Matplotlib canvas with the Tkinter window.
         self.canvas: FigureCanvasTkAgg = FigureCanvasTkAgg(self.fig, master=self)
@@ -1265,11 +1269,13 @@ class GridDashboard(tk.Tk):
         """
         if self.current_slide == 1:
             self.current_slide = 2
+            delay = SLIDE_2_DURATION_MS
         else:
             self.current_slide = 1
+            delay = SLIDE_1_DURATION_MS
         
         self.update_slide_visibility()
-        self.after(29000, self.rotate_slides)
+        self.after(delay, self.rotate_slides)
 
     def update_slide_visibility(self) -> None:
         """Swaps the visibility of the time-domain and frequency-domain subplots and updates the AI summary text.
@@ -1441,41 +1447,43 @@ class GridDashboard(tk.Tk):
                     self.ax_bar.spines['bottom'].set_color('none')
                     self.ax_bar.set_ylabel('Total Solar PV (kW)', color='#fbbf24', rotation=270, labelpad=15)
                     
-                    # Align both SolarEdge and Chillicon on a 10-minute grid
-                    grid_se = defaultdict(list)
-                    grid_ch = defaultdict(list)
+                    # Align both SolarEdge and Chillicon on a regular, forward-filled 10-minute grid
+                    bar_times = []
+                    se_heights = []
+                    ch_heights = []
                     
-                    for ts, p in zip(se_timestamps_copy, se_power_copy):
-                        if ts >= start_time:
-                            m = (ts.minute // 10) * 10
-                            rounded = ts.replace(minute=m, second=0, microsecond=0)
-                            grid_se[rounded].append(p)
-                            
-                    if not self.chilicon_off:
-                        for ts, p in zip(chilicon_timestamps_copy, chilicon_power_copy):
-                            if ts >= start_time:
-                                m = (ts.minute // 10) * 10
-                                rounded = ts.replace(minute=m, second=0, microsecond=0)
-                                grid_ch[rounded].append(p)
+                    # Start at start_time rounded down to the nearest 10-minute slot
+                    grid_start = start_time.replace(minute=(start_time.minute // 10) * 10, second=0, microsecond=0)
+                    current_slot = grid_start
                     
-                    all_keys = sorted(list(set(list(grid_se.keys()) + list(grid_ch.keys()))))
+                    while current_slot <= now:
+                        bar_times.append(current_slot)
+                        
+                        # Find most recent SolarEdge power value <= current_slot and within 30 minutes
+                        se_val = 0.0
+                        for ts, p in zip(se_timestamps_copy, se_power_copy):
+                            if ts <= current_slot and current_slot - ts <= datetime.timedelta(minutes=30):
+                                se_val = p
+                        se_heights.append(se_val)
+                        
+                        # Find most recent Chillicon power value <= current_slot and within 30 minutes
+                        ch_val = 0.0
+                        if not self.chilicon_off:
+                            for ts, p in zip(chilicon_timestamps_copy, chilicon_power_copy):
+                                if ts <= current_slot and current_slot - ts <= datetime.timedelta(minutes=30):
+                                    ch_val = p
+                        ch_heights.append(ch_val)
+                        
+                        current_slot += datetime.timedelta(minutes=10)
                     
-                    if all_keys:
-                        bar_times = []
-                        se_heights = []
-                        ch_heights = []
-                        for k in all_keys:
-                            bar_times.append(k)
-                            se_heights.append(sum(grid_se[k])/len(grid_se[k]) if grid_se[k] else 0.0)
-                            ch_heights.append(sum(grid_ch[k])/len(grid_ch[k]) if grid_ch[k] else 0.0)
-                            
+                    if bar_times:
                         width_in_days = 10.0 / (24.0 * 60.0) # 10 minutes
                         # Draw SolarEdge (bottom)
                         self.ax_bar.bar(bar_times, se_heights, width=width_in_days, color='#fbbf24', alpha=0.1, zorder=1, edgecolor='none')
                         # Draw Chillicon (stacked on top of SolarEdge - bright neon yellow)
                         self.ax_bar.bar(bar_times, ch_heights, bottom=se_heights, width=width_in_days, color='#ffff00', alpha=0.15, zorder=1.5, edgecolor='none')
                         
-                        max_power = max([s + c for s, c in zip(se_heights, ch_heights)]) if all_keys else 1.0
+                        max_power = max([s + c for s, c in zip(se_heights, ch_heights)]) if bar_times else 1.0
                         self.ax_bar.set_ylim(0, max_power * 3)
                     else:
                         self.ax_bar.set_ylim(0, 10)

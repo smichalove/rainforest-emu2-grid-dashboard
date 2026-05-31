@@ -23,6 +23,10 @@ EXPORT_COLOR: str = '#00ff00'  # Classic neon green
 EXPECTED_SOLAR_COLOR: str = '#ffff00' # Bright yellow for expected weather-modulated solar
 CONSUMPTION_COLOR: str = '#d946ef'    # Neon purple/magenta for household consumption
 
+# Slide Rotation Interval Settings (in milliseconds)
+SLIDE_1_DURATION_MS: int = 58000  # Stays up for 58 seconds to allow background processing
+SLIDE_2_DURATION_MS: int = 29000  # Stays up for 29 seconds
+
 
 # Load environment configuration if present
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -215,7 +219,7 @@ class OfflineViewer(tk.Tk):
         # Schedule automatic screenshot generation or live polling loop
         if self.live_mode:
             self.after(2000, self.poll_remote_data)
-            self.after(29000, self.rotate_slides)
+            self.after(SLIDE_1_DURATION_MS, self.rotate_slides)
         else:
             self.after(1500, self.save_screenshot)
 
@@ -396,10 +400,12 @@ class OfflineViewer(tk.Tk):
         """
         if self.current_slide == 1:
             self.current_slide = 2
+            delay = SLIDE_2_DURATION_MS
         else:
             self.current_slide = 1
+            delay = SLIDE_1_DURATION_MS
         self.update_slide_visibility()
-        self.after(29000, self.rotate_slides)
+        self.after(delay, self.rotate_slides)
 
     def update_slide_visibility(self) -> None:
         """Toggles the visibility of time-series axes and frequency-domain axes.
