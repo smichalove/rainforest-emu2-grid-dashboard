@@ -13,11 +13,17 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.collections import LineCollection
 from typing import List, Any, Tuple, Optional, Dict
 import urllib.request
+from PIL import Image, ImageTk
 
 # Match settings from main dashboard.py
 SUMMARY_FONT_SIZE: int = 10
 SUMMARY_ALPHA: float = 0.55
 SUMMARY_COLOR: str = 'deepskyblue'
+
+# Real-time Status Label Settings
+# Font size reduced from 32 to 24 to prevent horizontal clipping on narrow displays (e.g. 800px kiosk).
+STATUS_FONT_SIZE: int = 24
+
 IMPORT_COLOR: str = '#f43f5e'  # Modern rose red
 EXPORT_COLOR: str = '#00ff00'  # Classic neon green
 EXPECTED_SOLAR_COLOR: str = '#ffff00' # Bright yellow for expected weather-modulated solar
@@ -83,6 +89,16 @@ class OfflineViewer(tk.Tk):
         self.load_chilicon_history()
         self.weather_map = self.fetch_historical_weather()
 
+        # Load combined hardware logos small banner
+        self.logo_image_tk: Optional[ImageTk.PhotoImage] = None
+        try:
+            logo_path = os.path.join(SCRIPT_DIR, "scratch", "combined_logos_small.png")
+            if os.path.exists(logo_path):
+                img = Image.open(logo_path)
+                self.logo_image_tk = ImageTk.PhotoImage(img)
+        except Exception as e:
+            print(f"Failed to load logo banner image: {e}")
+
         # Create a container frame for the two-column header layout
         self.header_frame: tk.Frame = tk.Frame(self, bg='black')
         self.header_frame.pack(fill=tk.X, padx=20, pady=10)
@@ -111,12 +127,13 @@ class OfflineViewer(tk.Tk):
         self.right_header.pack(side=tk.RIGHT, anchor='ne')
 
         latest_val = self.usage[-1] if self.usage else 0.0
-        status = "Combined Solar Export (PV)" if latest_val < 0 else "Importing (Grid)"
+        # Use shorter status texts to avoid truncating on narrow screens.
+        status = "Solar Export" if latest_val < 0 else "Grid Import"
         color = EXPORT_COLOR if latest_val < 0 else IMPORT_COLOR
         text = f"{latest_val:.3f} kW | {status}"
 
         self.status_label: tk.Label = tk.Label(
-            self.right_header, text=text, font=('Helvetica', 32, 'bold'), bg='black', fg=color, anchor='e'
+            self.right_header, text=text, font=('Helvetica', STATUS_FONT_SIZE, 'bold'), bg='black', fg=color, anchor='e'
         )
         self.status_label.pack(anchor='e', pady=(0, 2))
 
@@ -133,6 +150,13 @@ class OfflineViewer(tk.Tk):
             self.chilicon_status_label.pack(anchor='e', pady=(0, 2))
             latest_ch = self.chilicon_power[-1] if self.chilicon_power else 0.0
             self.chilicon_status_label.config(text=f"Chillicon PV: {latest_ch:.3f} kW")
+
+        # Center Column for Hardware Logos
+        if self.logo_image_tk:
+            self.logo_label: tk.Label = tk.Label(
+                self, image=self.logo_image_tk, bg='black'
+            )
+            self.logo_label.pack(side=tk.TOP, anchor='center', pady=(5, 5))
 
         # AI Summary text label below the header frame
         self.summary_label: tk.Label = tk.Label(
@@ -475,7 +499,8 @@ class OfflineViewer(tk.Tk):
         
         # Update UI Text labels
         latest_val = self.usage[-1] if self.usage else 0.0
-        status = "Combined Solar Export (PV)" if latest_val < 0 else "Importing (Grid)"
+        # Shorter strings are used here to prevent left-side text truncation on narrower layouts.
+        status = "Solar Export" if latest_val < 0 else "Grid Import"
         color = EXPORT_COLOR if latest_val < 0 else IMPORT_COLOR
         text = f"{latest_val:.3f} kW | {status}"
         self.status_label.config(text=text, fg=color)

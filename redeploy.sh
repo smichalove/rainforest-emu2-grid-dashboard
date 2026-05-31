@@ -7,7 +7,9 @@ set -e
 echo "=== Running local unit tests ==="
 pytest tests/
 
-echo "=== Copying dashboard.py, README.md, and run_dashboard_system.sh to the Pi ==="
+echo "=== Copying dashboard.py, README.md, run_dashboard_system.sh, and logos to the Pi ==="
+ssh steven@rainforestpi "mkdir -p ~/rainforest-emu2-grid-dashboard/scratch"
+scp scratch/combined_logos_small.png steven@rainforestpi:~/rainforest-emu2-grid-dashboard/scratch/
 scp dashboard.py README.md run_dashboard_system.sh steven@rainforestpi:~/rainforest-emu2-grid-dashboard/
 
 echo "=== Copying AI staging code and prompt to the Jetson Orin Nano ==="
