@@ -15,8 +15,6 @@ scp stage_local_summary.py stage_batch_summary.py gemma_hybrid_prompt.txt gemma_
 ssh steven@192.168.8.68 "sudo cp ~/rainforest-emu2-grid-dashboard/stage_local_summary.py /home/grid_backup/ && sudo cp ~/rainforest-emu2-grid-dashboard/gemma_hybrid_prompt.txt /home/grid_backup/ && sudo cp ~/rainforest-emu2-grid-dashboard/gemma_dft_prompt.txt /home/grid_backup/ && sudo chown grid_backup:grid_backup /home/grid_backup/stage_local_summary.py /home/grid_backup/gemma_hybrid_prompt.txt /home/grid_backup/gemma_dft_prompt.txt && sudo systemctl restart jetson-grid-edge"
 
 
-echo "=== Clearing remote summary cache files on the Pi ==="
-ssh steven@rainforestpi "rm -f ~/gemini_summary.json ~/rainforest-emu2-grid-dashboard/gemini_summary.json"
 
 echo "=== Restarting the dashboard process on the Pi ==="
 ssh steven@rainforestpi "killall python || true"
