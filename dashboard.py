@@ -77,8 +77,8 @@ EXPECTED_SOLAR_COLOR: str = '#ffff00' # Bright yellow for expected weather-modul
 CONSUMPTION_COLOR: str = '#d946ef'    # Neon purple/magenta for household consumption
 
 # Slide Rotation Interval Settings (in milliseconds)
-SLIDE_1_DURATION_MS: int = 58000  # Stays up for 58 seconds to allow background processing
-SLIDE_2_DURATION_MS: int = 19000  # Stays up for 19 seconds
+SLIDE_1_DURATION_MS: int = 90000  # Stays up for 1.5 minutes
+SLIDE_2_DURATION_MS: int = 15000  # Stays up for 15 seconds
 
 class GridDashboard(tk.Tk):
     """A fullscreen Tkinter dashboard application that visualizes real-time power grid usage.
@@ -267,7 +267,8 @@ class GridDashboard(tk.Tk):
             bg='black', fg=SUMMARY_COLOR, justify='left', anchor='nw',
             wraplength=1200
         )
-        self.summary_label.pack(fill=tk.X, padx=20, pady=(5, 10))
+        # We do not pack the Tkinter summary label to prevent squishing the chart.
+        # Instead, the summary is overlaid directly inside the Matplotlib chart background.
 
         # Matplotlib figure setup.
         self.fig: Figure = Figure(figsize=(5, 3), dpi=100, facecolor='black')
@@ -318,6 +319,32 @@ class GridDashboard(tk.Tk):
         self.ax_freq.set_xlabel('Frequency (Cycles per Day)', color='white', fontsize=9)
         self.ax_freq.set_ylabel('Spectral Amplitude (kW)', color='white', fontsize=9)
         self.ax_freq.set_visible(False) # Invisible by default
+
+        # Background summary text watermark for Slide 1 (Time Domain)
+        self.summary_text_obj: Any = self.ax.text(
+            0.02, 0.95, "Awaiting AI Analysis...",
+            transform=self.ax.transAxes,
+            ha='left', va='top',
+            fontsize=SUMMARY_FONT_SIZE,
+            color=SUMMARY_COLOR,
+            alpha=SUMMARY_ALPHA,
+            fontfamily='monospace',
+            weight='bold',
+            zorder=10
+        )
+
+        # Background summary text watermark for Slide 2 (Frequency Domain)
+        self.summary_text_obj_freq: Any = self.ax_freq.text(
+            0.02, 0.95, "Awaiting Frequency Domain Analysis...",
+            transform=self.ax_freq.transAxes,
+            ha='left', va='top',
+            fontsize=SUMMARY_FONT_SIZE,
+            color=SUMMARY_COLOR,
+            alpha=SUMMARY_ALPHA,
+            fontfamily='monospace',
+            weight='bold',
+            zorder=10
+        )
         
         # State variables for Slide Rotation
         self.current_slide: int = 1
@@ -1508,7 +1535,7 @@ class GridDashboard(tk.Tk):
                         self.ax_bar.bar(bar_times, ch_heights, bottom=se_heights, width=width_in_days, color='#ffff00', alpha=0.15, zorder=1.5, edgecolor='none')
                         
                         max_power = max([s + c for s, c in zip(se_heights, ch_heights)]) if bar_times else 1.0
-                        self.ax_bar.set_ylim(0, max_power * 3)
+                        self.ax_bar.set_ylim(0, max_power * 1.1)
                     else:
                         self.ax_bar.set_ylim(0, 10)
                     self.solar_bars_dirty = False
@@ -2159,6 +2186,8 @@ class GridDashboard(tk.Tk):
         Returns:
             The wrapped text block with line breaks inserted.
         """
+        # Clean up markdown code block indicators for a cleaner raw text presentation
+        text = text.replace("```json", "").replace("```", "")
         # Normalize carriage returns and other line endings to standard newlines
         text = text.replace('\r\n', '\n').replace('\r', '\n')
         paragraphs = text.split('\n\n')
@@ -2201,7 +2230,7 @@ class GridDashboard(tk.Tk):
         self.update_summary_display()
 
     def update_summary_display(self) -> None:
-        """Merges baseline and local delta summaries and renders them in the Tkinter label widget."""
+        """Merges baseline and local delta summaries and renders them in the Tkinter widget and Matplotlib text overlays."""
         full_text = ""
         if self.current_slide == 1:
             if hasattr(self, 'baseline_text') and self.baseline_text:
@@ -2223,6 +2252,25 @@ class GridDashboard(tk.Tk):
                 full_text = "Awaiting Frequency Domain Analysis..."
                 
         self.summary_label.config(text=full_text)
+
+        # Merge time domain text for Slide 1 watermark
+        time_domain_text = ""
+        if hasattr(self, 'baseline_text') and self.baseline_text:
+            clean_baseline = self.baseline_text.strip()
+            marker = "[Live Local Delta (Jetson)"
+            if marker in clean_baseline:
+                clean_baseline = clean_baseline.split(marker)[0].strip()
+            time_domain_text += clean_baseline
+        if hasattr(self, 'local_delta_text') and self.local_delta_text:
+            if time_domain_text:
+                time_domain_text += "\n\n"
+            time_domain_text += self.local_delta_text.strip()
+
+        # Update matplotlib text watermarks
+        self.summary_text_obj.set_text(self.wrap_text(time_domain_text))
+        dft_text = self.local_dft_text if hasattr(self, 'local_dft_text') else ""
+        self.summary_text_obj_freq.set_text(self.wrap_text(dft_text))
+
         self.fig.canvas.draw_idle()
         
         # Save the merged summary to disk for offline viewing tools (view_dashboard.sh)

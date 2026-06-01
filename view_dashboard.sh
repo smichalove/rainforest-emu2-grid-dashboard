@@ -13,4 +13,5 @@ echo "Launching local dashboard renderer..."
 cd /Users/treven/Documents/rainforest-emu2-grid-dashboard/
 
 # Run the local renderer script
-python3 render_local_plot.py
+python3 render_local_plot.py "$@"
+

@@ -30,8 +30,8 @@ EXPECTED_SOLAR_COLOR: str = '#ffff00' # Bright yellow for expected weather-modul
 CONSUMPTION_COLOR: str = '#d946ef'    # Neon purple/magenta for household consumption
 
 # Slide Rotation Interval Settings (in milliseconds)
-SLIDE_1_DURATION_MS: int = 58000  # Stays up for 58 seconds to allow background processing
-SLIDE_2_DURATION_MS: int = 29000  # Stays up for 29 seconds
+SLIDE_1_DURATION_MS: int = 90000  # Stays up for 1.5 minutes
+SLIDE_2_DURATION_MS: int = 15000  # Stays up for 15 seconds
 
 
 # Load environment configuration if present
@@ -164,7 +164,8 @@ class OfflineViewer(tk.Tk):
             bg='black', fg=SUMMARY_COLOR, justify='left', anchor='nw',
             wraplength=980
         )
-        self.summary_label.pack(fill=tk.X, padx=20, pady=(5, 10))
+        # We do not pack the Tkinter summary label to prevent squishing the chart.
+        # Instead, the summary is overlaid directly inside the Matplotlib chart background.
 
         # Matplotlib figure setup - expanded size for two subplots
         self.fig: Figure = Figure(figsize=(8, 6), dpi=100, facecolor='black')
@@ -216,6 +217,32 @@ class OfflineViewer(tk.Tk):
         self.ax_freq.set_ylabel('Spectral Amplitude (kW)', color='white', fontsize=9)
         self.ax_freq.set_visible(False) # Invisible by default
 
+        # Background summary text watermark for Slide 1 (Time Domain)
+        self.summary_text_obj: Any = self.ax.text(
+            0.02, 0.95, "Awaiting AI Analysis...",
+            transform=self.ax.transAxes,
+            ha='left', va='top',
+            fontsize=SUMMARY_FONT_SIZE,
+            color=SUMMARY_COLOR,
+            alpha=SUMMARY_ALPHA,
+            fontfamily='monospace',
+            weight='bold',
+            zorder=10
+        )
+
+        # Background summary text watermark for Slide 2 (Frequency Domain)
+        self.summary_text_obj_freq: Any = self.ax_freq.text(
+            0.02, 0.95, "Awaiting Frequency Domain Analysis...",
+            transform=self.ax_freq.transAxes,
+            ha='left', va='top',
+            fontsize=SUMMARY_FONT_SIZE,
+            color=SUMMARY_COLOR,
+            alpha=SUMMARY_ALPHA,
+            fontfamily='monospace',
+            weight='bold',
+            zorder=10
+        )
+
         
         # State variables for Slide Rotation
         self.current_slide: int = 2 if "--slide2" in sys.argv else 1
@@ -244,7 +271,9 @@ class OfflineViewer(tk.Tk):
         if self.live_mode:
             self.after(2000, self.poll_remote_data)
             self.after(SLIDE_1_DURATION_MS, self.rotate_slides)
-        else:
+
+        # Capture screenshot only if explicitly requested on-demand
+        if "--screenshot" in sys.argv:
             self.after(1500, self.save_screenshot)
 
     def load_history(self) -> None:
@@ -462,7 +491,7 @@ class OfflineViewer(tk.Tk):
                     "solaredge_history.csv",
                     "chilicon_history.csv",
                     "solaredge_battery_history.csv",
-                    "merged_summary.json"
+                    "gemini_summary.json"
                 ]
                 
                 # Fetch each key file from Raspberry Pi
@@ -570,9 +599,7 @@ class OfflineViewer(tk.Tk):
         cloud_cover = live_weather.get("cloud_cover")
         
         # Determine cache file path and load summary
-        cache_file = 'merged_summary.json'
-        if not os.path.exists(cache_file):
-            cache_file = 'gemini_summary.json'
+        cache_file = 'gemini_summary.json'
             
         summary = ""
         dft_explanation = ""
@@ -594,6 +621,10 @@ class OfflineViewer(tk.Tk):
         # Select active summary based on current slide
         active_summary = self.local_time_text if self.current_slide == 1 else self.local_dft_text
         self.summary_label.config(text=active_summary)
+        
+        # Update matplotlib text watermarks
+        self.summary_text_obj.set_text(self.wrap_text(self.local_time_text))
+        self.summary_text_obj_freq.set_text(self.wrap_text(self.local_dft_text))
         
         # If live fetch failed, fallback to cache metrics
         if temp is None or wcode is None:
@@ -663,6 +694,8 @@ class OfflineViewer(tk.Tk):
 
 
     def wrap_text(self, text: str, width: int = 100) -> str:
+        # Clean up markdown code block indicators for a cleaner raw text presentation
+        text = text.replace("```json", "").replace("```", "")
         # Normalize carriage returns and other line endings to standard newlines
         text = text.replace('\r\n', '\n').replace('\r', '\n')
         paragraphs = text.split('\n\n')
@@ -921,13 +954,14 @@ class OfflineViewer(tk.Tk):
             
             if bar_times:
                 width_in_days = 10.0 / (24.0 * 60.0) # 10 minutes
+                bar_x = mdates.date2num(bar_times)
                 # Draw SolarEdge (bottom)
-                self.ax_bar.bar(bar_times, se_heights, width=width_in_days, color='#fbbf24', alpha=0.1, zorder=1, edgecolor='none')
+                self.ax_bar.bar(bar_x, se_heights, width=width_in_days, color='#fbbf24', alpha=0.1, zorder=1, edgecolor='none')
                 # Draw Chillicon (stacked on top of SolarEdge - bright neon yellow)
-                self.ax_bar.bar(bar_times, ch_heights, bottom=se_heights, width=width_in_days, color='#ffff00', alpha=0.15, zorder=1.5, edgecolor='none')
+                self.ax_bar.bar(bar_x, ch_heights, bottom=se_heights, width=width_in_days, color='#ffff00', alpha=0.15, zorder=1.5, edgecolor='none')
                 
                 max_power = max([s + c for s, c in zip(se_heights, ch_heights)]) if bar_times else 1.0
-                self.ax_bar.set_ylim(0, max_power * 3)
+                self.ax_bar.set_ylim(0, max_power * 1.1)
             else:
                 self.ax_bar.set_ylim(0, 10)
         
@@ -936,6 +970,7 @@ class OfflineViewer(tk.Tk):
             end_time = self.timestamps[-1]
             start_time = end_time - datetime.timedelta(hours=24)
             self.ax.set_xlim(start_time, end_time)
+            self.ax_bar.set_xlim(start_time, end_time)
         
         if self.usage:
             y_min = min(self.usage)
@@ -967,8 +1002,28 @@ class OfflineViewer(tk.Tk):
             self.ax_freq.axvline(1.0, color='deepskyblue', linestyle='--', alpha=0.5, label='24h Diurnal')
             self.ax_freq.axvline(2.0, color='violet', linestyle='--', alpha=0.5, label='12h Semi-Diurnal')
             self.ax_freq.set_xlim(0.1, 4.0)
+
+            # Increase top padding to leave the top portion of the plot free for text watermarks
+            max_amp = max(max(grid_amp), max(solar_amp), max(expected_solar_amp), max(consumption_amp)) if grid_amp else 1.0
+            self.ax_freq.set_ylim(0, max_amp * 1.85)
+
             self.ax_freq.grid(color='gray', linestyle=':', alpha=0.3)
             self.ax_freq.legend(facecolor='black', edgecolor='white', labelcolor='white', fontsize=8)
+
+        # Recreate the text watermark on ax_freq since it was cleared
+        self.summary_text_obj_freq = self.ax_freq.text(
+            0.02, 0.95, self.wrap_text(self.local_dft_text),
+            transform=self.ax_freq.transAxes,
+            ha='left', va='top',
+            fontsize=SUMMARY_FONT_SIZE,
+            color=SUMMARY_COLOR,
+            alpha=SUMMARY_ALPHA,
+            fontfamily='monospace',
+            weight='bold',
+            zorder=10
+        )
+        # Ensure twin axis x-limits are perfectly synchronized with the main axis
+        self.ax_bar.set_xlim(self.ax.get_xlim())
             
         self.fig.canvas.draw()
 
