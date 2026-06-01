@@ -1570,6 +1570,24 @@ class GridDashboard(tk.Tk):
                 self.ax_freq.grid(color='gray', linestyle=':', alpha=0.3)
                 self.ax_freq.legend(facecolor='black', edgecolor='white', labelcolor='white', fontsize=8)
                 
+                # Increase top padding to leave the top portion of the plot free for text watermarks
+                max_amp = max(max(grid_amp), max(solar_amp), max(expected_solar_amp), max(consumption_amp)) if grid_amp else 1.0
+                self.ax_freq.set_ylim(0, max_amp * 1.85)
+                
+            # Recreate the text watermark on ax_freq since it was cleared
+            dft_text = self.local_dft_text if hasattr(self, 'local_dft_text') else ""
+            self.summary_text_obj_freq = self.ax_freq.text(
+                0.02, 0.95, self.wrap_text(dft_text),
+                transform=self.ax_freq.transAxes,
+                ha='left', va='top',
+                fontsize=SUMMARY_FONT_SIZE,
+                color=SUMMARY_COLOR,
+                alpha=SUMMARY_ALPHA,
+                fontfamily='monospace',
+                weight='bold',
+                zorder=10
+            )
+                
             self.fig.canvas.draw()
             t1 = time.perf_counter()
             logging.info(f"Matplotlib canvas draw took {(t1 - t0)*1000:.2f} ms (current_slide=2)")
