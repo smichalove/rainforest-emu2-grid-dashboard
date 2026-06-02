@@ -889,12 +889,9 @@ Output:
         grid_12h_snr_db=snrs["grid_12h_snr_db"],
         solar_24h_snr_db=snrs["solar_24h_snr_db"],
         consumption_24h_snr_db=snrs["consumption_24h_snr_db"],
-        consumption_12h_snr_db=snrs["consumption_12h_snr_db"]
+        consumption_12h_snr_db=snrs["consumption_12h_snr_db"],
+        warning_context=f"\nStatistical Anomaly Warnings (Keep these in mind for your analysis):\n{warning_context}" if warning_context else ""
     )
-    
-    # Append the statistical warnings to guide the model contextually
-    if warning_context:
-        formatted_prompt += warning_context
         
     # 9. Query Ollama for Time-Domain Analysis
     model_name: str = DEFAULT_MODEL

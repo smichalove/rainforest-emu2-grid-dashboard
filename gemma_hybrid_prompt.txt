@@ -43,6 +43,7 @@ Live Telemetry since baseline ({baseline_time} to {current_time}):
 === TIME-DOMAIN SLOPE (RATE OF CHANGE) METRICS ===
 - Recent Solar Power Slope (dS/dt): {solar_slope:.2f} kW/hr
 - Recent Net Grid Demand Slope (dG/dt): {grid_slope:.2f} kW/hr
+{warning_context}
 
 === ELECTRICAL ANALYSIS GUIDE ===
 Use the following physical laws of the microgrid system to perform your reasoning:

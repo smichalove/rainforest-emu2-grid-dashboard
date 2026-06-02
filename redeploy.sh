@@ -7,10 +7,12 @@ set -e
 echo "=== Running local unit tests ==="
 pytest tests/
 
-echo "=== Copying dashboard.py, README.md, run_dashboard_system.sh, and logos to the Pi ==="
+echo "=== Copying dashboard.py, dashboard_modules, README.md, run_dashboard_system.sh, backup_to_jetson.sh, and logos to the Pi ==="
 ssh steven@rainforestpi "mkdir -p ~/rainforest-emu2-grid-dashboard/scratch"
 scp scratch/combined_logos_small.png steven@rainforestpi:~/rainforest-emu2-grid-dashboard/scratch/
-scp dashboard.py README.md run_dashboard_system.sh steven@rainforestpi:~/rainforest-emu2-grid-dashboard/
+scp -r dashboard_modules steven@rainforestpi:~/rainforest-emu2-grid-dashboard/
+scp dashboard.py snr_analysis.py *prompt.txt README.md run_dashboard_system.sh backup_to_jetson.sh .env steven@rainforestpi:~/rainforest-emu2-grid-dashboard/
+ssh steven@rainforestpi "chmod +x ~/rainforest-emu2-grid-dashboard/backup_to_jetson.sh"
 
 echo "=== Copying AI staging code and prompt to the Jetson Orin Nano ==="
 scp stage_local_summary.py stage_batch_summary.py snr_analysis.py gemma_hybrid_prompt.txt gemma_dft_prompt.txt steven@192.168.8.68:~/rainforest-emu2-grid-dashboard/

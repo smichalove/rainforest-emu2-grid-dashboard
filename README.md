@@ -295,6 +295,27 @@ JETSON_PORT=5000
 
 ---
 
+## Codebase Architecture & Modules
+
+The dashboard architecture has been completely refactored from a monolithic script into a clean, portable Python package structure (`dashboard_modules/`). This ensures clear separation of concerns, headless execution on Edge servers, and robust thread safety.
+
+### 1. `dashboard_modules/` Package
+* **`config.py`**: Centralizes global styling, API keys, and environment variables.
+* **`io.py`**: A dedicated, thread-safe file handling layer. It features null-byte stripping for corrupted CSV lines and uses atomic swap-files for JSON caches to completely eliminate file corruption during sudden power losses.
+* **`telemetry.py`**: Handles raw serial polling, XML parsing, and history loading for the Rainforest EMU-2 hardware.
+* **`solar.py`**: Manages API clients, session cookies, and authentication for SolarEdge and Chillicon external endpoints.
+* **`weather.py`**: Performs asynchronous requests to Open-Meteo for cloud cover and sunrise/sunset metrics.
+* **`spectral.py`**: A pure, headless mathematical library executing Discrete Fourier Transforms (DFT), signal gap interpolations, and SNR noise floor calculations.
+* **`ai.py`**: Integrates the `google-genai` SDK, Vertex AI Batch upload pipelines, and local Ollama interactions.
+
+### 2. UI & Daemon Entry Points
+* **`dashboard.py`**: The main Tkinter Kiosk GUI application. It acts as a supervisor, launching the headless data acquisition threads and rendering Matplotlib canvases. It includes a built-in watchdog that detects API timeouts or serial crashes and safely heals/restarts the threads.
+* **`render_local_plot.py`**: A mock emulator that generates static PNGs of the dashboard using offline history CSVs, allowing developers to test UI layout changes without physical hardware.
+* **`stage_batch_summary.py`**: Background cron job that feeds bulk arrays of telemetry to Google Cloud Vertex AI to cache high-fidelity baseline LLM summaries.
+* **`stage_local_summary.py`**: Lightweight HTTP daemon built for Nvidia Jetson servers to receive telemetry arrays, perform frequency-domain spectral math, and run fast local LLM inferences (Gemma 2) on live deltas.
+
+---
+
 ## Complete Setup Instructions
 
 ### 0. Clone the Repository

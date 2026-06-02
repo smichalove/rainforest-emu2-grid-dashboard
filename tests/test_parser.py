@@ -136,6 +136,7 @@ def test_fetch_gemini_summary_backoff(mock_sleep, mock_genai_client):
     dashboard.summary_cache_file = "/dev/null"
     dashboard.update_background_summary = MagicMock()
     dashboard.after = MagicMock()
+    dashboard.ui_queue = MagicMock()
     
     dashboard.generate_hourly_summaries = MagicMock(return_value="Hour,Avg_kW,Min_kW,Max_kW,Median_kW,SE_Avg_kW,SE_Max_kW,SE_Energy_kWh\n2026-05-26 12:00,1.5,1.5,1.5,1.5,0.0,0.0,0.0")
     
@@ -168,7 +169,52 @@ def test_fetch_gemini_summary_backoff(mock_sleep, mock_genai_client):
         mock_sleep.assert_any_call(4)
         mock_sleep.assert_any_call(8)
         
-        dashboard.after.assert_called_with(0, dashboard.update_background_summary, "Spoofed summary")
+        dashboard.ui_queue.put.assert_called()
+        called_lambda = dashboard.ui_queue.put.call_args[0][0]
+        called_lambda()
+        dashboard.update_background_summary.assert_called_with("Spoofed summary")
+
+@patch('google.genai.Client')
+@patch('time.sleep', return_value=None)
+@patch.object(GridDashboard, '__init__', lambda x: None)
+def test_fetch_gemini_summary_complete_failure(mock_sleep, mock_genai_client):
+    """Test that a complete Gemini API failure is handled gracefully without crashing."""
+    dashboard = GridDashboard()
+    dashboard.local_llm = False
+    dashboard.usage = [1.0] * 20
+    dashboard.timestamps = [datetime.datetime.now()] * 20
+    dashboard.solaredge_api_key = None
+    dashboard.solaredge_site_id = None
+    dashboard.last_summary_time = None
+    dashboard.summary_cache_file = "/dev/null"
+    dashboard.update_background_summary = MagicMock()
+    dashboard.after = MagicMock()
+    dashboard.ui_queue = MagicMock()
+    
+    dashboard.generate_hourly_summaries = MagicMock(return_value="Hour,Avg_kW,Min_kW,Max_kW,Median_kW,SE_Avg_kW,SE_Max_kW,SE_Energy_kWh\n2026-05-26 12:00,1.5,1.5,1.5,1.5,0.0,0.0,0.0")
+    
+    with patch.dict(os.environ, {"GEMINI_API_KEY": "fake_key"}):
+        mock_client_instance = MagicMock()
+        mock_client_instance.models.generate_content.side_effect = Exception("Complete network failure")
+        mock_genai_client.return_value = mock_client_instance
+        
+        original_open = open
+        def mock_open_file(file, *args, **kwargs):
+            if 'gemini_prompt.txt' in str(file):
+                return unittest.mock.mock_open(read_data="{csv_data} {current_date_time} {last_data_time}")()
+            if 'gemini_summary.json' in str(file) or '/dev/null' in str(file):
+                return unittest.mock.mock_open()()
+            return original_open(file, *args, **kwargs)
+            
+        with patch('builtins.open', side_effect=mock_open_file):
+            with patch('os.path.exists', return_value=True):
+                dashboard.fetch_gemini_summary()
+                
+        assert mock_sleep.call_count == 3
+        dashboard.ui_queue.put.assert_called()
+        called_lambda = dashboard.ui_queue.put.call_args[0][0]
+        called_lambda()
+        dashboard.update_background_summary.assert_called_with("AI Summary unavailable.")
 
 @patch.object(GridDashboard, '__init__', lambda x: None)
 def test_load_solaredge_history():
@@ -207,6 +253,7 @@ def test_fetch_solaredge_data(mock_urlopen):
     dashboard.se_battery_soc = []
     dashboard.max_points = 5
     dashboard.after = MagicMock()
+    dashboard.ui_queue = MagicMock()
     dashboard.status_label = MagicMock()
     dashboard.sub_status_label = MagicMock()
     dashboard.se_battery_history_file = "/dev/null"
@@ -234,7 +281,10 @@ def test_fetch_solaredge_data(mock_urlopen):
             
             assert len(dashboard.se_power) == 1
             assert dashboard.se_power[0] == 1.200 # 1.2 kW
-            dashboard.after.assert_called()
+            dashboard.ui_queue.put.assert_called()
+            called_lambda = dashboard.ui_queue.put.call_args[0][0]
+            called_lambda()
+            dashboard.sub_status_label.config.assert_called_with(text="SolarEdge PV: 1.200 kW")
     finally:
         os.remove(temp_path)
 

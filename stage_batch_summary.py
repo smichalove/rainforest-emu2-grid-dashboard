@@ -12,6 +12,8 @@ from google.cloud import storage
 import google.genai as genai
 from google.genai import types
 
+from dashboard_modules import ai
+
 # -------------------------------------------------------------
 # Configuration Constants (Pulling from Environment/Defaults)
 # -------------------------------------------------------------
@@ -106,158 +108,11 @@ def generate_hourly_summaries() -> str:
     Raises:
         None
     """
-    if not os.path.exists(GRID_HISTORY):
-        print(f"Warning: {GRID_HISTORY} not found.")
-        return ""
-        
-    hourly_data: Dict[str, List[float]] = defaultdict(list)
-    try:
-        with open(GRID_HISTORY, 'r') as f:
-            reader = csv.reader(f)
-            for row in reader:
-                if len(row) == 2:
-                    ts_str: str = row[0].strip().replace('\x00', '')
-                    val_str: str = row[1].strip().replace('\x00', '')
-                    if not ts_str or not val_str:
-                        continue
-                    # Extracts the 'YYYY-MM-DD HH' prefix for easy alignment
-                    hour_key: str = ts_str[:13].replace('T', ' ') + ":00"
-                    try:
-                        hourly_data[hour_key].append(float(val_str))
-                    except ValueError:
-                        continue
-    except Exception as e:
-        print(f"Error parsing grid history: {e}")
-        return ""
-        
-    se_hourly_data: Dict[str, List[float]] = defaultdict(list)
-    if os.path.exists(SE_HISTORY):
-        try:
-            with open(SE_HISTORY, 'r') as f:
-                reader = csv.reader(f)
-                for row in reader:
-                    if len(row) == 2:
-                        ts_str = row[0].strip().replace('\x00', '')
-                        val_str = row[1].strip().replace('\x00', '')
-                        if not ts_str or not val_str:
-                            continue
-                        hour_key = ts_str[:13].replace('T', ' ') + ":00"
-                        try:
-                            se_hourly_data[hour_key].append(float(val_str))
-                        except ValueError:
-                            continue
-        except Exception as e:
-            print(f"Error parsing SolarEdge history: {e}")
-            
-    se_battery_hourly_data: Dict[str, List[Tuple[float, float]]] = defaultdict(list)
-    if os.path.exists(SE_BATTERY_HISTORY):
-        try:
-            with open(SE_BATTERY_HISTORY, 'r') as f:
-                reader = csv.reader(f)
-                for row in reader:
-                    if len(row) == 3:
-                        ts_str = row[0].strip().replace('\x00', '')
-                        p_str: str = row[1].strip().replace('\x00', '')
-                        soc_str: str = row[2].strip().replace('\x00', '')
-                        if not ts_str or not p_str or not soc_str:
-                            continue
-                        hour_key = ts_str[:13].replace('T', ' ') + ":00"
-                        try:
-                            se_battery_hourly_data[hour_key].append((float(p_str), float(soc_str)))
-                        except ValueError:
-                            continue
-        except Exception as e:
-            print(f"Error parsing SolarEdge battery history: {e}")
-            
-    chilicon_hourly_data: Dict[str, List[float]] = defaultdict(list)
-    if os.path.exists(CHILICON_HISTORY):
-        try:
-            with open(CHILICON_HISTORY, 'r') as f:
-                reader = csv.reader(f)
-                for row in reader:
-                    if len(row) == 3:
-                        ts_str = row[0].strip().replace('\x00', '')
-                        p_str = row[1].strip().replace('\x00', '')
-                        if not ts_str or not p_str:
-                            continue
-                        hour_key = ts_str[:13].replace('T', ' ') + ":00"
-                        try:
-                            chilicon_hourly_data[hour_key].append(float(p_str))
-                        except ValueError:
-                            continue
-        except Exception as e:
-            print(f"Error parsing Chillicon history: {e}")
-
-    lines: List[str] = ["Hour,Avg_kW,Min_kW,Max_kW,Median_kW,SE_Avg_kW,SE_Max_kW,SE_Energy_kWh,Battery_Avg_kW,Battery_SoC,Chillicon_Avg_kW,Chillicon_Max_kW,Chillicon_Energy_kWh"]
-    all_hours: List[str] = sorted(list(set(
-        list(hourly_data.keys()) + 
-        list(se_hourly_data.keys()) + 
-        list(se_battery_hourly_data.keys()) + 
-        list(chilicon_hourly_data.keys())
-    )))
-    
-    for hour in all_hours:
-        vals: List[float] = hourly_data[hour]
-        se_vals: List[float] = se_hourly_data[hour]
-        bat_vals: List[Tuple[float, float]] = se_battery_hourly_data[hour]
-        ch_vals: List[float] = chilicon_hourly_data[hour]
-        
-        avg_kw: float = 0.0
-        min_kw: float = 0.0
-        max_kw: float = 0.0
-        med_kw: float = 0.0
-        if vals:
-            avg_kw = sum(vals) / len(vals)
-            min_kw = min(vals)
-            max_kw = max(vals)
-            med_kw = statistics.median(vals)
-            
-        se_avg_kw: float = 0.0
-        se_max_kw: float = 0.0
-        se_energy_kwh: float = 0.0
-        if se_vals:
-            se_avg_kw = sum(se_vals) / len(se_vals)
-            se_max_kw = max(se_vals)
-            se_energy_kwh = se_avg_kw * 1.0 # 1 hour integration approximation
-            
-        bat_avg_kw: float = 0.0
-        bat_avg_soc: float = 0.0
-        if bat_vals:
-            bat_powers: List[float] = [v[0] for v in bat_vals]
-            bat_socs: List[float] = [v[1] for v in bat_vals]
-            bat_avg_kw = sum(bat_powers) / len(bat_powers)
-            bat_avg_soc = sum(bat_socs) / len(bat_socs)
-            
-        ch_avg_kw: float = 0.0
-        ch_max_kw: float = 0.0
-        ch_energy_kwh: float = 0.0
-        if ch_vals:
-            ch_avg_kw = sum(ch_vals) / len(ch_vals)
-            ch_max_kw = max(ch_vals)
-            ch_energy_kwh = ch_avg_kw * 1.0
-            
-        lines.append(f"{hour},{avg_kw:.3f},{min_kw:.3f},{max_kw:.3f},{med_kw:.3f},{se_avg_kw:.3f},{se_max_kw:.3f},{se_energy_kwh:.3f},{bat_avg_kw:.3f},{bat_avg_soc:.1f},{ch_avg_kw:.3f},{ch_max_kw:.3f},{ch_energy_kwh:.3f}")
-        
-    return "\n".join(lines)
+    return ai.generate_hourly_summaries(GRID_HISTORY, SE_HISTORY, SE_BATTERY_HISTORY, CHILICON_HISTORY)
 
 def upload_to_gcs(local_path: str, gcs_path: str) -> str:
-    """Uploads a local manifest or configuration file to Google Cloud Storage.
-
-    Args:
-        local_path: Absolute filesystem path to the file to upload.
-        gcs_path: The target GCS destination blob object key.
-
-    Returns:
-        The full GCS URI string (e.g. 'gs://bucket-name/path/file.ext').
-
-    Raises:
-        GoogleCloudError: If the upload operation encounters GCP network or IAM errors.
-    """
-    storage_client: storage.Client = storage.Client(project=PROJECT_ID)
-    bucket: storage.Bucket = storage_client.bucket(BUCKET_NAME)
-    blob: storage.Blob = bucket.blob(gcs_path)
-    blob.upload_from_filename(local_path)
-    return f"gs://{BUCKET_NAME}/{gcs_path}"
+    """Uploads a local manifest or configuration file to Google Cloud Storage."""
+    return ai.upload_to_gcs(local_path, gcs_path, BUCKET_NAME, PROJECT_ID)
 
 def gcs_cleanup_loop() -> None:
     """Background daemon loop that removes GCS inputs and predictions older than 24 hours.
@@ -276,14 +131,14 @@ def gcs_cleanup_loop() -> None:
     while True:
         print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] GCS Cleanup: Starting run...")
         try:
-            storage_client: storage.Client = storage.Client(project=PROJECT_ID)
-            bucket: storage.Bucket = storage_client.bucket(BUCKET_NAME)
+            storage_client = storage.Client(project=PROJECT_ID)
+            bucket = storage_client.bucket(BUCKET_NAME)
             now_utc: datetime.datetime = datetime.datetime.now(datetime.timezone.utc)
             cutoff: datetime.datetime = now_utc - datetime.timedelta(hours=24)
             
             deleted_count: int = 0
             for prefix in ["dashboard_emulation/", "dashboard_emulation_output/"]:
-                blobs: List[storage.Blob] = list(bucket.list_blobs(prefix=prefix))
+                blobs = list(bucket.list_blobs(prefix=prefix))
                 for blob in blobs:
                     # Compares creation/modification time in UTC
                     if blob.updated < cutoff:
@@ -298,67 +153,12 @@ def gcs_cleanup_loop() -> None:
         time.sleep(24 * 3600)
 
 def poll_batch_job(client: genai.Client, job_name: str) -> str:
-    """Polls the status of an active Vertex AI batch prediction job until it terminates.
-
-    Args:
-        client: The initialized Google GenAI SDK Client object.
-        job_name: The resource locator name of the batch job.
-
-    Returns:
-        A string representing the final job state ('SUCCEEDED' or 'FAILED').
-
-    Raises:
-        None
-    """
-    while True:
-        try:
-            job: Any = client.batches.get(name=job_name)
-            state_str: str = str(job.state).split(".")[-1]
-            print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Job State: {state_str}")
-            if "SUCCEEDED" in state_str:
-                return "SUCCEEDED"
-            elif "FAILED" in state_str:
-                return "FAILED"
-        except Exception as e:
-            print(f"Error checking job status: {e}")
-        time.sleep(60)
+    """Polls the status of an active Vertex AI batch prediction job until it terminates."""
+    return ai.poll_batch_job(client, job_name, interval_sec=60)
 
 def download_and_parse_output(dest_uri: str) -> str:
-    """Downloads prediction results from GCS and returns the extracted AI summary text.
-
-    Args:
-        dest_uri: The destination GCS directory URI.
-
-    Returns:
-        The decoded summary string text if successful; empty string on failure.
-
-    Raises:
-        None
-    """
-    try:
-        storage_client: storage.Client = storage.Client(project=PROJECT_ID)
-        bucket: storage.Bucket = storage_client.bucket(BUCKET_NAME)
-        
-        # Parse the relative path from GCS URI
-        prefix: str = dest_uri.replace(f"gs://{BUCKET_NAME}/", "")
-        
-        blobs: List[storage.Blob] = list(bucket.list_blobs(prefix=prefix))
-        for blob in blobs:
-            if blob.name.endswith("predictions.jsonl"):
-                content: str = blob.download_as_text()
-                lines: List[str] = content.strip().split("\n")
-                for line in lines:
-                    if not line:
-                        continue
-                    data: Dict[str, Any] = json.loads(line)
-                    # We only parse the response matching our target index (query_000)
-                    if data.get("request_id", "").startswith("power_meter_query_000_"):
-                        if "response" in data and "candidates" in data["response"]:
-                            parts: List[Dict[str, Any]] = data["response"]["candidates"][0]["content"]["parts"]
-                            return parts[0].get("text", "").strip()
-    except Exception as e:
-        print(f"Error downloading or parsing output: {e}")
-    return ""
+    """Downloads prediction results from GCS and returns the extracted AI summary text."""
+    return ai.download_and_parse_output(dest_uri, BUCKET_NAME, PROJECT_ID)
 
 def run_batch_cycle(client: genai.Client) -> None:
     """Triggers a single Batch Prediction pipeline run from input to cached output.

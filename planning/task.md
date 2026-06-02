@@ -1,9 +1,23 @@
-# Native Dashboard Jetson Integration
+# Task: Refactor and Modularize Grid Dashboard
 
-- `[x]` Add `--localllm` flag to `sys.argv` parsing in `dashboard.py`
-- `[x]` Add native Ollama HTTP POST execution to `fetch_gemini_summary()` in `dashboard.py`
-- `[x]` Refactor imports to adhere to Google Python Style Guide
-- `[x]` Clean up legacy stager scripts from the Pi (preserving stage_local_summary.py)
-- `[x]` Deploy `dashboard.py` to the Pi and update `autostart` configuration
-- `[x]` Update `README.md` with NV (Jetson Orin Nano) build and setup instructions (including verification curl examples)
-- `[x]` Verify UI updates correctly natively on the Pi
+- [ ] Create `dashboard_modules` package structure
+  - [ ] Create `dashboard_modules/__init__.py`
+  - [ ] Create `dashboard_modules/config.py` (Central config)
+  - [ ] Create `dashboard_modules/io.py` (File reader/writers)
+  - [ ] Create `dashboard_modules/telemetry.py` (EMU-2 Serial discovery, XML parser)
+  - [ ] Create `dashboard_modules/solar.py` (SolarEdge and Chillicon Clients)
+  - [ ] Create `dashboard_modules/weather.py` (Open-Meteo API Clients)
+  - [ ] Create `dashboard_modules/spectral.py` (Interpolation, DFT, SNR analysis)
+  - [ ] Create `dashboard_modules/ai.py` (Vertex Gemini and Local Ollama, GCS, Batch API)
+- [ ] Port unit tests to verify modules
+  - [ ] Update existing `tests/` to use new imports
+  - [ ] Write new module tests in `tests/test_modules.py`
+  - [ ] Run `pytest` and ensure all 25 tests pass
+- [ ] Refactor main entry points
+  - [ ] Refactor `dashboard.py` to use `dashboard_modules`
+  - [ ] Refactor `render_local_plot.py` to use `dashboard_modules`
+  - [ ] Refactor `stage_batch_summary.py` and `stage_local_summary.py` to use `dashboard_modules`
+- [ ] Verification and Visual validation
+  - [ ] Run `pytest` to guarantee zero regressions
+  - [ ] Run `./plot_and_open.sh` to check GUI plots rendering locally
+  - [ ] Launch `python dashboard.py --solaroff --chiliconoff --localllm` to verify UI launcher runs
