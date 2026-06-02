@@ -1106,7 +1106,7 @@ class GridDashboard(tk.Tk):
         if self.status_label is not None:
             self.after(0, lambda: self.status_label.config(text=text))
     def local_delta_loop(self) -> None:
-        """Runs the 15-minute sync loop, performing SCP and hitting the Jetson server."""
+        """Runs the 5-minute sync loop, performing SCP and hitting the Jetson server."""
         # Initial sleep for 15 seconds to allow dashboard startup to settle
         time.sleep(15)
         
@@ -1172,7 +1172,7 @@ class GridDashboard(tk.Tk):
             except Exception as loop_err:
                 logging.error(f"Local Delta Loop: Unexpected error: {loop_err}")
                 
-            for _ in range(90):
+            for _ in range(30):
                 if not self.running:
                     break
                 time.sleep(10)
