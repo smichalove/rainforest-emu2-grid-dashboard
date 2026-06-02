@@ -6,12 +6,17 @@ You are a precise microgrid edge AI energy analyst. Your task is to write a brie
 
 === DFT METRICS ===
 - Solar Diurnal (24h) Amplitude: {solar_24h_amp:.2f} kW
-- Solar Diurnal Peak Hour: {solar_24h_peak_hour:.1f}:00
+- Solar Diurnal Peak Hour: {solar_24h_peak_hour}
 - Solar Weather Modulation Factor: {solar_weather_modulation:.2f} (1.0 = clear sky, 0.0 = full overcast)
 - Grid Diurnal (24h) Amplitude: {grid_24h_amp:.2f} kW
 - Grid Semi-Diurnal (12h) Amplitude: {grid_12h_amp:.2f} kW
-- Grid Bimodal peak hour (12h): {grid_12h_peak_hour:.1f}:00
+- Grid Bimodal peak hour (12h): {grid_12h_peak_hour}
 - Grid Bimodality Ratio (12h/24h): {grid_bimodal_ratio:.2f}
+
+=== RHYTHM SNR (SIGNAL-TO-NOISE RATIO) METRICS ===
+- Grid Diurnal (24h) SNR: {grid_24h_snr_db:.1f} dB
+- Grid Semi-Diurnal (12h) SNR: {grid_12h_snr_db:.1f} dB
+- Solar Diurnal (24h) SNR: {solar_24h_snr_db:.1f} dB
 
 === SHADING & CORRELATION ===
 - Solar Edge/Chillicon Phase Separation: {phase_diff:.1f} hours

@@ -26,12 +26,19 @@ Live Telemetry since baseline ({baseline_time} to {current_time}):
 - Chillicon Array: Oriented West (Expected afternoon/evening peak phase)
 
 === FREQUENCY DOMAIN (DFT) METRICS ===
-- SolarEdge Diurnal Peak Hour (East Array): {se_24h_peak_hour:.1f}:00
-- Chillicon Diurnal Peak Hour (West Array): {ch_24h_peak_hour:.1f}:00
+- SolarEdge Diurnal Peak Hour (East Array): {se_24h_peak_hour}
+- Chillicon Diurnal Peak Hour (West Array): {ch_24h_peak_hour}
 - Grid Diurnal (24h) Amplitude: {grid_24h_amp:.2f} kW
 - Grid Semi-Diurnal (12h) Amplitude: {grid_12h_amp:.2f} kW
-- Grid Bimodal peak hour (12h): {grid_12h_peak_hour:.1f}:00
+- Grid Bimodal peak hour (12h): {grid_12h_peak_hour}
 - Grid Bimodality Ratio (12h/24h): {grid_bimodal_ratio:.2f}
+
+=== RHYTHM SNR (SIGNAL-TO-NOISE RATIO) METRICS ===
+- Grid Diurnal (24h) SNR: {grid_24h_snr_db:.1f} dB
+- Grid Semi-Diurnal (12h) SNR: {grid_12h_snr_db:.1f} dB
+- Solar Diurnal (24h) SNR: {solar_24h_snr_db:.1f} dB
+- Household Consumption Diurnal (24h) SNR: {consumption_24h_snr_db:.1f} dB
+- Household Consumption Semi-Diurnal (12h) SNR: {consumption_12h_snr_db:.1f} dB
 
 === TIME-DOMAIN SLOPE (RATE OF CHANGE) METRICS ===
 - Recent Solar Power Slope (dS/dt): {solar_slope:.2f} kW/hr

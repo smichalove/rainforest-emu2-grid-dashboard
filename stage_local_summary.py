@@ -214,6 +214,23 @@ def calculate_slope(series: List[float]) -> float:
     return (series[-1] - series[-3]) / 2.0
 
 
+def format_decimal_hour(hour: float) -> str:
+    """Converts a decimal hour value (e.g. 7.9) to HH:MM format (e.g. 07:54).
+
+    Args:
+        hour: The decimal hour value to format.
+
+    Returns:
+        A string representing the formatted time in HH:MM format.
+    """
+    h = int(hour)
+    m = int(round((hour - h) * 60))
+    if m == 60:
+        h = (h + 1) % 24
+        m = 0
+    return f"{h:02d}:{m:02d}"
+
+
 def detect_telemetry_gaps(filepath: str, baseline_dt: datetime.datetime, end_time: datetime.datetime) -> List[str]:
     """Scans the telemetry history file for any gaps > 30 minutes since baseline_dt.
 
@@ -707,6 +724,16 @@ def run_analysis_workflow(baseline_ts_str: str, baseline_text: str) -> Dict[str,
     grid_12h_amp, grid_12h_peak_hour = compute_dft_coefficients(grid_series, start_hour, 12.0)
     grid_bimodal_ratio = grid_12h_amp / grid_24h_amp if grid_24h_amp > 0 else 0.0
     
+    # 4b. Compute rhythm SNR metrics via standalone module
+    import snr_analysis
+    freqs = [0.05 + 0.01 * i for i in range(400)]
+    grid_amp_spec = snr_analysis.compute_dtft_spectrum(grid_series, freqs)
+    solar_amp_spec = snr_analysis.compute_dtft_spectrum(solar_series, freqs)
+    consumption_series = [g + s for g, s in zip(grid_series, solar_series)]
+    consumption_amp_spec = snr_analysis.compute_dtft_spectrum(consumption_series, freqs)
+    
+    snrs = snr_analysis.analyze_spectra_snr(freqs, grid_amp_spec, solar_amp_spec, consumption_amp_spec)
+    
     # 5. Compute Time-Domain Slopes (Derivatives)
     solar_slope = calculate_slope(solar_series)
     grid_slope = calculate_slope(grid_series)
@@ -803,11 +830,18 @@ Live Telemetry since baseline ({baseline_time} to {current_time}):
 
 === FREQUENCY DOMAIN (DFT) METRICS ===
 - Solar Diurnal (24h) Amplitude: {solar_24h_amp:.2f} kW
-- Solar Diurnal Peak Hour: {solar_24h_peak_hour:.1f}:00
+- Solar Diurnal Peak Hour: {solar_24h_peak_hour}
 - Grid Diurnal (24h) Amplitude: {grid_24h_amp:.2f} kW
 - Grid Semi-Diurnal (12h) Amplitude: {grid_12h_amp:.2f} kW
-- Grid Bimodal peak hour (12h): {grid_12h_peak_hour:.1f}:00
+- Grid Bimodal peak hour (12h): {grid_12h_peak_hour}
 - Grid Bimodal Ratio (12h/24h): {grid_bimodal_ratio:.2f}
+
+=== RHYTHM SNR (SIGNAL-TO-NOISE RATIO) METRICS ===
+- Grid Diurnal (24h) SNR: {grid_24h_snr_db:.1f} dB
+- Grid Semi-Diurnal (12h) SNR: {grid_12h_snr_db:.1f} dB
+- Solar Diurnal (24h) SNR: {solar_24h_snr_db:.1f} dB
+- Household Consumption Diurnal (24h) SNR: {consumption_24h_snr_db:.1f} dB
+- Household Consumption Semi-Diurnal (12h) SNR: {consumption_12h_snr_db:.1f} dB
 
 === TIME-DOMAIN SLOPE (RATE OF CHANGE) METRICS ===
 - Recent Solar Power Slope (dS/dt): {solar_slope:.2f} kW/hr
@@ -842,15 +876,20 @@ Output:
         sunset_time=sunset_time,
         daylight_duration=daylight_duration,
         solar_24h_amp=solar_24h_amp,
-        solar_24h_peak_hour=solar_24h_peak_hour,
-        se_24h_peak_hour=se_24h_peak_hour,
-        ch_24h_peak_hour=ch_24h_peak_hour,
+        solar_24h_peak_hour=format_decimal_hour(solar_24h_peak_hour),
+        se_24h_peak_hour=format_decimal_hour(se_24h_peak_hour),
+        ch_24h_peak_hour=format_decimal_hour(ch_24h_peak_hour),
         grid_24h_amp=grid_24h_amp,
         grid_12h_amp=grid_12h_amp,
-        grid_12h_peak_hour=grid_12h_peak_hour,
+        grid_12h_peak_hour=format_decimal_hour(grid_12h_peak_hour),
         grid_bimodal_ratio=grid_bimodal_ratio,
         solar_slope=solar_slope,
-        grid_slope=grid_slope
+        grid_slope=grid_slope,
+        grid_24h_snr_db=snrs["grid_24h_snr_db"],
+        grid_12h_snr_db=snrs["grid_12h_snr_db"],
+        solar_24h_snr_db=snrs["solar_24h_snr_db"],
+        consumption_24h_snr_db=snrs["consumption_24h_snr_db"],
+        consumption_12h_snr_db=snrs["consumption_12h_snr_db"]
     )
     
     # Append the statistical warnings to guide the model contextually
@@ -871,15 +910,17 @@ Output:
                 dft_prompt_template = f.read()
         except Exception as e:
             logging.error(f"Failed to read DFT prompt template: {e}")
-            
     if not dft_prompt_template:
         dft_prompt_template = """You are a precise edge AI energy analyst. Write a 2-sentence explanation of these frequency metrics.
 - Solar Diurnal (24h) Amplitude: {solar_24h_amp:.2f} kW
-- Solar Diurnal Peak Hour: {solar_24h_peak_hour:.1f}:00
+- Solar Diurnal Peak Hour: {solar_24h_peak_hour}
 - Solar Weather Modulation Factor: {solar_weather_modulation:.2f}
 - Grid Bimodality Ratio (12h/24h): {grid_bimodal_ratio:.2f}
 - Solar Edge & Chillicon Correlation: {solar_corr:.2f}
 - Phase Separation: {phase_diff:.1f} hours
+- Grid Diurnal (24h) SNR: {grid_24h_snr_db:.1f} dB
+- Grid Semi-Diurnal (12h) SNR: {grid_12h_snr_db:.1f} dB
+- Solar Diurnal (24h) SNR: {solar_24h_snr_db:.1f} dB
 
 Explanation:
 """
@@ -887,16 +928,19 @@ Explanation:
     phase_diff: float = (ch_24h_peak_hour - se_24h_peak_hour) % 24
     formatted_dft_prompt: str = dft_prompt_template.format(
         solar_24h_amp=solar_24h_amp,
-        solar_24h_peak_hour=solar_24h_peak_hour,
+        solar_24h_peak_hour=format_decimal_hour(solar_24h_peak_hour),
         solar_weather_modulation=solar_weather_modulation,
         grid_24h_amp=grid_24h_amp,
         grid_12h_amp=grid_12h_amp,
-        grid_12h_peak_hour=grid_12h_peak_hour,
+        grid_12h_peak_hour=format_decimal_hour(grid_12h_peak_hour),
         grid_bimodal_ratio=grid_bimodal_ratio,
         phase_diff=phase_diff,
         solar_corr=solar_corr,
         sunrise_time=sunrise_time,
-        sunset_time=sunset_time
+        sunset_time=sunset_time,
+        grid_24h_snr_db=snrs["grid_24h_snr_db"],
+        grid_12h_snr_db=snrs["grid_12h_snr_db"],
+        solar_24h_snr_db=snrs["solar_24h_snr_db"]
     )
     
     logging.info("Submitting query for DFT explanation to Ollama...")
@@ -919,7 +963,12 @@ Explanation:
             "ch_24h_peak_hour": ch_24h_peak_hour,
             "grid_bimodal_ratio": grid_bimodal_ratio,
             "solar_slope": solar_slope,
-            "grid_slope": grid_slope
+            "grid_slope": grid_slope,
+            "grid_24h_snr_db": snrs["grid_24h_snr_db"],
+            "grid_12h_snr_db": snrs["grid_12h_snr_db"],
+            "solar_24h_snr_db": snrs["solar_24h_snr_db"],
+            "consumption_24h_snr_db": snrs["consumption_24h_snr_db"],
+            "consumption_12h_snr_db": snrs["consumption_12h_snr_db"]
         }
     }
 

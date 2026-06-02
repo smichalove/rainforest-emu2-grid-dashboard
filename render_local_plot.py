@@ -839,49 +839,11 @@ class OfflineViewer(tk.Tk):
         # Run DTFT spectrum analysis for frequencies 0.1 to 4.0 cycles per day
         freqs = [0.05 + 0.01 * i for i in range(400)]
         
-        # Compute DTFT
-        grid_amp = []
-        solar_amp = []
-        expected_solar_amp = []
-        consumption_amp = []
-        
-        n_samples = len(grid_series)
-        if n_samples > 0:
-            for f in freqs:
-                omega = (2.0 * math.pi * f) / 24.0
-                
-                # Grid
-                re_g, im_g = 0.0, 0.0
-                for n in range(n_samples):
-                    re_g += grid_series[n] * math.cos(omega * n)
-                    im_g += -grid_series[n] * math.sin(omega * n)
-                grid_amp.append(2.0 * math.sqrt(re_g**2 + im_g**2) / n_samples)
-                
-                # Solar
-                re_s, im_s = 0.0, 0.0
-                for n in range(n_samples):
-                    re_s += solar_series[n] * math.cos(omega * n)
-                    im_s += -solar_series[n] * math.sin(omega * n)
-                solar_amp.append(2.0 * math.sqrt(re_s**2 + im_s**2) / n_samples)
-                
-                # Expected Solar
-                re_es, im_es = 0.0, 0.0
-                for n in range(n_samples):
-                    re_es += expected_solar_series[n] * math.cos(omega * n)
-                    im_es += -expected_solar_series[n] * math.sin(omega * n)
-                expected_solar_amp.append(2.0 * math.sqrt(re_es**2 + im_es**2) / n_samples)
-                
-                # Household Consumption (Load)
-                re_c, im_c = 0.0, 0.0
-                for n in range(n_samples):
-                    re_c += consumption_series[n] * math.cos(omega * n)
-                    im_c += -consumption_series[n] * math.sin(omega * n)
-                consumption_amp.append(2.0 * math.sqrt(re_c**2 + im_c**2) / n_samples)
-        else:
-            grid_amp = [0.0] * len(freqs)
-            solar_amp = [0.0] * len(freqs)
-            expected_solar_amp = [0.0] * len(freqs)
-            consumption_amp = [0.0] * len(freqs)
+        import snr_analysis
+        grid_amp = snr_analysis.compute_dtft_spectrum(grid_series, freqs)
+        solar_amp = snr_analysis.compute_dtft_spectrum(solar_series, freqs)
+        expected_solar_amp = snr_analysis.compute_dtft_spectrum(expected_solar_series, freqs)
+        consumption_amp = snr_analysis.compute_dtft_spectrum(consumption_series, freqs)
             
         return freqs, grid_amp, solar_amp, expected_solar_amp, consumption_amp
 
@@ -994,10 +956,17 @@ class OfflineViewer(tk.Tk):
         
         freqs, grid_amp, solar_amp, expected_solar_amp, consumption_amp = self.align_and_compute_spectrum()
         if freqs:
-            self.ax_freq.plot(freqs, grid_amp, color=IMPORT_COLOR, label='Grid Spectrum', linewidth=1.5)
-            self.ax_freq.plot(freqs, solar_amp, color='#fbbf24', label='Solar Spectrum (Actual)', linewidth=1.5)
+            import snr_analysis
+            snrs = snr_analysis.analyze_spectra_snr(freqs, grid_amp, solar_amp, consumption_amp)
+            
+            grid_label = f"Net Grid (24h SNR: {snrs['grid_24h_snr_db']:.1f} dB, 12h: {snrs['grid_12h_snr_db']:.1f} dB)"
+            solar_label = f"Solar PV (Actual) (24h SNR: {snrs['solar_24h_snr_db']:.1f} dB)"
+            consumption_label = f"Household Load (24h SNR: {snrs['consumption_24h_snr_db']:.1f} dB, 12h: {snrs['consumption_12h_snr_db']:.1f} dB)"
+
+            self.ax_freq.plot(freqs, grid_amp, color=IMPORT_COLOR, label=grid_label, linewidth=1.5)
+            self.ax_freq.plot(freqs, solar_amp, color='#fbbf24', label=solar_label, linewidth=1.5)
             self.ax_freq.plot(freqs, expected_solar_amp, color=EXPECTED_SOLAR_COLOR, linestyle='--', label='Expected Solar (Weather Modulated)', linewidth=1.3)
-            self.ax_freq.plot(freqs, consumption_amp, color=EXPECTED_SOLAR_COLOR if 'CONSUMPTION_COLOR' not in globals() else CONSUMPTION_COLOR, label='Household Consumption (Load)', linewidth=1.5)
+            self.ax_freq.plot(freqs, consumption_amp, color=EXPECTED_SOLAR_COLOR if 'CONSUMPTION_COLOR' not in globals() else CONSUMPTION_COLOR, label=consumption_label, linewidth=1.5)
             # Highlight physical rhythms (diurnal = 1.0, semi-diurnal = 2.0)
             self.ax_freq.axvline(1.0, color='deepskyblue', linestyle='--', alpha=0.5, label='24h Diurnal')
             self.ax_freq.axvline(2.0, color='violet', linestyle='--', alpha=0.5, label='12h Semi-Diurnal')
