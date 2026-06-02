@@ -64,6 +64,8 @@ Compare the live statistics and signal behaviors against the baseline. Flag a de
 - [CASE 3: Bimodal Rhythm Loss] Grid Bimodality Ratio drops below 0.5, indicating a flatline load or export profile.
 - [CASE 4: Sudden Load Ramp] Recent Grid Slope (dG/dt) is high (> +3.0 kW/hr), indicating a sudden high-power appliance startup.
 - [CASE 5: Power Outage / Data Gap] A gap in recent telemetry (e.g. no readings for > 30 minutes), suggesting a power outage or device offline event.
+- [CASE 6: WiFi Gateway Offline] If daytime weather is sunny/clear but Chillicon or SolarEdge reports exactly 0.0 kW, explicitly flag that the local WiFi gateway/console has lost network connection and dropped offline.
+- [CASE 7: Impossible Export Ratio] If Net Grid Export (delta_export) exceeds Solar PV Generation (delta_solar) plus Battery Discharged (delta_bat_discharge), explicitly flag a critical sensor anomaly. A house physically cannot export more energy than it generates.
 
 === FEW-SHOT EXAMPLES ===
 

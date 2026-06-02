@@ -163,7 +163,8 @@ def test_prompt_formatting_success() -> None:
             grid_12h_snr_db=12.1,
             solar_24h_snr_db=22.4,
             consumption_24h_snr_db=18.2,
-            consumption_12h_snr_db=14.5
+            consumption_12h_snr_db=14.5,
+            warning_context=""
         )
         assert "- Daylight Window: 05:15 to 21:30 (16.2 hours duration)" in formatted
         assert "run exactly from sunrise (05:15) to sunset (21:30)" in formatted
