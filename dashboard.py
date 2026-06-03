@@ -1113,6 +1113,10 @@ class GridDashboard(tk.Tk):
         logging.info("Starting dashboard local delta sync loop...")
         while self.running:
             try:
+                # 0. Sync latest telemetry CSVs to the Jetson so it has live data
+                import subprocess
+                subprocess.run(["./backup_to_jetson.sh"], cwd=os.path.dirname(os.path.abspath(__file__)), capture_output=True)
+                
                 # 1. Check if baseline summary cache file exists or use fallback
                 ts_str = None
                 clean_baseline = ""

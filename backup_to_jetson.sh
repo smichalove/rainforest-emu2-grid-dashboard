@@ -6,7 +6,7 @@ set -u
 
 JETSON_HOST="192.168.8.68"
 JETSON_USER="steven"
-BACKUP_DIR="~/telemetry_backups"
+BACKUP_DIR="~/rainforest-emu2-grid-dashboard/backups"
 LOCAL_DIR="/home/steven/rainforest-emu2-grid-dashboard"
 LOG_FILE="${LOCAL_DIR}/scratch/backup_history.log"
 
