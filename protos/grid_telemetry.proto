@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package grid;
+
+// Service to coordinate telemetry ingestion and analysis streaming between 
+// the Raspberry Pi (Tier 1 Ingest Node) and NVIDIA Jetson Orin Nano (Tier 2 Gatekeeper).
+service GridTelemetryService {
+  // Streams continuous telemetry packets directly from the Pi RAM to the Jetson RAM.
+  rpc StreamTelemetry(stream TelemetryRequest) returns (TelemetryResponse);
+
+  // Pulls the latest cached LLM summaries and DFT spectral explanations from the Jetson.
+  rpc GetLatestAnalysis(AnalysisRequest) returns (AnalysisResponse);
+}
+
+// Telemetry packet containing real-time grid and solar sensor readings.
+message TelemetryRequest {
+  string timestamp = 1;
+  double grid_usage_kw = 2;
+  double solaredge_pv_kw = 3;
+  double solaredge_battery_kw = 4;
+  double solaredge_battery_soc = 5;
+  double chilicon_pv_kw = 6;
+}
+
+// Simple acknowledgment returned by the server upon successful packet ingest.
+message TelemetryResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Identification request for retrieving cached server summaries.
+message AnalysisRequest {
+  string client_id = 1;
+}
+
+// Unified payload containing baseline analysis, local delta analysis, and DFT reports.
+message AnalysisResponse {
+  string timestamp = 1;
+  string baseline_text = 2;
+  string live_delta_text = 3;
+  string dft_explanation = 4;
+}

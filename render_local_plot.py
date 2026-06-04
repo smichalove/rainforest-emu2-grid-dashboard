@@ -240,13 +240,8 @@ class OfflineViewer(tk.Tk):
     def load_cached_summary(self) -> None:
         """Loads AI summary records from cache json."""
         data = io.read_safe_json(self.summary_cache_file)
-        
-        # Override with Jetson data if a merged summary exists
-        merged_file = os.path.join(SCRIPT_DIR, 'merged_summary.json')
-        if os.path.exists(merged_file):
-            merged_data = io.read_safe_json(merged_file)
-            if "dft_explanation" in merged_data:
-                data["dft_explanation"] = merged_data["dft_explanation"]
+        if not data:
+            data = {}
                 
         summary = data.get("summary", "")
         dft_explanation = data.get("dft_explanation", "")
@@ -272,10 +267,14 @@ class OfflineViewer(tk.Tk):
         if self.current_slide == 1:
             text = self.baseline_text
             if self.local_delta_text:
-                text += "\n\n" + self.local_delta_text
-            self.summary_text_obj.set_text(self.wrap_text(text))
+                text += "\n" + self.local_delta_text
+            self.summary_text_obj.set_text(self.wrap_text(text).replace('$', '\\$'))
         else:
-            self.summary_text_obj_freq.set_text(self.wrap_text(self.local_dft_text))
+            self.summary_text_obj_freq.set_text(self.wrap_text(self.local_dft_text).replace('$', '\\$'))
+            
+        # Redraw canvas if initialized
+        if hasattr(self, 'canvas') and self.canvas is not None:
+            self.canvas.draw_idle()
 
     def rotate_slides(self) -> None:
         """Slide transition scheduler loop."""
@@ -299,8 +298,42 @@ class OfflineViewer(tk.Tk):
         self.update_chart()
 
     def update_weather_display(self) -> None:
-        """Refreshes the weather header label using Open-Meteo fallbacks."""
-        live_weather = weather.fetch_live_weather()
+        """Refreshes the weather header label using Open-Meteo fallbacks with caching to prevent rate limiting."""
+        if not hasattr(self, 'last_weather_fetch'):
+            self.last_weather_fetch = 0.0
+            self.cached_weather = {}
+            self.weather_backoff_delay = 10.0
+            self.last_weather_attempt = 0.0
+
+        now_time = time.time()
+        time_since_last_fetch = now_time - self.last_weather_fetch
+        time_since_last_attempt = now_time - self.last_weather_attempt
+        
+        should_fetch = False
+        if self.cached_weather:
+            # Weather fetch interval matches Jetson stager local render cadence (15 minutes)
+            if time_since_last_fetch > 900.0:
+                should_fetch = True
+        else:
+            if time_since_last_attempt > self.weather_backoff_delay:
+                should_fetch = True
+
+        if should_fetch:
+            self.last_weather_attempt = now_time
+            try:
+                live_weather = weather.fetch_live_weather()
+                if live_weather:  # Only update cache if we got a valid response
+                    self.cached_weather = live_weather
+                    self.last_weather_fetch = now_time
+                    self.weather_backoff_delay = 10.0  # Reset backoff on success
+                else:
+                    self.weather_backoff_delay = min(self.weather_backoff_delay * 2, 900.0)
+                    print(f"Weather API returned empty. Backing off for {self.weather_backoff_delay:.1f}s.")
+            except Exception as e:
+                self.weather_backoff_delay = min(self.weather_backoff_delay * 2, 900.0)
+                print(f"Error fetching live weather in update_weather_display: {e}. Backing off for {self.weather_backoff_delay:.1f}s.")
+
+        live_weather = self.cached_weather
         temp = live_weather.get("temp")
         wcode = live_weather.get("weather_code")
         cloud_cover = live_weather.get("cloud_cover")
@@ -314,7 +347,18 @@ class OfflineViewer(tk.Tk):
                 cc = float(cloud_cover)
                 wcode = 0 if cc < 10 else (1 if cc < 30 else (2 if cc < 60 else 3))
 
-        temp_str = f"{temp:.1f}°C" if temp is not None else "N/A"
+        # In-memory backup of the last valid weather values to prevent N/A regressions
+        if not hasattr(self, 'last_valid_temp'):
+            self.last_valid_temp = None
+        if not hasattr(self, 'last_valid_sky_str'):
+            self.last_valid_sky_str = None
+
+        if temp is not None:
+            temp_str = f"{temp:.1f}°C"
+            self.last_valid_temp = temp_str
+        else:
+            temp_str = self.last_valid_temp if self.last_valid_temp is not None else "N/A"
+            
         if wcode is not None:
             sky_map = {
                 0: "Clear", 1: "Mainly Clear", 2: "Partly Cloudy", 3: "Overcast",
@@ -325,8 +369,9 @@ class OfflineViewer(tk.Tk):
             }
             sky_desc = sky_map.get(wcode, "Cloudy")
             sky_str = f"{sky_desc} ({int(cloud_cover)}%)" if cloud_cover is not None else sky_desc
+            self.last_valid_sky_str = sky_str
         else:
-            sky_str = "N/A"
+            sky_str = self.last_valid_sky_str if self.last_valid_sky_str is not None else "N/A"
 
         self.weather_label.config(text=f"{temp_str} | {sky_str}")
 
@@ -389,16 +434,25 @@ class OfflineViewer(tk.Tk):
 
             while current_slot <= end_time:
                 bar_times.append(current_slot)
+                
+                # Find closest SolarEdge reading within ±15 minutes
                 se_val = 0.0
+                min_diff_se = datetime.timedelta(minutes=15)
                 for ts, p in zip(se_timestamps_copy, se_power_copy):
-                    if ts <= current_slot and current_slot - ts <= datetime.timedelta(minutes=30):
+                    diff = abs(ts - current_slot)
+                    if diff < min_diff_se:
+                        min_diff_se = diff
                         se_val = p
                 se_heights.append(se_val)
                 
+                # Find closest Chillicon reading within ±15 minutes
                 ch_val = 0.0
                 if not self.chilicon_off:
+                    min_diff_ch = datetime.timedelta(minutes=15)
                     for ts, p in zip(chilicon_timestamps_copy, chilicon_power_copy):
-                        if ts <= current_slot and current_slot - ts <= datetime.timedelta(minutes=30):
+                        diff = abs(ts - current_slot)
+                        if diff < min_diff_ch:
+                            min_diff_ch = diff
                             ch_val = p
                 ch_heights.append(ch_val)
                 current_slot += datetime.timedelta(minutes=10)
@@ -505,7 +559,7 @@ class OfflineViewer(tk.Tk):
         # Syncing code runs command line helper script
         import subprocess
         try:
-            subprocess.run(["scp", "steven@rainforestpi:~/rainforest-emu2-grid-dashboard/*.csv", SCRIPT_DIR], timeout=15)
+            subprocess.run(["scp", "steven@rainforestpi:~/rainforest-emu2-grid-dashboard/*.csv", "steven@rainforestpi:~/rainforest-emu2-grid-dashboard/*.json", SCRIPT_DIR], timeout=15)
             self.load_history_files()
             self.load_cached_summary()
         except Exception as e:
@@ -530,7 +584,7 @@ class OfflineViewer(tk.Tk):
         os.makedirs(SCRIPT_DIR, exist_ok=True)
         
         # Populate time and weather manually (since live loop is disabled in headless)
-        now_dt = datetime.datetime.now()
+        now_dt = self.timestamps[-1] if self.timestamps else datetime.datetime.now()
         self.time_label.config(text=now_dt.strftime("%H:%M"))
         self.date_label.config(text=now_dt.strftime("%A, %b %d, %Y"))
         self.update_weather_display()

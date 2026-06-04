@@ -24,7 +24,7 @@ logging.basicConfig(
 # Configuration Constants
 # -------------------------------------------------------------
 SCRIPT_DIR: str = os.path.dirname(os.path.abspath(__file__))
-BACKUP_DIR: str = os.path.join(SCRIPT_DIR, "backups")
+BACKUP_DIR: str = os.environ.get("JETSON_BACKUP_PATH") or os.path.join(SCRIPT_DIR, "backups")
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
 # Local Telemetry CSV History Paths (read from SCP backup directory)
@@ -34,7 +34,7 @@ SE_BATTERY_HISTORY: str = os.path.join(BACKUP_DIR, "solaredge_battery_history.cs
 CHILICON_HISTORY: str = os.path.join(BACKUP_DIR, "chilicon_history.csv")
 
 # Model configuration
-DEFAULT_MODEL: str = os.environ.get("EDGE_MODEL", "gemma2-edge")
+DEFAULT_MODEL: str = os.environ.get("EDGE_MODEL", "gemma4-it-q4")
 OLLAMA_ENDPOINT: str = os.environ.get("OLLAMA_HOST", "http://localhost:11434/api/generate")
 
 # Default coordinates for weather (Seattle area)
@@ -78,8 +78,37 @@ def parse_timestamp(ts_str: str) -> Optional[datetime.datetime]:
         return None
 
 
+WEATHER_CACHE_FILE: str = os.path.join(SCRIPT_DIR, "weather_cache.json")
+
 def fetch_weather(lat: str = DEFAULT_LAT, lon: str = DEFAULT_LON) -> Tuple[Optional[float], Optional[float], Optional[str], Optional[str]]:
-    """Fetches today's weather forecast (max temp, cloud cover, sunrise, sunset) from Open-Meteo API."""
+    """Fetches today's weather forecast (max temp, cloud cover, sunrise, sunset) from Open-Meteo API with caching and fail-safe fallbacks."""
+    now = time.time()
+    
+    # Check if we have a valid cache file
+    cached_data = None
+    if os.path.exists(WEATHER_CACHE_FILE):
+        try:
+            with open(WEATHER_CACHE_FILE, "r") as f:
+                cached_data = json.load(f)
+        except Exception:
+            pass
+            
+    # Query API only if cache is older than 60 minutes (3600 seconds) or does not exist
+    should_fetch = True
+    if cached_data:
+        cache_time = cached_data.get("timestamp", 0.0)
+        if now - cache_time < 3600.0:
+            should_fetch = False
+            
+    if not should_fetch and cached_data:
+        logging.info("Using cached weather forecast on Jetson.")
+        return (
+            cached_data.get("temp_max"),
+            cached_data.get("cloud_cover"),
+            cached_data.get("sunrise"),
+            cached_data.get("sunset")
+        )
+
     url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&daily=temperature_2m_max,cloud_cover_mean,sunrise,sunset&timezone=auto"
     try:
         req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -90,11 +119,41 @@ def fetch_weather(lat: str = DEFAULT_LAT, lon: str = DEFAULT_LON) -> Tuple[Optio
             cloud_cover = daily.get("cloud_cover_mean", [None])[0]
             sunrise = daily.get("sunrise", [None])[0]
             sunset = daily.get("sunset", [None])[0]
+            
+            # If the response parsed successfully but contains empty/null arrays,
+            # raise a ValueError to force cache/default fallback execution.
+            if temp_max is None or cloud_cover is None:
+                raise ValueError("API returned null parameters for weather indicators")
+            
+            # Save to cache file on success
+            try:
+                with open(WEATHER_CACHE_FILE, "w") as f:
+                    json.dump({
+                        "timestamp": now,
+                        "temp_max": temp_max,
+                        "cloud_cover": cloud_cover,
+                        "sunrise": sunrise,
+                        "sunset": sunset
+                    }, f)
+            except Exception as cache_err:
+                logging.error(f"Failed to write weather cache: {cache_err}")
+                    
             logging.info(f"Fetched weather: temp_max={temp_max}°C, cloud_cover={cloud_cover}%, sunrise={sunrise}, sunset={sunset}")
             return temp_max, cloud_cover, sunrise, sunset
     except Exception as e:
-        logging.error(f"Error fetching weather forecast: {e}")
-        return None, None, None, None
+        logging.error(f"Error fetching weather forecast from Open-Meteo: {e}")
+        # Fall back to cache on failure
+        if cached_data:
+            logging.info("Falling back to cached weather forecast on Jetson after API failure.")
+            return (
+                cached_data.get("temp_max"),
+                cached_data.get("cloud_cover"),
+                cached_data.get("sunrise"),
+                cached_data.get("sunset")
+            )
+        # If no cache exists, seed with default baseline parameters to prevent NA displays
+        logging.warning("No weather cache exists. Seeding with default baseline parameters (20°C, 25% cloud cover).")
+        return 20.0, 25.0, None, None
 
 
 def calculate_daylight_duration(sunrise_str: Optional[str], sunset_str: Optional[str]) -> float:
@@ -641,7 +700,11 @@ def query_local_ollama(prompt: str, model: str) -> str:
         "model": model,
         "prompt": prompt,
         "system": "You are a precise, low-overhead edge AI energy assistant.",
-        "stream": False
+        "stream": False,
+        "options": {
+            "num_predict": 2048,
+            "num_ctx": 8192
+        }
     }
     data = json.dumps(payload).encode('utf-8')
     req = urllib.request.Request(
@@ -659,7 +722,7 @@ def query_local_ollama(prompt: str, model: str) -> str:
         raise
 
 
-def run_analysis_workflow(baseline_ts_str: str, baseline_text: str) -> Dict[str, Any]:
+def run_analysis_workflow(baseline_ts_str: str, baseline_text: str, batch_interval_hours: int = 4) -> Dict[str, Any]:
     """Runs the quantitative modeling and local LLM summary generation workflow."""
     baseline_dt = parse_timestamp(baseline_ts_str)
     if not baseline_dt:
@@ -762,7 +825,21 @@ def run_analysis_workflow(baseline_ts_str: str, baseline_text: str) -> Dict[str,
         warnings.append(f"Statistically significant peak grid load spike detected (Z-Score: {z_score_peak:.2f}).")
         
     # Adjust solar baseline dynamically based on cloud cover
-    expected_solar_kwh = se_mean * ( (datetime.datetime.now() - baseline_dt).total_seconds() / 3600.0 )
+    # Sum the historical hourly SolarEdge means for each specific hour in the window,
+    # weighted by the fraction of the hour elapsed since the baseline timestamp.
+    expected_solar_kwh = 0.0
+    h_start = baseline_dt.hour
+    h_end = datetime.datetime.now().hour
+    if baseline_dt.date() == datetime.datetime.now().date():
+        for hr in range(h_start, h_end + 1):
+            hr_mean, _ = calculate_solar_tod_stats(SE_HISTORY, hr)
+            weight = 1.0
+            if hr == h_start:
+                weight = (60.0 - baseline_dt.minute) / 60.0
+            elif hr == h_end:
+                weight = datetime.datetime.now().minute / 60.0
+            expected_solar_kwh += hr_mean * weight
+            
     if cloud_cover is not None:
         # Scale down expectation based on cloudiness
         expected_solar_kwh *= ((100.0 - cloud_cover) / 100.0)
@@ -890,7 +967,8 @@ Output:
         solar_24h_snr_db=snrs["solar_24h_snr_db"],
         consumption_24h_snr_db=snrs["consumption_24h_snr_db"],
         consumption_12h_snr_db=snrs["consumption_12h_snr_db"],
-        warning_context=f"\nStatistical Anomaly Warnings (Keep these in mind for your analysis):\n{warning_context}" if warning_context else ""
+        warning_context=f"\nStatistical Anomaly Warnings (Keep these in mind for your analysis):\n{warning_context}" if warning_context else "",
+        batch_interval_hours=batch_interval_hours
     )
         
     # 9. Query Ollama for Time-Domain Analysis
@@ -979,13 +1057,14 @@ class AnalyzeHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 payload = json.loads(post_data.decode('utf-8'))
                 baseline_ts_str = payload.get("baseline_timestamp")
                 baseline_text = payload.get("baseline_text", "")
+                batch_interval_hours = payload.get("batch_interval_hours", 4)
                 
                 if not baseline_ts_str:
                     self.send_error_response("Missing baseline_timestamp")
                     return
                 
-                logging.info(f"Received API analysis request. Baseline timestamp: {baseline_ts_str}")
-                response_data = run_analysis_workflow(baseline_ts_str, baseline_text)
+                logging.info(f"Received API analysis request. Baseline timestamp: {baseline_ts_str}, Batch Interval: {batch_interval_hours}h")
+                response_data = run_analysis_workflow(baseline_ts_str, baseline_text, batch_interval_hours)
                 
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')

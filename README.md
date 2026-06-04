@@ -118,7 +118,7 @@ sequenceDiagram
     box rgb(17, 24, 39) Local Jetson Delta Pipeline (Every 15 mins)
     participant Pi as Raspberry Pi (dashboard.py)
     participant JS as Jetson Server (stage_local_summary.py)
-    participant OL as Local Ollama (gemma2-edge)
+    participant OL as Local Ollama (gemma4-it-q4)
     end
 
     %% Cloud Batch Flow
@@ -145,7 +145,7 @@ sequenceDiagram
     JS->>JS: Format comparative prompt using gemma_hybrid_prompt.txt
     
     JS->>OL: POST /api/generate (model, system instruct, formatted prompt)
-    OL->>OL: GPU Inference (Gemma 2 2B - gemma2-edge)
+    OL->>OL: GPU Inference (Gemma 4 5B - gemma4-it-q4)
     OL-->>JS: Return response text
     
     JS-->>Pi: HTTP Response (local delta text)
@@ -163,7 +163,7 @@ curl -fsSL https://ollama.com/install.sh | sh
 ```
 
 #### Step B: Allocate Swap Space on the SSD
-The upgraded 9B model (`gemma2:9b` or `gemma2-edge`) can exhaust the shared unified memory of a Jetson Orin (such as an Orin Nano 4GB or 8GB), causing the inference runner process to crash (e.g., returning EOF or exit code -1). To prevent this, configure a 4GB swap space on the SSD:
+The larger model weights (such as `gemma4-it-q4` or 9B models) can exhaust the shared unified memory of a Jetson Orin (such as an Orin Nano 4GB or 8GB), causing the inference runner process to crash (e.g., returning EOF or exit code -1). To prevent this, configure a 4GB swap space on the SSD:
 ```bash
 # 1. Allocate a 4GB file
 sudo fallocate -l 4G /swapfile
@@ -181,21 +181,46 @@ sudo swapon /swapfile
 echo '/swapfile swap swap defaults 0 0' | sudo tee -a /etc/fstab
 ```
 
-#### Step C: Build the Optimized Custom Model (`gemma2-edge`)
-To avoid memory exhaustion or connection timeouts on unified memory hardware, run a custom model using a `Modelfile` to define a healthy context window (`num_ctx 2048`) and limit prediction length (`num_predict 512`) on the 2B model:
+#### Step B.1: Drop OS Page Cache (CUDA driver OOM Prevention)
+Nvidia's unified memory architecture on Tegra/Jetson shares the 8 GB RAM pool between CPU and GPU. Under continuous file indexing and telemetry logging, the Linux Page Cache (`buff/cache`) can consume almost all available memory pages. While normal user-space processes can evict page caches dynamically, the Nvidia CUDA driver requires contiguous physical pages and will fail immediately during model loading (`cudaMalloc failed: out of memory`) if it cannot find contiguous blocks.
+
+To prevent CUDA model loading errors, release cached pages before initializing the service or loading the model:
 ```bash
-# 1. Pull the 2B quantized weight map
-ollama pull gemma2:2b-instruct-q4_K_M
+# Flush page cache, dentries, and inodes
+sudo sync && sudo sysctl -w vm.drop_caches=3
+```
+
+#### Step C: Build the Optimized Custom Model (`gemma4-it-q4`)
+To run inference stably on unified memory hardware (such as an Nvidia Jetson Orin Nano 8GB), we use a pre-quantized `Q4_K_M` GGUF version of the 5.1B Instruct model from Hugging Face. This reduces the weight footprint to **3.2 GB** (consuming only **1.6 GB** in active GPU VRAM):
+
+```bash
+# 1. Download the quantized weights from Hugging Face
+curl -L -o /tmp/gemma-4-e2b-it-q4_k_m.gguf https://huggingface.co/FamilyDad/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf
 
 # 2. Create the Modelfile with optimized limits
 cat << 'EOF' > Modelfile
-FROM gemma2:2b-instruct-q4_K_M
-PARAMETER num_ctx 2048
-PARAMETER num_predict 512
+FROM /tmp/gemma-4-e2b-it-q4_k_m.gguf
+PARAMETER num_ctx 4096
 EOF
 
-# 3. Register the custom edge-optimized model
-ollama create gemma2-edge -f Modelfile
+# 3. Register the custom edge-optimized model in Ollama
+ollama create gemma4-it-q4 -f Modelfile
+```
+
+#### Step C.1: (Optional) Register the Multimodal Vision Model (`gemma4-vision-q4`)
+If you wish to test or run visual queries on your dashboard plots:
+```bash
+# 1. Download the multimodal vision projector adapter
+curl -L -o /tmp/mmproj-f16.gguf https://huggingface.co/FamilyDad/gemma-4-E2B-it-GGUF/resolve/main/mmproj-F16.gguf
+
+# 2. Create the Modelfile linking the weights and projector
+cat << 'EOF' > Modelfile_vision
+FROM /tmp/gemma-4-e2b-it-q4_k_m.gguf
+ADAPTER /tmp/mmproj-f16.gguf
+EOF
+
+# 3. Register the vision model
+ollama create gemma4-vision-q4 -f Modelfile_vision
 ```
 
 #### Step D: Jetson-Stats (`jtop`) Installation
@@ -312,7 +337,8 @@ The dashboard architecture has been completely refactored from a monolithic scri
 * **`dashboard.py`**: The main Tkinter Kiosk GUI application. It acts as a supervisor, launching the headless data acquisition threads and rendering Matplotlib canvases. It includes a built-in watchdog that detects API timeouts or serial crashes and safely heals/restarts the threads.
 * **`render_local_plot.py`**: A mock emulator that generates static PNGs of the dashboard using offline history CSVs, allowing developers to test UI layout changes without physical hardware.
 * **`stage_batch_summary.py`**: Background cron job that feeds bulk arrays of telemetry to Google Cloud Vertex AI to cache high-fidelity baseline LLM summaries.
-* **`stage_local_summary.py`**: Lightweight HTTP daemon built for Nvidia Jetson servers to receive telemetry arrays, perform frequency-domain spectral math, and run fast local LLM inferences (Gemma 2) on live deltas.
+* **`stage_local_summary.py`**: Lightweight HTTP daemon built for Nvidia Jetson servers to receive telemetry arrays, perform frequency-domain spectral math, and run fast local LLM inferences (`gemma4-it-q4`) on live deltas.
+* **`snr_analysis.py`**: Standalone mathematical helper module implementing DTFT spectrum and signal SNR calculators.
 
 ---
 

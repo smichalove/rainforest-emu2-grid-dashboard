@@ -14,6 +14,22 @@ from google.genai import types
 
 from dashboard_modules import ai
 
+# Path configuration relative to script directory to ensure portability
+SCRIPT_DIR: str = os.path.dirname(os.path.abspath(__file__))
+
+# Load local .env file dynamically if it exists
+env_path = os.path.join(SCRIPT_DIR, ".env")
+if os.path.exists(env_path):
+    try:
+        with open(env_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ[k.strip()] = v.strip().strip('"').strip("'")
+    except Exception as env_err:
+        print(f"Warning: Could not parse local .env file: {env_err}")
+
 # -------------------------------------------------------------
 # Configuration Constants (Pulling from Environment/Defaults)
 # -------------------------------------------------------------
@@ -21,9 +37,8 @@ LOCATION: str = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
 MODEL_NAME: str = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 BUCKET_NAME: str = os.environ.get("GEMINI_BATCH_BUCKET", "mutua-477100-batch-images")
 PROJECT_ID: str = os.environ.get("GOOGLE_CLOUD_PROJECT", "mutua-477100")
+BATCH_INTERVAL_HOURS: int = int(os.environ.get("BATCH_INTERVAL_HOURS", "4"))
 
-# Path configuration relative to script directory to ensure portability
-SCRIPT_DIR: str = os.path.dirname(os.path.abspath(__file__))
 GEMINI_SUMMARY_CACHE: str = os.path.join(SCRIPT_DIR, "gemini_summary.json")
 ACTIVE_BATCH_STATE: str = os.path.join(SCRIPT_DIR, "active_batch_job.json")
 
@@ -393,9 +408,9 @@ def main() -> None:
                             except ValueError:
                                 cache_time = datetime.datetime.strptime(ts_str.split(".")[0].replace("T", " "), "%Y-%m-%d %H:%M:%S")
                                 
-                        if cache_time and (datetime.datetime.now() - cache_time < datetime.timedelta(hours=4)):
+                        if cache_time and (datetime.datetime.now() - cache_time < datetime.timedelta(hours=BATCH_INTERVAL_HOURS)):
                             is_cache_fresh = True
-                            print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Local cache is still fresh (< 4h). Skipping run.")
+                            print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Local cache is still fresh (< {BATCH_INTERVAL_HOURS}h). Skipping run.")
                 except Exception as e:
                     print(f"Failed to check cache state: {e}")
             
@@ -405,8 +420,8 @@ def main() -> None:
         except Exception as e:
             print(f"Loop Exception: {e}")
             
-        print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Sleeping for 4 hours...")
-        time.sleep(4 * 3600)
+        print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Sleeping for {BATCH_INTERVAL_HOURS} hours...")
+        time.sleep(BATCH_INTERVAL_HOURS * 3600)
 
 if __name__ == "__main__":
     main()

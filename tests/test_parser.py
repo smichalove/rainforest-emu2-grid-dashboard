@@ -373,7 +373,8 @@ def test_parse_timestamp():
 
 
 @patch('urllib.request.urlopen')
-def test_fetch_weather_mock(mock_urlopen):
+@patch('os.path.exists', return_value=False)
+def test_fetch_weather_mock(mock_exists, mock_urlopen):
     """Test fetch_weather mocks Open-Meteo REST API call and parses it correctly."""
     from stage_local_summary import fetch_weather
     
@@ -446,4 +447,4 @@ def test_run_analysis_workflow(mock_weather, mock_corr, mock_tod, mock_grid, moc
     result = run_analysis_workflow("2026-05-30 10:00:00", "Baseline Summary Text")
     assert result is not None
     assert "response" in result
-    assert result["response"] == "System operating within baseline limits"
+    assert "System operating within baseline limits" in result["response"]

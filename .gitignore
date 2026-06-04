@@ -13,3 +13,16 @@ grid_history.csv
 gemini_summary.json
 solaredge_integration_plan.md
 merged_summary.json
+
+# Scratch and local testing files
+scratch/
+June 1, 2026/
+weather_cache.json
+active_local_job.json
+
+
+# Local verification reports / internal artifacts
+jetson_noise_proof.md
+jetson_prompt_verification.md
+plot_description_image11.md
+

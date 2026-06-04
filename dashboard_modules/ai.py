@@ -157,7 +157,7 @@ def fetch_gemini_summary(
     context_data: Dict[str, Any],
     local_llm: bool = False,
     ollama_endpoint: str = "http://localhost:11434/api/generate",
-    ollama_model: str = "gemma2-edge",
+    ollama_model: str = "gemma4-it-q4",
     gcp_project_id: Optional[str] = None
 ) -> str:
     """Executes a text summary query against Google GenAI (Gemini) or local Ollama.

@@ -14,7 +14,7 @@ The user has a battery storage system and a dual solar setup consisting of:
 2. Chillicon System (measured as Chillicon_Avg_kW / Chillicon_Energy_kWh when available). Note that battery discharging (positive Battery_Avg_kW) typically occurs either during a grid outage (supplying backup power to the home) or during a PSE Flex event (discharging stored energy back to the grid/house to mitigate peak load, reimbursed at $0.50 / kWh).
 3. SolarEdge Battery (measured as Battery_Avg_kW and Battery_SoC).
 4. Rainforest EMU-2 measures Net Grid Import/Export.
-5. Always add a summary for the last 24hrs
+5. Always add a summary of key statistics for the last 24hrs, formatted inline as a single comma-separated line (no vertical list).
 * After a PSE Flex event ends, the battery will immediately begin recharging from the grid or solar until it reaches full capacity. This charging phase draws approximately 0.96 kWh of additional energy (represented by negative Battery_Avg_kW values), which is normal expected system behavior and should be noted in the summary rather than treated as an unexplained home demand spike.
 
 Telemetry & Inference rules:
@@ -32,13 +32,13 @@ Data:
 {csv_data}
 
 Instructions:
-1. Provide a table or list of key statistics (Total Net Imported, Total Net Exported, SolarEdge Generated, Net Energy Cost/Credit, Peak Net Grid Demand, Peak SolarEdge PV, and inferred Chillicon contribution) based on the hourly historical data.
-2. Include a short 7 to 10 sentence paragraph summary analyzing the overall energy usage, SolarEdge performance, battery status/behavior, inferred Chillicon performance/trends, cumulative totals, and estimated PSE billing impact.
-3. Keep the total output under 15 lines.
-4. Do NOT include markdown code blocks, bold text (**), asterisks, or formatting other than plain text.
-5. Be concise and precise.
-6. Explicitly state the date range of the data analyzed (e.g., "Data analyzed from [Data Start] to [Data End]").
-7. Always add the time and date of the last data point exactly as provided as the last line of the summary.
+1. Provide the overall key statistics (Total Net Imported, Total Net Exported, SolarEdge Generated, Net Energy Cost/Credit, Peak Net Grid Demand, Peak SolarEdge PV, and inferred Chillicon contribution) inline as a single comma-separated line. Do NOT format as a vertical list or table. Start the line with "Overall Key Statistics:".
+2. Provide the key statistics for the last 24 hours (Total Net Imported, Total Net Exported, SolarEdge Generated, Net Energy Cost/Credit, Peak Net Grid Demand, Peak SolarEdge PV, and inferred Chillicon contribution) inline as a single comma-separated line. Do NOT format as a vertical list or table. Start the line with "Last 24 Hours Key Statistics:".
+3. Include a short 4 to 6 sentence paragraph summary analyzing the overall energy usage, SolarEdge performance, battery status/behavior, inferred Chillicon performance/trends, cumulative totals, and estimated PSE billing impact. Start the paragraph with "Overall Summary:".
+4. Keep the total output under 10 lines. Do NOT include any empty lines between these sections.
+5. Do NOT include markdown code blocks, bold text (**), asterisks, or formatting other than plain text.
+6. Be concise and precise.
+7. Explicitly state the date range of the data analyzed (e.g., "Data analyzed from [Data Start] to [Data End]") at the top of the output.
+8. Always add the time and date of the last data point exactly as provided as the last line of the summary.
 
-Data Start Time: {first_data_time}
-last data point date and time is: {last_data_time}
+Data Start Time: {first_data_time}  lastdate / time is: {last_data_time}

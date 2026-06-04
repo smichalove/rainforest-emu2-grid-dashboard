@@ -195,7 +195,11 @@ class GridDashboard(tk.Tk):
         self.jetson_host = os.environ.get("JETSON_HOST", "localhost").strip()
         self.jetson_port = os.environ.get("JETSON_PORT", "5000").strip()
         self.jetson_user = os.environ.get("JETSON_USER", "steven").strip()
-        logging.info(f"Initialized LLM mode: '{self.llm_mode}' (Jetson: {self.jetson_host}:{self.jetson_port})")
+        try:
+            self.batch_interval_hours = int(os.environ.get("BATCH_INTERVAL_HOURS", "4").strip())
+        except ValueError:
+            self.batch_interval_hours = 4
+        logging.info(f"Initialized LLM mode: '{self.llm_mode}' (Jetson: {self.jetson_host}:{self.jetson_port}, Batch Interval: {self.batch_interval_hours}h)")
 
         # Build clients
         self.se_client = solar.SolarEdgeClient(
@@ -803,7 +807,7 @@ class GridDashboard(tk.Tk):
             prompt_template_path=prompt_path,
             context_data=context,
             local_llm=self.local_llm,
-            ollama_model=os.environ.get("EDGE_MODEL", "gemma2-edge"),
+            ollama_model=os.environ.get("EDGE_MODEL", "gemma4-it-q4"),
             gcp_project_id=os.environ.get("GCP_PROJECT")
         )
 
@@ -849,17 +853,47 @@ class GridDashboard(tk.Tk):
         self.update_chart(status_text, status_fg)
 
     def update_weather_display(self) -> None:
-        """Refreshes the weather display text label."""
-        try:
-            live_weather = weather.fetch_live_weather()
-            temp = live_weather.get("temp")
-            wcode = live_weather.get("weather_code")
-            cloud_cover = live_weather.get("cloud_cover")
-        except Exception as e:
-            logging.error(f"Error fetching live weather in update_weather_display: {e}")
-            temp, wcode, cloud_cover = None, None, None
+        """Refreshes the weather display text label with caching to prevent rate limiting."""
+        if not hasattr(self, 'last_weather_fetch'):
+            self.last_weather_fetch = 0.0
+            self.cached_weather = {}
+            self.weather_backoff_delay = 10.0
+            self.last_weather_attempt = 0.0
+
+        now_time = time.time()
+        time_since_last_fetch = now_time - self.last_weather_fetch
+        time_since_last_attempt = now_time - self.last_weather_attempt
         
-        # Load from cache file if live endpoint failed
+        should_fetch = False
+        if self.cached_weather:
+            # Weather fetch interval matches Jetson stager local render cadence (15 minutes)
+            if time_since_last_fetch > 900.0:
+                should_fetch = True
+        else:
+            if time_since_last_attempt > self.weather_backoff_delay:
+                should_fetch = True
+
+        if should_fetch:
+            self.last_weather_attempt = now_time
+            try:
+                live_weather = weather.fetch_live_weather()
+                if live_weather:  # Only update cache if we got a valid response
+                    self.cached_weather = live_weather
+                    self.last_weather_fetch = now_time
+                    self.weather_backoff_delay = 10.0  # Reset backoff on success
+                else:
+                    self.weather_backoff_delay = min(self.weather_backoff_delay * 2, 900.0)
+                    logging.warning(f"Weather API returned empty. Backing off for {self.weather_backoff_delay:.1f}s.")
+            except Exception as e:
+                self.weather_backoff_delay = min(self.weather_backoff_delay * 2, 900.0)
+                logging.error(f"Error fetching live weather in update_weather_display: {e}. Backing off for {self.weather_backoff_delay:.1f}s.")
+
+        live_weather = self.cached_weather
+        temp = live_weather.get("temp")
+        wcode = live_weather.get("weather_code")
+        cloud_cover = live_weather.get("cloud_cover")
+        
+        # Load from cache file if live endpoint failed or cached weather is empty
         if temp is None or wcode is None:
             cache = io.read_safe_json(self.summary_cache_file)
             metrics = cache.get("metrics", {})
@@ -871,8 +905,18 @@ class GridDashboard(tk.Tk):
                 cc = float(cloud_cover)
                 wcode = 0 if cc < 10 else (1 if cc < 30 else (2 if cc < 60 else 3))
                 
-        temp_str = f"{temp:.1f}°C" if temp is not None else "N/A"
-        
+        # In-memory backup of the last valid weather values to prevent N/A regressions
+        if not hasattr(self, 'last_valid_temp'):
+            self.last_valid_temp = None
+        if not hasattr(self, 'last_valid_sky_str'):
+            self.last_valid_sky_str = None
+
+        if temp is not None:
+            temp_str = f"{temp:.1f}°C"
+            self.last_valid_temp = temp_str
+        else:
+            temp_str = self.last_valid_temp if self.last_valid_temp is not None else "N/A"
+            
         if wcode is not None:
             sky_map = {
                 0: "Clear", 1: "Mainly Clear", 2: "Partly Cloudy", 3: "Overcast",
@@ -883,8 +927,9 @@ class GridDashboard(tk.Tk):
             }
             sky_desc = sky_map.get(wcode, "Cloudy")
             sky_str = f"{sky_desc} ({int(cloud_cover)}%)" if cloud_cover is not None else sky_desc
+            self.last_valid_sky_str = sky_str
         else:
-            sky_str = "N/A"
+            sky_str = self.last_valid_sky_str if self.last_valid_sky_str is not None else "N/A"
             
         if self.weather_label is not None:
             self.weather_label.config(text=f"{temp_str} | {sky_str}")
@@ -955,18 +1000,24 @@ class GridDashboard(tk.Tk):
                     while current_slot <= now:
                         bar_times.append(current_slot)
                         
-                        # PV 1
+                        # Find closest SolarEdge reading within ±15 minutes
                         se_val = 0.0
+                        min_diff_se = datetime.timedelta(minutes=15)
                         for ts, p in zip(se_timestamps_copy, se_power_copy):
-                            if ts <= current_slot and current_slot - ts <= datetime.timedelta(minutes=30):
+                            diff = abs(ts - current_slot)
+                            if diff < min_diff_se:
+                                min_diff_se = diff
                                 se_val = p
                         se_heights.append(se_val)
                         
-                        # PV 2
+                        # Find closest Chillicon reading within ±15 minutes
                         ch_val = 0.0
                         if not self.chilicon_off:
+                            min_diff_ch = datetime.timedelta(minutes=15)
                             for ts, p in zip(chilicon_timestamps_copy, chilicon_power_copy):
-                                if ts <= current_slot and current_slot - ts <= datetime.timedelta(minutes=30):
+                                diff = abs(ts - current_slot)
+                                if diff < min_diff_ch:
+                                    min_diff_ch = diff
                                     ch_val = p
                         ch_heights.append(ch_val)
                         
@@ -1082,12 +1133,16 @@ class GridDashboard(tk.Tk):
         if self.current_slide == 1:
             full_text = self.baseline_text
             if self.local_delta_text:
-                full_text += "\n\n" + self.local_delta_text
+                full_text += "\n" + self.local_delta_text
             if self.summary_text_obj is not None:
-                self.summary_text_obj.set_text(self.wrap_text(full_text))
+                self.summary_text_obj.set_text(self.wrap_text(full_text).replace('$', '\\$'))
         else:
             if self.summary_text_obj_freq is not None:
-                self.summary_text_obj_freq.set_text(self.wrap_text(self.local_dft_text))
+                self.summary_text_obj_freq.set_text(self.wrap_text(self.local_dft_text).replace('$', '\\$'))
+        
+        # Redraw the canvas to ensure text updates display immediately
+        if hasattr(self, 'canvas') and self.canvas is not None:
+            self.canvas.draw_idle()
 
     def wrap_text(self, text: str, width: int = 100) -> str:
         """Standard word wrapping formatting utility."""
@@ -1143,7 +1198,8 @@ class GridDashboard(tk.Tk):
                 url = f"http://{self.jetson_host}:{self.jetson_port}/api/analyze"
                 payload = {
                     "baseline_timestamp": ts_str,
-                    "baseline_text": clean_baseline
+                    "baseline_text": clean_baseline,
+                    "batch_interval_hours": self.batch_interval_hours
                 }
                 req_data = json.dumps(payload).encode('utf-8')
                 req = urllib.request.Request(
@@ -1159,14 +1215,30 @@ class GridDashboard(tk.Tk):
                         res_data = json.loads(res_body)
                         llm_response = res_data.get("response", "").strip()
                         dft_explanation = res_data.get("dft_explanation", "").strip()
+                        metrics = res_data.get("metrics", {})
                         
                         if llm_response:
                             checked_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            delta_text = f"[Live Local Delta (Jetson) | Checked: {checked_time}]:\n{llm_response}"
+                            delta_text = f"[Live Local Delta (Jetson) | Checked: {checked_time}]: {llm_response}"
                             
                             self.local_delta_text = delta_text
                             if dft_explanation:
                                 self.local_dft_text = dft_explanation
+                            
+                            # Merge metrics, summary, and dft_explanation into the local cache file to prevent race condition/overwriting
+                            try:
+                                cache_data = io.read_safe_json(self.summary_cache_file)
+                                if not cache_data:
+                                    cache_data = {}
+                                if metrics:
+                                    cache_data["metrics"] = metrics
+                                cache_data["dft_explanation"] = dft_explanation
+                                cache_data["summary"] = f"{clean_baseline}\n{delta_text}"
+                                io.write_safe_json(self.summary_cache_file, cache_data)
+                                logging.info("Local Delta Loop: Successfully updated cached summary, DFT explanation, and metrics.")
+                            except Exception as cache_err:
+                                logging.error(f"Local Delta Loop: Failed to save to cache: {cache_err}")
+                                    
                             self.ui_queue.put(self.update_summary_display)
                             logging.info("Local Delta Loop: Successfully queued GUI summary update.")
                         else:

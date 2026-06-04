@@ -4,9 +4,14 @@
 
 set -u
 
-JETSON_HOST="192.168.8.68"
-JETSON_USER="steven"
-BACKUP_DIR="~/rainforest-emu2-grid-dashboard/backups"
+# Read environment variables if available, with fallbacks
+JETSON_HOST="${JETSON_HOST:-192.168.8.68}"
+JETSON_USER="${JETSON_USER:-grid_backup}"
+if [ -z "${JETSON_BACKUP_PATH:-}" ]; then
+    BACKUP_DIR="/home/grid_backup/backups"
+else
+    BACKUP_DIR="${JETSON_BACKUP_PATH}"
+fi
 LOCAL_DIR="/home/steven/rainforest-emu2-grid-dashboard"
 LOG_FILE="${LOCAL_DIR}/scratch/backup_history.log"
 
