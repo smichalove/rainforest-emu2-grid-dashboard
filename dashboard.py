@@ -95,6 +95,7 @@ class GridDashboard(tk.Tk):
     history_file: str = ""
     se_history_file: str = ""
     se_battery_history_file: str = ""
+    se_flow_history_file: str = ""
     chilicon_history_file: str = ""
     summary_cache_file: str = ""
     llm_mode: str = "direct"
@@ -151,6 +152,8 @@ class GridDashboard(tk.Tk):
         self.se_battery_timestamps = []
         self.se_battery_power = []
         self.se_battery_soc = []
+        self.se_load_power_timestamps = []
+        self.se_load_power = []
 
         # Chillicon credentials & arrays
         self.chilicon_username = None
@@ -179,11 +182,13 @@ class GridDashboard(tk.Tk):
         self.local_dft_text = "Awaiting Frequency Domain Analysis..."
         self.baseline_text = ""
         self.local_delta_text = ""
+        self.cached_full_history_spectrum: Dict[str, Any] = {}
 
         # Resolve paths
         self.history_file = os.path.join(script_dir, 'grid_history.csv')
         self.se_history_file = os.path.join(script_dir, 'solaredge_history.csv')
         self.se_battery_history_file = os.path.join(script_dir, 'solaredge_battery_history.csv')
+        self.se_flow_history_file = os.path.join(script_dir, 'solaredge_flow_history.csv')
         self.chilicon_history_file = os.path.join(script_dir, 'chilicon_history.csv')
         self.summary_cache_file = os.path.join(script_dir, 'gemini_summary.json')
 
@@ -206,7 +211,8 @@ class GridDashboard(tk.Tk):
             api_key=self.solaredge_api_key or "",
             site_id=self.solaredge_site_id or "",
             history_file=self.se_history_file,
-            battery_history_file=self.se_battery_history_file
+            battery_history_file=self.se_battery_history_file,
+            flow_history_file=self.se_flow_history_file
         )
         self.ch_client = solar.ChilliconClient(
             username=self.chilicon_username or "",
@@ -301,9 +307,11 @@ class GridDashboard(tk.Tk):
                 if client is None:
                     path = self.se_history_file if self.se_history_file else os.path.join(script_dir, 'solaredge_history.csv')
                     bat_path = self.se_battery_history_file if self.se_battery_history_file else os.path.join(script_dir, 'solaredge_battery_history.csv')
-                    client = solar.SolarEdgeClient("", "", path, bat_path)
+                    flow_path = self.se_flow_history_file if self.se_flow_history_file else os.path.join(script_dir, 'solaredge_flow_history.csv')
+                    client = solar.SolarEdgeClient("", "", path, bat_path, flow_path)
                 
                 self.se_timestamps, self.se_power, self.se_battery_timestamps, self.se_battery_power, self.se_battery_soc = client.load_history()
+                self.se_load_power_timestamps, self.se_load_power = client.load_flow_history()
         except Exception as e:
             logging.error(f"Resilient fallback error in load_solaredge_history: {e}")
 
@@ -332,6 +340,7 @@ class GridDashboard(tk.Tk):
                 ts_str = data.get("timestamp")
                 summary = data.get("summary", "")
                 dft_explanation = data.get("dft_explanation", "")
+                self.cached_full_history_spectrum = data.get("full_history_spectrum", {})
                 
                 if ts_str and summary:
                     try:
@@ -363,7 +372,8 @@ class GridDashboard(tk.Tk):
             if client is None:
                 path = self.se_history_file if self.se_history_file else os.path.join(script_dir, 'solaredge_history.csv')
                 bat_path = self.se_battery_history_file if self.se_battery_history_file else os.path.join(script_dir, 'solaredge_battery_history.csv')
-                client = solar.SolarEdgeClient(self.solaredge_api_key or "", self.solaredge_site_id or "", path, bat_path)
+                flow_path = self.se_flow_history_file if self.se_flow_history_file else os.path.join(script_dir, 'solaredge_flow_history.csv')
+                client = solar.SolarEdgeClient(self.solaredge_api_key or "", self.solaredge_site_id or "", path, bat_path, flow_path)
             
             res = client.fetch_data()
             if res:
@@ -373,6 +383,8 @@ class GridDashboard(tk.Tk):
                     self.se_battery_timestamps.append(res["timestamp"])
                     self.se_battery_power.append(res["battery_power"])
                     self.se_battery_soc.append(res["battery_soc"])
+                    self.se_load_power_timestamps.append(res["timestamp"])
+                    self.se_load_power.append(res["load_power"])
                 self.solar_bars_dirty = True
                 if self.sub_status_label is not None:
                     self.ui_queue.put(lambda: self.sub_status_label.config(text=f"SolarEdge PV: {res['pv_power']:.3f} kW"))
@@ -422,12 +434,24 @@ class GridDashboard(tk.Tk):
     def align_and_compute_spectrum(self) -> Tuple[List[float], List[float], List[float], List[float], List[float]]:
         """Computes spectral parameters (delegate)."""
         try:
+            # If we have precomputed full-history spectrum from Jetson, use it directly!
+            if self.cached_full_history_spectrum and "freqs" in self.cached_full_history_spectrum:
+                spec = self.cached_full_history_spectrum
+                return (
+                    spec["freqs"],
+                    spec["grid_amp"],
+                    spec["solar_amp"],
+                    spec["expected_solar_amp"],
+                    spec["consumption_amp"]
+                )
+            
             with self.data_lock:
                 g_ts, g_u = list(self.timestamps), list(self.usage)
                 se_ts, se_p = list(self.se_timestamps), list(self.se_power)
                 ch_ts, ch_p = list(self.chilicon_timestamps), list(self.chilicon_power)
+                se_bat_ts, se_bat_p = list(self.se_battery_timestamps), list(self.se_battery_power)
             return spectral.align_and_compute_spectra(
-                g_ts, g_u, se_ts, se_p, ch_ts, ch_p, self.weather_map, self.chilicon_off
+                g_ts, g_u, se_ts, se_p, ch_ts, ch_p, self.weather_map, self.chilicon_off, se_bat_ts, se_bat_p
             )
         except Exception as e:
             logging.error(f"Resilient fallback error in align_and_compute_spectrum: {e}")
@@ -569,6 +593,7 @@ class GridDashboard(tk.Tk):
         # LineCollection for Slide 1 Grid plot
         self.lc = LineCollection([], linewidths=1.8, zorder=2)
         self.ax.add_collection(self.lc)
+        self.load_line, = self.ax.plot([], [], color=config.CONSUMPTION_COLOR, label='Appliance Load (SE Approx)', linewidth=1.2, alpha=0.85, zorder=1.8)
 
         # Slide 2 Axis (Frequency Domain)
         self.ax_freq = self.fig.add_axes(rect, facecolor='black')
@@ -948,6 +973,8 @@ class GridDashboard(tk.Tk):
                 se_power_copy = list(self.se_power)
                 chilicon_timestamps_copy = list(self.chilicon_timestamps)
                 chilicon_power_copy = list(self.chilicon_power)
+                se_load_power_timestamps_copy = list(self.se_load_power_timestamps)
+                se_load_power_copy = list(self.se_load_power)
 
             if len(usage_copy) > 1:
                 x_nums = mdates.date2num(timestamps_copy)
@@ -968,6 +995,11 @@ class GridDashboard(tk.Tk):
                 self.lc.set_linewidths(widths)
             else:
                 self.lc.set_segments([])
+
+            if len(se_load_power_copy) > 1:
+                self.load_line.set_data(se_load_power_timestamps_copy, se_load_power_copy)
+            else:
+                self.load_line.set_data([], [])
 
             now = datetime.datetime.now()
             start_time = now - datetime.timedelta(hours=24)
@@ -1225,7 +1257,7 @@ class GridDashboard(tk.Tk):
                             if dft_explanation:
                                 self.local_dft_text = dft_explanation
                             
-                            # Merge metrics, summary, and dft_explanation into the local cache file to prevent race condition/overwriting
+                            # Merge metrics, summary, dft_explanation, and full_history_spectrum into the local cache file
                             try:
                                 cache_data = io.read_safe_json(self.summary_cache_file)
                                 if not cache_data:
@@ -1234,8 +1266,12 @@ class GridDashboard(tk.Tk):
                                     cache_data["metrics"] = metrics
                                 cache_data["dft_explanation"] = dft_explanation
                                 cache_data["summary"] = f"{clean_baseline}\n{delta_text}"
+                                spec_data = res_data.get("full_history_spectrum")
+                                if spec_data:
+                                    cache_data["full_history_spectrum"] = spec_data
+                                    self.cached_full_history_spectrum = spec_data
                                 io.write_safe_json(self.summary_cache_file, cache_data)
-                                logging.info("Local Delta Loop: Successfully updated cached summary, DFT explanation, and metrics.")
+                                logging.info("Local Delta Loop: Successfully updated cached summary, DFT explanation, metrics, and spectrum.")
                             except Exception as cache_err:
                                 logging.error(f"Local Delta Loop: Failed to save to cache: {cache_err}")
                                     

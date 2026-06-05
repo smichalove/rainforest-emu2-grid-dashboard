@@ -49,6 +49,8 @@ class OfflineViewer(tk.Tk):
         self.se_battery_timestamps: List[datetime.datetime] = []
         self.se_battery_power: List[float] = []
         self.se_battery_soc: List[float] = []
+        self.se_load_power_timestamps: List[datetime.datetime] = []
+        self.se_load_power: List[float] = []
         self.chilicon_power: List[float] = []
         self.chilicon_timestamps: List[datetime.datetime] = []
         self.chilicon_energy: List[float] = []
@@ -57,11 +59,23 @@ class OfflineViewer(tk.Tk):
         self.history_file = os.path.join(SCRIPT_DIR, 'grid_history.csv')
         self.se_history_file = os.path.join(SCRIPT_DIR, 'solaredge_history.csv')
         self.se_battery_history_file = os.path.join(SCRIPT_DIR, 'solaredge_battery_history.csv')
+        self.se_flow_history_file = os.path.join(SCRIPT_DIR, 'solaredge_flow_history.csv')
         self.chilicon_history_file = os.path.join(SCRIPT_DIR, 'chilicon_history.csv')
         self.summary_cache_file = os.path.join(SCRIPT_DIR, 'gemini_summary.json')
 
+        # Check command line for full history
+        self.cutoff_hours = 24
+        for arg in sys.argv:
+            if arg.startswith("--history-hours="):
+                try:
+                    self.cutoff_hours = int(arg.split("=")[1])
+                except ValueError:
+                    pass
+            elif arg == "--full-history":
+                self.cutoff_hours = 999999
+
         # Load historical data
-        self.load_history_files()
+        self.load_history_files(self.cutoff_hours)
 
         # Small banner hardware logos banner
         self.logo_image_tk: Optional[ImageTk.PhotoImage] = None
@@ -85,6 +99,7 @@ class OfflineViewer(tk.Tk):
         self.local_dft_text: str = "Awaiting Frequency Domain Analysis..."
         self.baseline_text: str = ""
         self.local_delta_text: str = ""
+        self.cached_full_history_spectrum: Dict[str, Any] = {}
 
         # Load cached summaries
         self.load_cached_summary()
@@ -103,17 +118,18 @@ class OfflineViewer(tk.Tk):
         """Lock for safe data synchronization."""
         return self._data_lock
 
-    def load_history_files(self) -> None:
+    def load_history_files(self, cutoff_hours: int = 24) -> None:
         """Loads historical data arrays from CSV files."""
-        self.timestamps, self.usage = telemetry.load_grid_history(self.history_file)
+        self.timestamps, self.usage = telemetry.load_grid_history(self.history_file, cutoff_hours=cutoff_hours)
         
-        # SolarEdge PV & battery history
-        se_client = solar.SolarEdgeClient("", "", self.se_history_file, self.se_battery_history_file)
-        self.se_timestamps, self.se_power, self.se_battery_timestamps, self.se_battery_power, self.se_battery_soc = se_client.load_history()
+        # SolarEdge PV, battery, and flow history
+        se_client = solar.SolarEdgeClient("", "", self.se_history_file, self.se_battery_history_file, self.se_flow_history_file)
+        self.se_timestamps, self.se_power, self.se_battery_timestamps, self.se_battery_power, self.se_battery_soc = se_client.load_history(cutoff_hours=cutoff_hours)
+        self.se_load_power_timestamps, self.se_load_power = se_client.load_flow_history(cutoff_hours=cutoff_hours)
 
         # Chillicon PV history
         ch_client = solar.ChilliconClient("", "", "", self.chilicon_history_file)
-        self.chilicon_timestamps, self.chilicon_power, self.chilicon_energy = ch_client.load_history()
+        self.chilicon_timestamps, self.chilicon_power, self.chilicon_energy = ch_client.load_history(cutoff_hours=cutoff_hours)
 
         # Weather defaults
         self.weather_map = weather.fetch_historical_weather()
@@ -210,6 +226,7 @@ class OfflineViewer(tk.Tk):
 
         self.lc = LineCollection([], linewidths=1.8, zorder=2)
         self.ax.add_collection(self.lc)
+        self.load_line, = self.ax.plot([], [], color=config.CONSUMPTION_COLOR, label='Appliance Load (SE Approx)', linewidth=1.2, alpha=0.85, zorder=1.8)
 
         # Slide 2 Axis
         self.ax_freq = self.fig.add_axes(rect, facecolor='black')
@@ -245,6 +262,7 @@ class OfflineViewer(tk.Tk):
                 
         summary = data.get("summary", "")
         dft_explanation = data.get("dft_explanation", "")
+        self.cached_full_history_spectrum = data.get("full_history_spectrum", {})
         
         if summary:
             marker = "[Live Local Delta (Jetson)"
@@ -385,6 +403,8 @@ class OfflineViewer(tk.Tk):
                 se_power_copy = list(self.se_power)
                 chilicon_timestamps_copy = list(self.chilicon_timestamps)
                 chilicon_power_copy = list(self.chilicon_power)
+                se_load_power_timestamps_copy = list(self.se_load_power_timestamps)
+                se_load_power_copy = list(self.se_load_power)
 
             if len(usage_copy) > 1:
                 x_nums = mdates.date2num(timestamps_copy)
@@ -405,6 +425,11 @@ class OfflineViewer(tk.Tk):
                 self.lc.set_linewidths(widths)
             else:
                 self.lc.set_segments([])
+
+            if len(se_load_power_copy) > 1:
+                self.load_line.set_data(se_load_power_timestamps_copy, se_load_power_copy)
+            else:
+                self.load_line.set_data([], [])
 
             # Range limit ending at most recent reading
             end_time = timestamps_copy[-1] if timestamps_copy else datetime.datetime.now()
@@ -479,17 +504,26 @@ class OfflineViewer(tk.Tk):
             self.ax_freq.set_xlabel('Frequency (Cycles per Day)', color='white', fontsize=9)
             self.ax_freq.set_ylabel('Spectral Amplitude (kW)', color='white', fontsize=9)
 
-            with self.data_lock:
-                grid_u = list(self.usage)
-                grid_ts = list(self.timestamps)
-                se_ts = list(self.se_timestamps)
-                se_p = list(self.se_power)
-                ch_ts = list(self.chilicon_timestamps)
-                ch_p = list(self.chilicon_power)
+            # If we have precomputed full-history spectrum from Jetson, use it!
+            if self.cached_full_history_spectrum and "freqs" in self.cached_full_history_spectrum:
+                spec = self.cached_full_history_spectrum
+                freqs = spec["freqs"]
+                grid_amp = spec["grid_amp"]
+                solar_amp = spec["solar_amp"]
+                expected_solar_amp = spec["expected_solar_amp"]
+                consumption_amp = spec["consumption_amp"]
+            else:
+                with self.data_lock:
+                    grid_u = list(self.usage)
+                    grid_ts = list(self.timestamps)
+                    se_ts = list(self.se_timestamps)
+                    se_p = list(self.se_power)
+                    ch_ts = list(self.chilicon_timestamps)
+                    ch_p = list(self.chilicon_power)
 
-            freqs, grid_amp, solar_amp, expected_solar_amp, consumption_amp = spectral.align_and_compute_spectra(
-                grid_ts, grid_u, se_ts, se_p, ch_ts, ch_p, self.weather_map, self.chilicon_off
-            )
+                freqs, grid_amp, solar_amp, expected_solar_amp, consumption_amp = spectral.align_and_compute_spectra(
+                    grid_ts, grid_u, se_ts, se_p, ch_ts, ch_p, self.weather_map, self.chilicon_off
+                )
 
             if freqs:
                 self.ax_freq.plot(freqs, grid_amp, color=config.IMPORT_COLOR, label='Grid Spectrum', linewidth=1.5)
@@ -560,7 +594,7 @@ class OfflineViewer(tk.Tk):
         import subprocess
         try:
             subprocess.run(["scp", "steven@rainforestpi:~/rainforest-emu2-grid-dashboard/*.csv", "steven@rainforestpi:~/rainforest-emu2-grid-dashboard/*.json", SCRIPT_DIR], timeout=15)
-            self.load_history_files()
+            self.load_history_files(self.cutoff_hours)
             self.load_cached_summary()
         except Exception as e:
             logging.error(f"Failed to sync remote telemetry: {e}")
@@ -601,13 +635,15 @@ class OfflineViewer(tk.Tk):
         h = self.winfo_height()
         bbox = (x, y, x + w, y + h)
         
+        suffix = "_full" if self.cutoff_hours > 48 else ""
+        
         # Save Slide 1
         self.current_slide = 1
         self.update_slide_visibility()
         self.update_idletasks()
         self.update()
         time.sleep(0.5)
-        ImageGrab.grab(bbox).convert('RGB').save(os.path.join(SCRIPT_DIR, "dashboard_preview.jpeg"), quality=95)
+        ImageGrab.grab(bbox).convert('RGB').save(os.path.join(SCRIPT_DIR, f"dashboard_preview{suffix}.jpeg"), quality=95)
         
         # Save Slide 2
         self.current_slide = 2
@@ -615,7 +651,7 @@ class OfflineViewer(tk.Tk):
         self.update_idletasks()
         self.update()
         time.sleep(0.5)
-        ImageGrab.grab(bbox).convert('RGB').save(os.path.join(SCRIPT_DIR, "dashboard_preview_slide2.jpeg"), quality=95)
+        ImageGrab.grab(bbox).convert('RGB').save(os.path.join(SCRIPT_DIR, f"dashboard_preview_slide2{suffix}.jpeg"), quality=95)
 
 
 if __name__ == "__main__":

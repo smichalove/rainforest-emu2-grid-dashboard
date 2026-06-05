@@ -52,6 +52,7 @@ def generate_hourly_summaries(
     Returns:
         A compact CSV string where each row represents one hour of aligned data.
     """
+    import os
     grid_rows = read_clean_csv(grid_history_path)
     if not grid_rows:
         logging.warning(f"No grid history found at {grid_history_path}.")
@@ -105,15 +106,31 @@ def generate_hourly_summaries(
             except ValueError:
                 continue
 
+    se_flow_hourly_data: Dict[str, List[float]] = defaultdict(list)
+    se_flow_history_path = se_history_path.replace("solaredge_history.csv", "solaredge_flow_history.csv")
+    if os.path.exists(se_flow_history_path):
+        se_flow_rows = read_clean_csv(se_flow_history_path)
+        for row in se_flow_rows:
+            if len(row) >= 3:
+                ts_str = row[0]
+                val_str = row[2]  # load_power is at index 2
+                hour_key = ts_str[:13].replace('T', ' ') + ":00"
+                try:
+                    se_flow_hourly_data[hour_key].append(float(val_str))
+                except ValueError:
+                    continue
+
     lines: List[str] = [
         "Hour,Avg_kW,Min_kW,Max_kW,Median_kW,SE_Avg_kW,SE_Max_kW,SE_Energy_kWh,"
-        "Battery_Avg_kW,Battery_SoC,Chillicon_Avg_kW,Chillicon_Max_kW,Chillicon_Energy_kWh"
+        "Battery_Avg_kW,Battery_SoC,Chillicon_Avg_kW,Chillicon_Max_kW,Chillicon_Energy_kWh,"
+        "Load_Avg_kW,Load_Max_kW,Load_Energy_kWh"
     ]
     all_hours: List[str] = sorted(list(set(
         list(hourly_data.keys()) + 
         list(se_hourly_data.keys()) + 
         list(se_battery_hourly_data.keys()) + 
-        list(chilicon_hourly_data.keys())
+        list(chilicon_hourly_data.keys()) +
+        list(se_flow_hourly_data.keys())
     )))
     
     for hour in all_hours:
@@ -121,6 +138,7 @@ def generate_hourly_summaries(
         se_vals = se_hourly_data.get(hour, [])
         bat_vals = se_battery_hourly_data.get(hour, [])
         ch_vals = chilicon_hourly_data.get(hour, [])
+        se_flow_vals = se_flow_hourly_data.get(hour, [])
         
         avg_kw = sum(vals) / len(vals) if vals else 0.0
         min_kw = min(vals) if vals else 0.0
@@ -142,11 +160,16 @@ def generate_hourly_summaries(
         ch_avg_kw = sum(ch_vals) / len(ch_vals) if ch_vals else 0.0
         ch_max_kw = max(ch_vals) if ch_vals else 0.0
         ch_energy_kwh = ch_avg_kw * 1.0
+
+        load_avg_kw = sum(se_flow_vals) / len(se_flow_vals) if se_flow_vals else 0.0
+        load_max_kw = max(se_flow_vals) if se_flow_vals else 0.0
+        load_energy_kwh = load_avg_kw * 1.0
             
         lines.append(
             f"{hour},{avg_kw:.3f},{min_kw:.3f},{max_kw:.3f},{med_kw:.3f},{se_avg_kw:.3f},"
             f"{se_max_kw:.3f},{se_energy_kwh:.3f},{bat_avg_kw:.3f},{bat_avg_soc:.1f},"
-            f"{ch_avg_kw:.3f},{ch_max_kw:.3f},{ch_energy_kwh:.3f}"
+            f"{ch_avg_kw:.3f},{ch_max_kw:.3f},{ch_energy_kwh:.3f},"
+            f"{load_avg_kw:.3f},{load_max_kw:.3f},{load_energy_kwh:.3f}"
         )
         
     return "\n".join(lines)

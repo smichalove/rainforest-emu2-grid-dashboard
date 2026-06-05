@@ -87,19 +87,23 @@ def align_and_compute_spectra(
     chilicon_timestamps: List[datetime.datetime],
     chilicon_power: List[float],
     weather_map: Dict[str, Dict[str, Any]],
-    chilicon_off: bool = False
+    chilicon_off: bool = False,
+    se_battery_timestamps: Optional[List[datetime.datetime]] = None,
+    se_battery_power: Optional[List[float]] = None
 ) -> Tuple[List[float], List[float], List[float], List[float], List[float]]:
     """Aligns historical telemetry on a uniform hourly grid and computes the DTFT spectrum.
 
     Args:
-        timestamps: Grid timestamps.
-        usage: Grid usage demand (kW).
+        timestamps: Grid timestamps (from Rainforest EMU-2 utility meter).
+        usage: Grid usage demand (kW) (from Rainforest EMU-2 utility meter).
         se_timestamps: SolarEdge timestamps.
         se_power: SolarEdge generation (kW).
         chilicon_timestamps: Chillicon timestamps.
         chilicon_power: Chillicon generation (kW).
         weather_map: Daily weather coordinates map.
         chilicon_off: If Chillicon polling is disabled.
+        se_battery_timestamps: SolarEdge battery timestamps.
+        se_battery_power: SolarEdge battery power (kW, positive = discharging, negative = charging).
 
     Returns:
         A tuple of five lists:
@@ -142,6 +146,18 @@ def align_and_compute_spectra(
             ch_map[key] = []
         ch_map[key].append(val)
         
+    # Align battery values
+    bat_map: Dict[str, List[float]] = {}
+    use_battery = False
+    if se_battery_timestamps and se_battery_power:
+        for ts, val in zip(se_battery_timestamps, se_battery_power):
+            key = ts.strftime("%Y-%m-%d %H:00")
+            if key not in bat_map:
+                bat_map[key] = []
+            bat_map[key].append(val)
+        if bat_map:
+            use_battery = True
+
     grid_raw: List[Optional[float]] = []
     solar_raw: List[Optional[float]] = []
     expected_solar_series: List[float] = []
@@ -189,8 +205,20 @@ def align_and_compute_spectra(
     grid_series = interpolate_gaps(grid_raw)
     solar_series = interpolate_gaps(solar_raw)
     
-    # Load = Grid + Solar
-    consumption_series = [g + s for g, s in zip(grid_series, solar_series)]
+    # Align battery series
+    bat_series: List[float] = []
+    if use_battery:
+        bat_raw: List[Optional[float]] = []
+        for dt in target_dts:
+            key = dt.strftime("%Y-%m-%d %H:00")
+            b_vals = bat_map.get(key, [])
+            bat_raw.append(sum(b_vals) / len(b_vals) if b_vals else None)
+        bat_series = interpolate_gaps(bat_raw)
+    else:
+        bat_series = [0.0] * len(grid_series)
+
+    # Load = Grid (EMU-2 net grid meter) + Solar (SolarEdge + Chillicon) + Battery_Power (SolarEdge)
+    consumption_series = [g + s + b for g, s, b in zip(grid_series, solar_series, bat_series)]
     
     # Run DTFT spectrum analysis for frequencies 0.1 to 4.0 cycles per day
     freqs = [0.05 + 0.01 * i for i in range(400)]

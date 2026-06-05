@@ -13,6 +13,7 @@ import math
 import logging
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional, Any
+import threading
 
 # Configure logging
 logging.basicConfig(
@@ -31,6 +32,7 @@ os.makedirs(BACKUP_DIR, exist_ok=True)
 GRID_HISTORY: str = os.path.join(BACKUP_DIR, "grid_history.csv")
 SE_HISTORY: str = os.path.join(BACKUP_DIR, "solaredge_history.csv")
 SE_BATTERY_HISTORY: str = os.path.join(BACKUP_DIR, "solaredge_battery_history.csv")
+SE_FLOW_HISTORY: str = os.path.join(BACKUP_DIR, "solaredge_flow_history.csv")
 CHILICON_HISTORY: str = os.path.join(BACKUP_DIR, "chilicon_history.csv")
 
 # Model configuration
@@ -239,6 +241,58 @@ def extract_hourly_series(filepath: str, end_time: datetime.datetime, window_hou
                             pass
     except Exception as e:
         logging.error(f"Error reading {filepath} in extract_hourly_series: {e}")
+        
+    series_raw: List[Optional[float]] = []
+    for key in target_keys:
+        vals = hourly_values[key]
+        if vals:
+            series_raw.append(sum(vals) / len(vals))
+        else:
+            series_raw.append(None)
+            
+    series = interpolate_gaps(series_raw)
+    start_hour = float(target_dts[0].hour + target_dts[0].minute / 60.0)
+    return series, start_hour
+
+
+def extract_hourly_flow_series(filepath: str, end_time: datetime.datetime, col_idx: int, window_hours: int = 48) -> Tuple[List[float], float]:
+    """Extracts a uniform hourly series from the flow history CSV at col_idx, filling gaps.
+
+    Args:
+        filepath: Filesystem path to the flow CSV.
+        end_time: The end datetime of the target window.
+        col_idx: Column index to parse from the CSV (e.g. 2 for load_power).
+        window_hours: Number of hours in the history window.
+
+    Returns:
+        A tuple of (values_list, start_hour_float).
+    """
+    if not os.path.exists(filepath):
+        return [0.0] * window_hours, float(end_time.hour)
+        
+    start_time = end_time - datetime.timedelta(hours=window_hours - 1)
+    start_hour_dt = start_time.replace(minute=0, second=0, microsecond=0)
+    
+    target_dts = [start_hour_dt + datetime.timedelta(hours=i) for i in range(window_hours)]
+    target_keys = [dt.strftime("%Y-%m-%d %H:00") for dt in target_dts]
+    
+    hourly_values = defaultdict(list)
+    try:
+        with open(filepath, 'r') as f:
+            clean_lines = (line.replace('\x00', '') for line in f)
+            reader = csv.reader(clean_lines)
+            for row in reader:
+                if len(row) > col_idx:
+                    ts = parse_timestamp(row[0])
+                    if ts:
+                        hour_key = ts.strftime("%Y-%m-%d %H:00")
+                        try:
+                            val = float(row[col_idx])
+                            hourly_values[hour_key].append(val)
+                        except ValueError:
+                            pass
+    except Exception as e:
+        logging.error(f"Error reading {filepath} in extract_hourly_flow_series: {e}")
         
     series_raw: List[Optional[float]] = []
     for key in target_keys:
@@ -684,13 +738,88 @@ def calculate_deltas(baseline_dt: datetime.datetime) -> Dict[str, float]:
                 else:
                     delta_bat_charge += abs(p_last) * dt_hours
 
+    # 5. SolarEdge Load Flow (integrated load energy)
+    delta_se_load = 0.0
+    if os.path.exists(SE_FLOW_HISTORY):
+        rows = []
+        try:
+            with open(SE_FLOW_HISTORY, 'r') as f:
+                clean_lines = (line.replace('\x00', '') for line in f)
+                reader = csv.reader(clean_lines)
+                for row in reader:
+                    if len(row) >= 3:
+                        ts = parse_timestamp(row[0])
+                        if ts and ts >= baseline_dt:
+                            try:
+                                val = float(row[2])  # load_power is at index 2
+                                rows.append((ts, val))
+                            except ValueError:
+                                pass
+        except Exception as e:
+            logging.error(f"Error reading SolarEdge flow history for load deltas: {e}")
+            
+        if rows:
+            rows.sort(key=lambda x: x[0])
+            for i in range(len(rows) - 1):
+                t_curr, p_curr = rows[i]
+                t_next, _ = rows[i+1]
+                dt_hours = (t_next - t_curr).total_seconds() / 3600.0
+                if dt_hours > 0 and dt_hours <= 1.0:
+                    delta_se_load += p_curr * dt_hours
+            # Final point to now
+            t_last, p_last = rows[-1]
+            dt_hours = (datetime.datetime.now() - t_last).total_seconds() / 3600.0
+            if dt_hours > 0 and dt_hours <= 0.5:
+                delta_se_load += p_last * dt_hours
+
     return {
         "delta_import": delta_import,
         "delta_export": delta_export,
         "delta_peak": delta_peak,
         "delta_solar": delta_solar,
         "delta_bat_charge": delta_bat_charge,
-        "delta_bat_discharge": delta_bat_discharge
+        "delta_bat_discharge": delta_bat_discharge,
+        "delta_se_load": delta_se_load
+    }
+
+
+def calculate_flow_stats(baseline_dt: datetime.datetime) -> Dict[str, float]:
+    """Calculates min, max, and average load_power from flow history since baseline.
+
+    Args:
+        baseline_dt: The baseline datetime threshold.
+
+    Returns:
+        A dictionary containing keys 'load_min', 'load_max', and 'load_avg'.
+    """
+    load_vals = []
+    if os.path.exists(SE_FLOW_HISTORY):
+        try:
+            with open(SE_FLOW_HISTORY, 'r') as f:
+                clean_lines = (line.replace('\x00', '') for line in f)
+                reader = csv.reader(clean_lines)
+                for row in reader:
+                    if len(row) >= 3:
+                        ts = parse_timestamp(row[0])
+                        if ts and ts >= baseline_dt:
+                            try:
+                                val = float(row[2])  # load_power is at index 2
+                                load_vals.append(val)
+                            except ValueError:
+                                pass
+        except Exception as e:
+            logging.error(f"Error reading flow history for stats: {e}")
+            
+    if load_vals:
+        return {
+            "load_min": min(load_vals),
+            "load_max": max(load_vals),
+            "load_avg": sum(load_vals) / len(load_vals)
+        }
+    return {
+        "load_min": 0.0,
+        "load_max": 0.0,
+        "load_avg": 0.0
     }
 
 
@@ -720,6 +849,36 @@ def query_local_ollama(prompt: str, model: str) -> str:
     except Exception as e:
         logging.error(f"Ollama API error: {e}")
         raise
+
+
+def calculate_remaining_lines(baseline_text: str, max_allowed: int = 30) -> int:
+    """Calculates the remaining text line budget for the local LLM summary.
+
+    Simulates word wrapping at 100 characters per line to estimate the physical
+    wrapped lines of the baseline summary on the kiosk layout, and subtracts
+    it from the maximum allowed lines.
+
+    Args:
+        baseline_text: The multi-line baseline summary string.
+        max_allowed: The maximum physical text lines allowed on the kiosk layout.
+
+    Returns:
+        The remaining line count budget for the local LLM's output.
+
+    Raises:
+        None
+    """
+    import textwrap
+    wrapped_lines: int = 0
+    for line in baseline_text.split('\n'):
+        if line.strip():
+            wrapped_lines += len(textwrap.wrap(line, width=100))
+        else:
+            wrapped_lines += 1
+            
+    # Subtract baseline wrapped lines and a safety margin (including metadata line)
+    remaining: int = max_allowed - wrapped_lines - 1
+    return max(3, remaining)
 
 
 def run_analysis_workflow(baseline_ts_str: str, baseline_text: str, batch_interval_hours: int = 4) -> Dict[str, Any]:
@@ -767,6 +926,7 @@ def run_analysis_workflow(baseline_ts_str: str, baseline_text: str, batch_interv
     
     # 2. Integrate recent telemetry deltas
     deltas = calculate_deltas(baseline_dt)
+    flow_stats = calculate_flow_stats(baseline_dt)
     
     # 3. Extract 48-hour hourly telemetry series for DFT and Slope analysis
     now_dt = datetime.datetime.now()
@@ -792,7 +952,10 @@ def run_analysis_workflow(baseline_ts_str: str, baseline_text: str, batch_interv
     freqs = [0.05 + 0.01 * i for i in range(400)]
     grid_amp_spec = snr_analysis.compute_dtft_spectrum(grid_series, freqs)
     solar_amp_spec = snr_analysis.compute_dtft_spectrum(solar_series, freqs)
-    consumption_series = [g + s for g, s in zip(grid_series, solar_series)]
+    
+    # Load battery series to calculate true household consumption (Grid + Solar + Battery)
+    bat_series, _ = extract_hourly_series(SE_BATTERY_HISTORY, now_dt, 48)
+    consumption_series = [g + s + b for g, s, b in zip(grid_series, solar_series, bat_series)]
     consumption_amp_spec = snr_analysis.compute_dtft_spectrum(consumption_series, freqs)
     
     snrs = snr_analysis.analyze_spectra_snr(freqs, grid_amp_spec, solar_amp_spec, consumption_amp_spec)
@@ -874,6 +1037,9 @@ def run_analysis_workflow(baseline_ts_str: str, baseline_text: str, batch_interv
     if warnings:
         warning_context = "\nStatistical Anomaly Warnings (Keep these in mind for your analysis):\n" + "\n".join(f"- {w}" for w in warnings)
         
+    # Calculate available line budget for local edge model
+    remaining_lines: int = calculate_remaining_lines(baseline_text)
+        
     # 8. Load and format prompt template
     prompt_template = None
     prompt_path = os.path.join(SCRIPT_DIR, "gemma_hybrid_prompt.txt")
@@ -897,6 +1063,8 @@ Live Telemetry since baseline ({baseline_time} to {current_time}):
 - Solar PV Generation: {delta_solar:.2f} kWh
 - Battery Energy Charged: {delta_bat_charge:.2f} kWh
 - Battery Energy Discharged: {delta_bat_discharge:.2f} kWh
+- SolarEdge Appliance Load (Approx) Energy: {delta_se_load:.2f} kWh
+- SolarEdge Appliance Load (Approx) Power: Min {se_load_min:.2f} kW | Max {se_load_max:.2f} kW | Avg {se_load_avg:.2f} kW
 
 === ENVIRONMENTAL & SEASONAL PREDICTORS ===
 - Current Month: {month_name}
@@ -924,6 +1092,9 @@ Live Telemetry since baseline ({baseline_time} to {current_time}):
 - Recent Solar Power Slope (dS/dt): {solar_slope:.2f} kW/hr
 - Recent Net Grid Demand Slope (dG/dt): {grid_slope:.2f} kW/hr
 
+=== OUTPUT SPACE CONSTRAINT ===
+Your output MUST fit within exactly {remaining_lines} lines of text (with 100 characters max per line). Ensure the entire response is under {remaining_lines} lines.
+
 Output:
 """
 
@@ -944,6 +1115,10 @@ Output:
         delta_solar=deltas["delta_solar"],
         delta_bat_charge=deltas["delta_bat_charge"],
         delta_bat_discharge=deltas["delta_bat_discharge"],
+        delta_se_load=deltas["delta_se_load"],
+        se_load_min=flow_stats["load_min"],
+        se_load_max=flow_stats["load_max"],
+        se_load_avg=flow_stats["load_avg"],
         expected_temp_max=weather_temp,
         expected_cloud_cover=weather_clouds,
         solar_weather_modulation=solar_weather_modulation,
@@ -968,7 +1143,8 @@ Output:
         consumption_24h_snr_db=snrs["consumption_24h_snr_db"],
         consumption_12h_snr_db=snrs["consumption_12h_snr_db"],
         warning_context=f"\nStatistical Anomaly Warnings (Keep these in mind for your analysis):\n{warning_context}" if warning_context else "",
-        batch_interval_hours=batch_interval_hours
+        batch_interval_hours=batch_interval_hours,
+        remaining_lines=remaining_lines
     )
         
     # 9. Query Ollama for Time-Domain Analysis
@@ -1048,6 +1224,64 @@ Explanation:
     }
 
 
+# Global variables for background full-history DFT calculation caching
+cached_full_history_data: Dict[str, Any] = {}
+cached_data_lock = threading.Lock()
+
+
+def run_full_history_math() -> None:
+    """Calculates full-history DFT spectrum and updates the global cache."""
+    global cached_full_history_data
+    try:
+        from dashboard_modules import telemetry, solar, weather, spectral
+        
+        # Load full history from backups
+        # (Using cutoff_hours=999999 to load everything)
+        ts, u = telemetry.load_grid_history(GRID_HISTORY, cutoff_hours=999999)
+        if not ts:
+            logging.info("Background Math: No grid history loaded.")
+            return
+            
+        se_client = solar.SolarEdgeClient("", "", SE_HISTORY, SE_BATTERY_HISTORY)
+        se_ts, se_p, bat_ts, bat_power, _ = se_client.load_history(cutoff_hours=999999)
+        
+        ch_client = solar.ChilliconClient("", "", "", CHILICON_HISTORY)
+        ch_ts, ch_p, _ = ch_client.load_history(cutoff_hours=999999)
+        
+        weather_map = weather.fetch_historical_weather()
+        
+        logging.info(f"Background Math: Computing spectrum for {len(ts)} grid points...")
+        freqs, grid_amp, solar_amp, expected_solar_amp, consumption_amp = spectral.align_and_compute_spectra(
+            ts, u, se_ts, se_p, ch_ts, ch_p, weather_map, se_battery_timestamps=bat_ts, se_battery_power=bat_power
+        )
+        
+        with cached_data_lock:
+            cached_full_history_data = {
+                "freqs": freqs,
+                "grid_amp": grid_amp,
+                "solar_amp": solar_amp,
+                "expected_solar_amp": expected_solar_amp,
+                "consumption_amp": consumption_amp
+            }
+        logging.info("Background Math: Successfully calculated and cached full-history DFT.")
+    except Exception as e:
+        logging.error(f"Background Math failed: {e}")
+
+
+def background_full_history_math_loop() -> None:
+    """Background thread that runs full-history DFT math every 30 minutes."""
+    # Run initially after a brief sleep to let the server startup settle
+    time.sleep(5)
+    while True:
+        try:
+            logging.info("Background Math: Starting full-history DFT calculation...")
+            run_full_history_math()
+        except Exception as e:
+            logging.error(f"Background Math Loop Error: {e}")
+        
+        time.sleep(1800)  # Run every 30 minutes
+
+
 class AnalyzeHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == '/api/analyze':
@@ -1065,6 +1299,11 @@ class AnalyzeHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 
                 logging.info(f"Received API analysis request. Baseline timestamp: {baseline_ts_str}, Batch Interval: {batch_interval_hours}h")
                 response_data = run_analysis_workflow(baseline_ts_str, baseline_text, batch_interval_hours)
+                
+                # Inject cached full-history spectrum
+                with cached_data_lock:
+                    if cached_full_history_data:
+                        response_data["full_history_spectrum"] = cached_full_history_data
                 
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
@@ -1119,6 +1358,11 @@ def main() -> None:
     # Allow address reuse
     socketserver.TCPServer.allow_reuse_address = True
     handler = AnalyzeHTTPRequestHandler
+    
+    # Start the background full-history DFT math thread
+    math_thread = threading.Thread(target=background_full_history_math_loop, daemon=True)
+    math_thread.start()
+    logging.info("Started background full-history DFT math thread.")
     
     with socketserver.TCPServer(("", port), handler) as httpd:
         logging.info(f"Jetson Edge HTTP Server started on port {port}. Model: {DEFAULT_MODEL}")

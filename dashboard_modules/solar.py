@@ -25,13 +25,15 @@ class SolarEdgeClient:
         site_id (str): SolarEdge site ID.
         history_file (str): Path to write SolarEdge PV generation records.
         battery_history_file (str): Path to write SolarEdge battery records.
+        flow_history_file (str): Path to write SolarEdge load/grid flow records.
     """
 
-    def __init__(self, api_key: str, site_id: str, history_file: str, battery_history_file: str) -> None:
+    def __init__(self, api_key: str, site_id: str, history_file: str, battery_history_file: str, flow_history_file: Optional[str] = None) -> None:
         self.api_key: str = api_key
         self.site_id: str = site_id
         self.history_file: str = history_file
         self.battery_history_file: str = battery_history_file
+        self.flow_history_file: str = flow_history_file or history_file.replace("solaredge_history.csv", "solaredge_flow_history.csv")
 
     def load_history(self, cutoff_hours: int = 24) -> Tuple[
         List[datetime.datetime], List[float], List[datetime.datetime], List[float], List[float]
@@ -80,11 +82,52 @@ class SolarEdgeClient:
 
         return pv_ts, pv_power, bat_ts, bat_power, bat_soc
 
-    def fetch_data(self) -> Optional[Dict[str, Any]]:
-        """Polls the SolarEdge API currentPowerFlow endpoint.
+    def load_flow_history(self, cutoff_hours: int = 24) -> Tuple[List[datetime.datetime], List[float]]:
+        """Loads historical SolarEdge flow data (specifically load_power) from CSV.
+
+        Args:
+            cutoff_hours: Number of hours in the past to load.
 
         Returns:
-            A dictionary containing parsed API flow values, or None if failed.
+            Tuple of (timestamps, load_power_in_kw).
+        """
+        now = datetime.datetime.now()
+        cutoff = now - datetime.timedelta(hours=cutoff_hours)
+        
+        load_ts: List[datetime.datetime] = []
+        load_power: List[float] = []
+        
+        rows = read_clean_csv(self.flow_history_file)
+        for row in rows:
+            if len(row) >= 3:
+                try:
+                    ts = datetime.datetime.fromisoformat(row[0])
+                    val = float(row[2])  # load_power is at index 2
+                    if ts > cutoff:
+                        load_ts.append(ts)
+                        load_power.append(val)
+                except Exception as e:
+                    logging.debug(f"Corrupted SolarEdge flow history row: {row} - Error: {e}")
+                    
+        return load_ts, load_power
+
+    def fetch_data(self) -> Optional[Dict[str, Any]]:
+        """Polls the SolarEdge API currentPowerFlow endpoint and logs history.
+
+        Retrieves real-time power generation, household consumption (load),
+        grid imports/exports, and battery storage/SoC data, then writes them
+        to their respective CSV database files.
+
+        Returns:
+            A dictionary containing parsed API flow values, or None if the
+            request or parsing fails. The dictionary contains:
+                - 'pv_power' (float): Solar generation in kW.
+                - 'battery_power' (float): Signed battery power in kW.
+                - 'battery_soc' (float): Battery state of charge in %.
+                - 'load_power' (float): Home demand power in kW.
+                - 'grid_import' (float): Power imported from the grid in kW.
+                - 'grid_export' (float): Power exported to the grid in kW.
+                - 'timestamp' (datetime.datetime): Fetch timestamp.
         """
         now = datetime.datetime.now()
         hour = now.hour + now.minute / 60.0
@@ -110,16 +153,37 @@ class SolarEdgeClient:
                 pv_power = pv.get("currentPower", 0.0)
                 write_csv_row(self.history_file, [now.isoformat(), f"{pv_power:.3f}"])
 
-                # Extract Storage (Battery)
-                storage = flow.get("storage") or flow.get("STORAGE") or {}
-                raw_battery_power = storage.get("currentPower", 0.0)
-                battery_soc = storage.get("chargeLevel", 0.0)
-                status = storage.get("status", "Idle")
+                # Extract Load (Home Consumption)
+                load_obj = flow.get("load") or flow.get("LOAD") or {}
+                load_power = load_obj.get("currentPower", 0.0)
 
-                if status == "Charging":
-                    signed_battery_power = -raw_battery_power
-                elif status == "Discharging":
+                # Extract Grid flow
+                grid_obj = flow.get("grid") or flow.get("GRID") or {}
+                grid_power = grid_obj.get("currentPower", 0.0)
+                
+                # Check connections list for flow direction (import vs export)
+                connections = flow.get("connections", [])
+                grid_import = 0.0
+                grid_export = 0.0
+                for conn in connections:
+                    f = str(conn.get("from", "")).upper()
+                    t = str(conn.get("to", "")).upper()
+                    if f == "GRID" and t == "LOAD":
+                        grid_import = grid_power
+                    elif t == "GRID":
+                        grid_export = grid_power
+
+                # Extract Battery Storage
+                storage_obj = flow.get("storage") or flow.get("STORAGE") or {}
+                raw_battery_power = storage_obj.get("currentPower", 0.0)
+                battery_soc = storage_obj.get("chargeLevel", 0.0)
+                battery_status = str(storage_obj.get("status", "")).upper()
+                
+                # Math for signed battery power (positive = discharging, negative = charging)
+                if battery_status == "DISCHARGING":
                     signed_battery_power = raw_battery_power
+                elif battery_status == "CHARGING":
+                    signed_battery_power = -raw_battery_power
                 else:
                     signed_battery_power = 0.0
 
@@ -128,10 +192,18 @@ class SolarEdgeClient:
                     [now.isoformat(), f"{signed_battery_power:.3f}", f"{battery_soc:.1f}"]
                 )
 
+                write_csv_row(
+                    self.flow_history_file,
+                    [now.isoformat(), f"{pv_power:.3f}", f"{load_power:.3f}", f"{grid_import:.3f}", f"{grid_export:.3f}"]
+                )
+
                 return {
                     "pv_power": pv_power,
                     "battery_power": signed_battery_power,
                     "battery_soc": battery_soc,
+                    "load_power": load_power,
+                    "grid_import": grid_import,
+                    "grid_export": grid_export,
                     "timestamp": now
                 }
         except Exception as e:

@@ -141,6 +141,10 @@ def test_prompt_formatting_success() -> None:
             delta_solar=3.0,
             delta_bat_charge=0.5,
             delta_bat_discharge=0.4,
+            delta_se_load=1.2,
+            se_load_min=0.2,
+            se_load_max=1.8,
+            se_load_avg=0.9,
             expected_temp_max=16.0,
             expected_cloud_cover=50.0,
             solar_weather_modulation=0.5,
@@ -165,7 +169,8 @@ def test_prompt_formatting_success() -> None:
             consumption_24h_snr_db=18.2,
             consumption_12h_snr_db=14.5,
             warning_context="",
-            batch_interval_hours=4
+            batch_interval_hours=4,
+            remaining_lines=15
         )
         assert "- Solar Weather Modulation Factor: 0.50" in formatted
         assert "- SolarEdge Diurnal Peak Hour (East Array): 11:30" in formatted

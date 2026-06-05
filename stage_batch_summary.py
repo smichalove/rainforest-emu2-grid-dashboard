@@ -306,10 +306,17 @@ def run_batch_cycle(client: genai.Client) -> None:
             if summary:
                 retrieved_dt_str: str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 summary_with_metadata: str = f"{summary}\n\n[Batch Submitted: {current_dt_str} | Retrieved: {retrieved_dt_str}]"
-                cache_payload: Dict[str, str] = {
-                    "timestamp": current_dt_str,
-                    "summary": summary_with_metadata
-                }
+                # Resilient cache merge to avoid overwriting background DFT spectrum and metrics
+                cache_payload: Dict[str, Any] = {}
+                if os.path.exists(GEMINI_SUMMARY_CACHE):
+                    try:
+                        from dashboard_modules import io as modular_io
+                        cache_payload = modular_io.read_safe_json(GEMINI_SUMMARY_CACHE) or {}
+                    except Exception as merge_err:
+                        print(f"Merge warning: could not load existing cache: {merge_err}")
+                
+                cache_payload["timestamp"] = current_dt_str
+                cache_payload["summary"] = summary_with_metadata
                 with open(GEMINI_SUMMARY_CACHE, "w", encoding="utf-8") as cache_file:
                     json.dump(cache_payload, cache_file, indent=4)
                 print(f"🎉 SUCCESS: Cached fresh summary to {GEMINI_SUMMARY_CACHE}")
@@ -352,8 +359,9 @@ def main() -> None:
     
     client: genai.Client = genai.Client(vertexai=True, project=PROJECT_ID, location=LOCATION)
     
-    # Primary runner loop checking cache age every 30 minutes
+    # Primary runner loop checking cache age periodically
     while True:
+        sleep_seconds = BATCH_INTERVAL_HOURS * 3600
         try:
             # First, check if there is an in-flight job from a previous run (watchdog check)
             if os.path.exists(ACTIVE_BATCH_STATE):
@@ -372,10 +380,17 @@ def main() -> None:
                             if summary:
                                 resumed_retrieved_dt_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                 summary_with_metadata = f"{summary}\n\n[Batch Submitted: {ts_str} | Retrieved: {resumed_retrieved_dt_str}]"
-                                cache_payload = {
-                                    "timestamp": ts_str,
-                                    "summary": summary_with_metadata
-                                }
+                                # Resilient cache merge to avoid overwriting background DFT spectrum and metrics
+                                cache_payload: Dict[str, Any] = {}
+                                if os.path.exists(GEMINI_SUMMARY_CACHE):
+                                    try:
+                                        from dashboard_modules import io as modular_io
+                                        cache_payload = modular_io.read_safe_json(GEMINI_SUMMARY_CACHE) or {}
+                                    except Exception as merge_err:
+                                        print(f"Merge warning: could not load existing cache: {merge_err}")
+                                
+                                cache_payload["timestamp"] = ts_str
+                                cache_payload["summary"] = summary_with_metadata
                                 with open(GEMINI_SUMMARY_CACHE, "w", encoding="utf-8") as cache_file:
                                     json.dump(cache_payload, cache_file, indent=4)
                                 print(f"🎉 SUCCESS: Cached resumed summary to {GEMINI_SUMMARY_CACHE}")
@@ -408,9 +423,14 @@ def main() -> None:
                             except ValueError:
                                 cache_time = datetime.datetime.strptime(ts_str.split(".")[0].replace("T", " "), "%Y-%m-%d %H:%M:%S")
                                 
-                        if cache_time and (datetime.datetime.now() - cache_time < datetime.timedelta(hours=BATCH_INTERVAL_HOURS)):
-                            is_cache_fresh = True
-                            print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Local cache is still fresh (< {BATCH_INTERVAL_HOURS}h). Skipping run.")
+                        if cache_time:
+                            elapsed_sec = (datetime.datetime.now() - cache_time).total_seconds()
+                            if elapsed_sec < BATCH_INTERVAL_HOURS * 3600:
+                                is_cache_fresh = True
+                                print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Local cache is still fresh (< {BATCH_INTERVAL_HOURS}h). Skipping run.")
+                                remaining_sec = (BATCH_INTERVAL_HOURS * 3600) - elapsed_sec
+                                # Add 60s buffer to ensure expiration has occurred when waking up
+                                sleep_seconds = int(max(remaining_sec + 60, 60))
                 except Exception as e:
                     print(f"Failed to check cache state: {e}")
             
@@ -420,8 +440,13 @@ def main() -> None:
         except Exception as e:
             print(f"Loop Exception: {e}")
             
-        print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Sleeping for {BATCH_INTERVAL_HOURS} hours...")
-        time.sleep(BATCH_INTERVAL_HOURS * 3600)
+        if sleep_seconds >= 3600:
+            h_val = sleep_seconds / 3600.0
+            print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Sleeping for {h_val:.2f} hours...")
+        else:
+            m_val = sleep_seconds / 60.0
+            print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Sleeping for {m_val:.1f} minutes...")
+        time.sleep(sleep_seconds)
 
 if __name__ == "__main__":
     main()

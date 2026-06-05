@@ -251,12 +251,15 @@ def test_fetch_solaredge_data(mock_urlopen):
     dashboard.se_battery_timestamps = []
     dashboard.se_battery_power = []
     dashboard.se_battery_soc = []
+    dashboard.se_load_power_timestamps = []
+    dashboard.se_load_power = []
     dashboard.max_points = 5
     dashboard.after = MagicMock()
     dashboard.ui_queue = MagicMock()
     dashboard.status_label = MagicMock()
     dashboard.sub_status_label = MagicMock()
     dashboard.se_battery_history_file = "/dev/null"
+    dashboard.se_flow_history_file = "/dev/null"
     
     # Mock status label cget
     dashboard.status_label.cget.side_effect = lambda attr: "white" if attr == "fg" else "Waiting..."
@@ -313,8 +316,8 @@ def test_generate_hourly_summaries_with_solaredge():
         lines = csv_data.split('\n')
         # Header + 1 data line
         assert len(lines) == 2
-        assert lines[0] == "Hour,Avg_kW,Min_kW,Max_kW,Median_kW,SE_Avg_kW,SE_Max_kW,SE_Energy_kWh,Battery_Avg_kW,Battery_SoC,Chillicon_Avg_kW,Chillicon_Max_kW,Chillicon_Energy_kWh"
-        assert "2026-05-26 12:00,2.000,2.000,2.000,2.000,1.500,1.500,1.500,0.000,0.0,0.000,0.000,0.000" in lines[1]
+        assert lines[0] == "Hour,Avg_kW,Min_kW,Max_kW,Median_kW,SE_Avg_kW,SE_Max_kW,SE_Energy_kWh,Battery_Avg_kW,Battery_SoC,Chillicon_Avg_kW,Chillicon_Max_kW,Chillicon_Energy_kWh,Load_Avg_kW,Load_Max_kW,Load_Energy_kWh"
+        assert "2026-05-26 12:00,2.000,2.000,2.000,2.000,1.500,1.500,1.500,0.000,0.0,0.000,0.000,0.000,0.000,0.000,0.000" in lines[1]
     finally:
         os.remove(grid_path)
         os.remove(se_path)
@@ -417,12 +420,13 @@ def test_calculate_solar_correlation():
 
 @patch('urllib.request.urlopen')
 @patch('stage_local_summary.calculate_deltas')
+@patch('stage_local_summary.calculate_flow_stats')
 @patch('stage_local_summary.calculate_grid_stats')
 @patch('stage_local_summary.calculate_solar_tod_stats')
 @patch('stage_local_summary.calculate_solar_correlation')
 @patch('stage_local_summary.fetch_weather')
 @patch('stage_local_summary.DEFAULT_MODEL', 'gemma2:2b')
-def test_run_analysis_workflow(mock_weather, mock_corr, mock_tod, mock_grid, mock_deltas, mock_urlopen):
+def test_run_analysis_workflow(mock_weather, mock_corr, mock_tod, mock_grid, mock_flow, mock_deltas, mock_urlopen):
     """Test run_analysis_workflow coordinates stats, weather, and local Ollama queries."""
     from stage_local_summary import run_analysis_workflow
     
@@ -430,13 +434,19 @@ def test_run_analysis_workflow(mock_weather, mock_corr, mock_tod, mock_grid, moc
     mock_corr.return_value = 0.95
     mock_tod.return_value = (2.0, 0.2)
     mock_grid.return_value = (1.5, 0.5)
+    mock_flow.return_value = {
+        "load_min": 0.2,
+        "load_max": 1.8,
+        "load_avg": 0.9
+    }
     mock_deltas.return_value = {
         "delta_import": 1.2,
         "delta_export": 0.0,
         "delta_peak": 2.5,  # (2.5 - 1.5)/0.5 = 2.0
         "delta_solar": 3.0,
         "delta_bat_charge": 0.5,
-        "delta_bat_discharge": 0.4
+        "delta_bat_discharge": 0.4,
+        "delta_se_load": 1.2
     }
     
     # Mock Ollama API response

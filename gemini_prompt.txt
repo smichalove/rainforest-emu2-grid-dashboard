@@ -4,6 +4,7 @@ For each hour, you are given:
 - SolarEdge PV: Average kW (SE_Avg_kW), Maximum kW (SE_Max_kW), Energy generated (SE_Energy_kWh)
 - SolarEdge Battery: Average battery charge/discharge power (Battery_Avg_kW, where positive = discharging to power home/grid, negative = charging from solar/grid) and average battery state of charge percentage (Battery_SoC)
 - Chillicon System: Actual power generated (Chillicon_Avg_kW, Chillicon_Max_kW) and actual energy generated (Chillicon_Energy_kWh) polled directly from Chillicon Cloud API.
+- SolarEdge Appliance Load (Approx): Average kW (Load_Avg_kW), Maximum kW (Load_Max_kW), and Energy consumed (Load_Energy_kWh).
 
 Analyze this data and provide a concise, high-density dashboard summary.
 NOTE: The current Puget Sound Energy (PSE) rate is $0.19 / kWh. This rate applies equally to grid import (cost) and standard solar export (credit). However, energy discharged from the battery during a PSE Flex event is reimbursed at a higher rate of $0.50 / kWh. Use these rates to calculate accurate cost/credit estimates.
@@ -34,8 +35,8 @@ Data:
 Instructions:
 1. Provide the overall key statistics (Total Net Imported, Total Net Exported, SolarEdge Generated, Net Energy Cost/Credit, Peak Net Grid Demand, Peak SolarEdge PV, and inferred Chillicon contribution) inline as a single comma-separated line. Do NOT format as a vertical list or table. Start the line with "Overall Key Statistics:".
 2. Provide the key statistics for the last 24 hours (Total Net Imported, Total Net Exported, SolarEdge Generated, Net Energy Cost/Credit, Peak Net Grid Demand, Peak SolarEdge PV, and inferred Chillicon contribution) inline as a single comma-separated line. Do NOT format as a vertical list or table. Start the line with "Last 24 Hours Key Statistics:".
-3. Include a short 4 to 6 sentence paragraph summary analyzing the overall energy usage, SolarEdge performance, battery status/behavior, inferred Chillicon performance/trends, cumulative totals, and estimated PSE billing impact. Start the paragraph with "Overall Summary:".
-4. Keep the total output under 10 lines. Do NOT include any empty lines between these sections.
+3. Include a detailed 6 to 10 sentence paragraph summary analyzing the overall energy usage, SolarEdge performance, battery status/behavior, inferred Chillicon performance/trends, cumulative totals, and estimated PSE billing impact. Start the paragraph with "Overall Summary:".
+4. Keep the total output under 20 lines. Do NOT include any empty lines between these sections.
 5. Do NOT include markdown code blocks, bold text (**), asterisks, or formatting other than plain text.
 6. Be concise and precise.
 7. Explicitly state the date range of the data analyzed (e.g., "Data analyzed from [Data Start] to [Data End]") at the top of the output.
