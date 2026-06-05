@@ -37,6 +37,10 @@ The dashboard integrates the **`google-genai`** SDK to query Gemini every 15 min
 
 The prompt includes hourly aggregated Net Grid import/export statistics, SolarEdge solar generation, battery stats (`Battery_Avg_kW` average discharge rate and `Battery_SoC` average charge percentage), and actual Chillicon generation (`Chillicon_Avg_kW`). This enables Gemini to make highly accurate summaries and correctly separate battery dispatch behavior during Puget Sound Energy (PSE) Flex events (reimbursed at a premium rate of **$0.50 / kWh** instead of the standard $0.19 / kWh) from your actual solar arrays' generation without needing mathematical inference.
 
+> [!WARNING]
+> **Prompt Personalization Warning:** The system prompts (such as `gemma_hybrid_prompt.txt` and `gemini_prompt.txt`) are heavily customized for the developer's specific microgrid layout, geographical/climatological constraints (e.g. South-West and North-West facing solar arrays, Seattle daylight windows), utility rates (Puget Sound Energy's standard and Flex event tiers), and lack of an EV (Electric Vehicle).
+> Before publishing or deploying this project in your own environment, you should review and profile these prompts. We recommend using a powerful AI (such as Gemini) to adapt and tune these system instructions, orientation angles, and billing rules to match your specific home configuration and local utility plans.
+
 ### Authentication Setup
 The dashboard automatically searches for credentials using one of the following methods:
 1. **Google Cloud Service Account JSON (Headless/Vertex AI):**
