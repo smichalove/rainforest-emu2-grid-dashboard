@@ -46,6 +46,8 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(message)s'
 )
 
+SOLAREDGE_POLL_INTERVAL_SEC: int = 360  # 6 minutes interval (240 requests/day)
+
 
 class GridDashboard(tk.Tk):
     """A fullscreen Tkinter dashboard application that visualizes real-time power grid usage.
@@ -763,8 +765,9 @@ class GridDashboard(tk.Tk):
         """Isolated SolarEdge API loop."""
         while self.running:
             self.fetch_solaredge_data()
-            # Sleep for 15m (converts to 90 sleep segments of 10s to monitor self.running shutdown speed)
-            for _ in range(90):
+            # Sleep in 10-second segments to monitor self.running shutdown speed
+            segments = SOLAREDGE_POLL_INTERVAL_SEC // 10
+            for _ in range(segments):
                 if not self.running:
                     break
                 time.sleep(10)
