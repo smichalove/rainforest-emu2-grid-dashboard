@@ -119,6 +119,7 @@ class GridDashboard(tk.Tk):
     status_label: Optional[tk.Label] = None
     sub_status_label: Optional[tk.Label] = None
     chilicon_status_label: Optional[tk.Label] = None
+    load_status_label: Optional[tk.Label] = None
     weather_label: Optional[tk.Label] = None
     time_label: Optional[tk.Label] = None
     date_label: Optional[tk.Label] = None
@@ -390,6 +391,7 @@ class GridDashboard(tk.Tk):
                 self.solar_bars_dirty = True
                 if self.sub_status_label is not None:
                     self.ui_queue.put(lambda: self.sub_status_label.config(text=f"SolarEdge PV: {res['pv_power']:.3f} kW"))
+                self.update_load_label()
         except Exception as e:
             logging.error(f"Resilient fallback error in fetch_solaredge_data: {e}")
 
@@ -411,6 +413,7 @@ class GridDashboard(tk.Tk):
                 self.solar_bars_dirty = True
                 if self.chilicon_status_label is not None:
                     self.ui_queue.put(lambda: self.chilicon_status_label.config(text=f"Chillicon PV: {power:.3f} kW"))
+                self.update_load_label()
         except Exception as e:
             logging.error(f"Resilient fallback error in fetch_chilicon_data: {e}")
 
@@ -459,6 +462,25 @@ class GridDashboard(tk.Tk):
             logging.error(f"Resilient fallback error in align_and_compute_spectrum: {e}")
             return [], [], [], [], []
 
+    def update_load_label(self) -> None:
+        """Updates the house load label in the GUI using the latest available data."""
+        try:
+            with self.data_lock:
+                latest_rf = self.usage[-1] if self.usage else 0.0
+                latest_se_pv = self.se_power[-1] if self.se_power else 0.0
+                latest_ch_pv = self.chilicon_power[-1] if self.chilicon_power else 0.0
+                latest_bat = self.se_battery_power[-1] if self.se_battery_power else 0.0
+                
+                # Physical formula: Load = RF Grid + SE PV + CH PV + Battery Power
+                calc_load = latest_rf + latest_se_pv + latest_ch_pv + latest_bat
+                # Clip negative load values to 0.0
+                calc_load = max(0.0, calc_load)
+                
+            if self.load_status_label is not None:
+                self.ui_queue.put(lambda: self.load_status_label.config(text=f"House Load: {calc_load:.3f} kW"))
+        except Exception as e:
+            logging.error(f"Error in update_load_label: {e}")
+
     def process_chunk(self, xml_data: str) -> None:
         """Backward-compatibility mapping for process_serial_chunk (delegate)."""
         try:
@@ -497,6 +519,9 @@ class GridDashboard(tk.Tk):
             self.weather_map = weather.fetch_historical_weather()
         except Exception as e:
             logging.error(f"Error loading initial historical weather cache: {e}")
+
+        # Update initial house load label
+        self.update_load_label()
 
     def setup_widgets(self) -> None:
         """Constructs all Tkinter headers, labels, and columns."""
@@ -547,6 +572,14 @@ class GridDashboard(tk.Tk):
             latest_ch = self.chilicon_power[-1] if self.chilicon_power else 0.0
             self.chilicon_status_label.config(text=f"Chillicon PV: {latest_ch:.3f} kW")
 
+        # House Load measurement widget
+        self.load_status_label = tk.Label(
+            self.right_header, text="", font=('Helvetica', 16, 'bold'), bg='black', fg=config.CONSUMPTION_COLOR, anchor='e'
+        )
+        self.load_status_label.pack(anchor='e', pady=(0, 2))
+        latest_load = self.se_load_power[-1] if self.se_load_power else 0.0
+        self.load_status_label.config(text=f"House Load: {latest_load:.3f} kW")
+
         # Hardware logos küçük banner
         if self.logo_image_tk:
             self.logo_label = tk.Label(self, image=self.logo_image_tk, bg='black')
@@ -595,7 +628,7 @@ class GridDashboard(tk.Tk):
         # LineCollection for Slide 1 Grid plot
         self.lc = LineCollection([], linewidths=1.8, zorder=2)
         self.ax.add_collection(self.lc)
-        self.load_line, = self.ax.plot([], [], color=config.CONSUMPTION_COLOR, label='Appliance Load (SE Approx)', linewidth=1.2, alpha=0.85, zorder=1.8)
+        self.load_line, = self.ax.plot([], [], color=config.CONSUMPTION_COLOR, label='Appliance Load (SE Approx)', linewidth=1.8, alpha=0.85, zorder=1.8)
 
         # Slide 2 Axis (Frequency Domain)
         self.ax_freq = self.fig.add_axes(rect, facecolor='black')
@@ -742,6 +775,7 @@ class GridDashboard(tk.Tk):
 
         if self.status_label is not None:
             self.ui_queue.put(lambda: self.status_label.config(text=text, fg=color))
+        self.update_load_label()
 
     def start_solaredge_loop(self) -> None:
         """Spawns the background thread to poll SolarEdge every 15 minutes."""

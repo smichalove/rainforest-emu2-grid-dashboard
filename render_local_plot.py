@@ -186,6 +186,18 @@ class OfflineViewer(tk.Tk):
             latest_ch = self.chilicon_power[-1] if self.chilicon_power else 0.0
             self.chilicon_status_label.config(text=f"Chillicon PV: {latest_ch:.3f} kW")
 
+        # House Load measurement widget
+        latest_rf = self.usage[-1] if self.usage else 0.0
+        latest_se_pv = self.se_power[-1] if self.se_power else 0.0
+        latest_ch_pv = self.chilicon_power[-1] if self.chilicon_power else 0.0
+        latest_bat = self.se_battery_power[-1] if self.se_battery_power else 0.0
+        calc_load = max(0.0, latest_rf + latest_se_pv + latest_ch_pv + latest_bat)
+
+        self.load_status_label = tk.Label(
+            self.right_header, text=f"House Load: {calc_load:.3f} kW", font=('Helvetica', 16, 'bold'), bg='black', fg=config.CONSUMPTION_COLOR, anchor='e'
+        )
+        self.load_status_label.pack(anchor='e', pady=(0, 2))
+
         if self.logo_image_tk:
             self.logo_label = tk.Label(self, image=self.logo_image_tk, bg='black')
             self.logo_label.pack(side=tk.TOP, anchor='center', pady=(5, 5))
@@ -226,7 +238,7 @@ class OfflineViewer(tk.Tk):
 
         self.lc = LineCollection([], linewidths=1.8, zorder=2)
         self.ax.add_collection(self.lc)
-        self.load_line, = self.ax.plot([], [], color=config.CONSUMPTION_COLOR, label='Appliance Load (SE Approx)', linewidth=1.2, alpha=0.85, zorder=1.8)
+        self.load_line, = self.ax.plot([], [], color=config.CONSUMPTION_COLOR, label='Appliance Load (SE Approx)', linewidth=1.8, alpha=0.85, zorder=1.8)
 
         # Slide 2 Axis
         self.ax_freq = self.fig.add_axes(rect, facecolor='black')
