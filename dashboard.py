@@ -3,6 +3,15 @@
 Delegates hardware communication, file IO, API clients, spectral analysis, and
 LLM processing to the dashboard_modules package, retaining UI layout, background
 loops, and robust backward-compatible helper delegates.
+
+Repository Module Map Reference (loaded via dashboard_modules package):
+1. config.py: Centralizes GUI styling parameters (fonts, colors, coordinates, frame metrics) and default lat/lon constants.
+2. io.py: Provides atomic, thread-safe JSON read/write handles and null-byte cleanup for telemetry CSV files.
+3. telemetry.py: Manages EMU-2 serial polling, signed hex-to-dec XML conversions, and rolling telemetry data arrays.
+4. solar.py: Handles SolarEdge and Chillicon Cloud API sessions, requests, cookies, and authentication.
+5. weather.py: Integrates current forecast and past 5-day weather history metrics via Open-Meteo REST calls.
+6. spectral.py: Pure mathematical library for DTFT amplitude/phase calculation, curve derivatives (slopes), and signal SNR calculations.
+7. ai.py: Interfaces with Google Cloud Storage and Vertex AI GenAI SDKs for bulk baseline summary prediction jobs.
 """
 
 import csv
