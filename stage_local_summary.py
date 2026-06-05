@@ -938,7 +938,7 @@ def run_analysis_workflow(baseline_ts_str: str, baseline_text: str, batch_interv
     solar_series = [s + c for s, c in zip(se_series, ch_series)]
     
     # 4. Compute Fourier (DFT) spectral metrics
-    # Compute individual diurnal amplitudes and peak hours for East (SolarEdge) and West (Chillicon) arrays
+    # Compute individual diurnal amplitudes and peak hours for NW (SolarEdge) and SW (Chillicon) arrays
     se_24h_amp, se_24h_peak_hour = compute_dft_coefficients(se_series, start_hour, 24.0)
     ch_24h_amp, ch_24h_peak_hour = compute_dft_coefficients(ch_series, start_hour, 24.0)
     
@@ -1018,10 +1018,10 @@ def run_analysis_workflow(baseline_ts_str: str, baseline_text: str, batch_interv
                 
     # Check solar correlation coefficient
     if solar_corr < 0.70 and deltas["delta_solar"] > 0.5:
-        # Check if SolarEdge (East) peaks earlier than Chillicon (West).
-        # Normal diurnal phase separation between East and West arrays is typically 2.0 to 8.0 hours.
-        phase_diff = (ch_24h_peak_hour - se_24h_peak_hour) % 24
-        if not (2.0 <= phase_diff <= 8.0):
+        # Check if Chillicon (SW) peaks earlier than SolarEdge (NW).
+        # Normal diurnal phase separation between SW and NW arrays is typically 1.0 to 5.0 hours.
+        phase_diff = (se_24h_peak_hour - ch_24h_peak_hour) % 24
+        if not (1.0 <= phase_diff <= 5.0):
             warnings.append(
                 f"Solar Edge and Chillicon PV outputs show low correlation (r={solar_corr:.2f}) "
                 f"with atypical phase separation (Peak hours: SE={se_24h_peak_hour:.1f}, CH={ch_24h_peak_hour:.1f}), "
@@ -1176,7 +1176,7 @@ Output:
 Explanation:
 """
 
-    phase_diff: float = (ch_24h_peak_hour - se_24h_peak_hour) % 24
+    phase_diff: float = (se_24h_peak_hour - ch_24h_peak_hour) % 24
     formatted_dft_prompt: str = dft_prompt_template.format(
         solar_24h_amp=solar_24h_amp,
         solar_24h_peak_hour=format_decimal_hour(solar_24h_peak_hour),

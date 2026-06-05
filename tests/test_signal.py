@@ -173,8 +173,8 @@ def test_prompt_formatting_success() -> None:
             remaining_lines=15
         )
         assert "- Solar Weather Modulation Factor: 0.50" in formatted
-        assert "- SolarEdge Diurnal Peak Hour (East Array): 11:30" in formatted
-        assert "- Chillicon Diurnal Peak Hour (West Array): 16:00" in formatted
+        assert "- SolarEdge Diurnal Peak Hour (NW Array): 11:30" in formatted
+        assert "- Chillicon Diurnal Peak Hour (SW Array): 16:00" in formatted
     except KeyError as e:
         pytest.fail(f"KeyError was raised during formatting for key: {e}")
 

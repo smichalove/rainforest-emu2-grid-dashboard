@@ -130,12 +130,6 @@ class SolarEdgeClient:
                 - 'timestamp' (datetime.datetime): Fetch timestamp.
         """
         now = datetime.datetime.now()
-        hour = now.hour + now.minute / 60.0
-
-        # Skip polling during night hours to conserve API limits
-        if hour < 5.0 or hour > 21.5:
-            logging.info("Outside daytime window. Skipping SolarEdge API fetch.")
-            return None
 
         url = (
             f"https://monitoringapi.solaredge.com/site/{self.site_id}/"

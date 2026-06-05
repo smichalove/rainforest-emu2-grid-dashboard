@@ -139,3 +139,32 @@ Hello there! I've analyzed your energy dashboard, and I have some fantastic news
 
 This feature will be evaluated as a potential Slide 3 or an expandable touch overlay in future dashboard releases (V4).
 
+---
+
+## 10. AI Reasoning & Stager Bug Log (Resolved)
+
+### 1. Local LLM Case 7 Anomaly Formatting Miss
+- **Issue:** During local edge delta runs, the model failed to output the designated `"critical sensor anomaly"` warning for CASE 7 (Impossible Export Ratio) even when export exceeded solar plus battery discharge. Instead, it outputted a generic text line (`* Export exceeds generation by 0.06 kWh.`).
+- **Root Cause:** Smaller local quantized models (`gemma4-it-q4`) lack the zero-shot reasoning capacity to format complex custom alerts without direct instruction. No few-shot example was provided in `gemma_hybrid_prompt.txt` for Case 7.
+- **Resolution:** Added `EXAMPLE 5 (IMPOSSIBLE EXPORT ANOMALY)` to the few-shot templates in `gemma_hybrid_prompt.txt` showing the exact expected output formatting, enabling the model to generalize correctly.
+
+### 2. Static Sleep Interval Delay in Cloud Batch Stager
+- **Issue:** The stager slept for a flat 4 hours on startup if the cache was fresh, which caused up to 8-hour delays in cache updates if the stager was restarted.
+- **Root Cause:** A fixed `time.sleep(14400)` was used on startup when the cache was fresh.
+- **Resolution:** Replaced it with a dynamic sleep calculation (Option B) that calculates the exact remaining seconds until cache expiration and sleeps only that duration.
+
+### 3. Missing Battery Discharge/Flex Event Bullet Point
+- **Issue:** The local delta loop calculated battery discharging correctly but failed to produce a dedicated bullet point alert, causing the model to misattribute it to a lost grid rhythm.
+- **Root Cause:** `gemma_hybrid_prompt.txt` lacked a specific evaluation rule for active battery discharge.
+- **Resolution:** Added **CASE 9** to explicitly flag active battery discharge or PSE Flex events when `delta_bat_discharge` > 0.1 kWh.
+
+### 4. Silent Redeployment Failure (Mac to Jetson File Sync)
+- **Issue:** Code, stagers, and prompt updates were failing to copy to the Jetson edge server silently, leaving the Jetson running outdated versions.
+- **Root Cause:** The `redeploy.sh` script does not check the exit codes of individual `scp` commands. When the `grid_backup` SSH key was rejected due to host-side directory permission restrictions (`777` permissions on `/home/grid_backup`), the `scp` command failed with permission denied, but the script still printed "Redeployment complete!" as if it had succeeded.
+- **Resolution:** Restored `/home/grid_backup` permissions to `750` on the Jetson to satisfy SSH `StrictModes`, and verified that the files actually copied. Going forward, developers/agents must inspect the output of transfer commands rather than assuming success based on final script completion.
+
+### 5. Nighttime SolarEdge Telemetry Drop-off (Resolved)
+- **Issue:** The Appliance Load (SE Approx) line and battery metrics completely disappeared or flatlined on the 24-hour viewport chart after 9:30 PM.
+- **Root Cause:** Although `SOLAREDGE_POLL_INTERVAL_SEC` was changed to 6 minutes in `dashboard.py` in v3.3.0 to establish a uniform polling interval, the hardcoded nighttime skip check `if hour < 5.0 or hour > 21.5:` was left inside `dashboard_modules/solar.py`. This caused the client to silently skip all queries between 9:30 PM and 5:00 AM.
+- **Resolution:** Completely removed the nighttime hour check block from `dashboard_modules/solar.py`, allowing continuous, uniform 6-minute polling (240 requests/day) 24/7.
+
