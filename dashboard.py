@@ -483,18 +483,20 @@ class GridDashboard(tk.Tk):
         """Updates the house load label in the GUI using the latest available data."""
         try:
             with self.data_lock:
-                latest_rf = self.usage[-1] if self.usage else 0.0
-                latest_se_pv = self.se_power[-1] if self.se_power else 0.0
-                latest_ch_pv = self.chilicon_power[-1] if self.chilicon_power else 0.0
-                latest_bat = self.se_battery_power[-1] if self.se_battery_power else 0.0
-                
-                # Physical formula: Load = RF Grid + SE PV + CH PV + Battery Power
-                calc_load = latest_rf + latest_se_pv + latest_ch_pv + latest_bat
-                # Clip negative load values to 0.0
-                calc_load = max(0.0, calc_load)
+                # To ensure the widget exactly matches the orange 'Appliance Load' line on the chart,
+                # we display the direct SolarEdge LOAD reading when available. If not available (e.g.,
+                # if API is offline), we fall back to the calculated physical energy balance formula.
+                if self.se_load_power:
+                    latest_load = self.se_load_power[-1]
+                else:
+                    latest_rf = self.usage[-1] if self.usage else 0.0
+                    latest_se_pv = self.se_power[-1] if self.se_power else 0.0
+                    latest_ch_pv = self.chilicon_power[-1] if self.chilicon_power else 0.0
+                    latest_bat = self.se_battery_power[-1] if self.se_battery_power else 0.0
+                    latest_load = max(0.0, latest_rf + latest_se_pv + latest_ch_pv + latest_bat)
                 
             if self.load_status_label is not None:
-                self.ui_queue.put(lambda: self.load_status_label.config(text=f"House Load: {calc_load:.3f} kW"))
+                self.ui_queue.put(lambda: self.load_status_label.config(text=f"House Load: {latest_load:.3f} kW"))
         except Exception as e:
             logging.error(f"Error in update_load_label: {e}")
 
