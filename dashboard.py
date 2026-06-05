@@ -284,7 +284,15 @@ class GridDashboard(tk.Tk):
     # --- Backward-Compatibility Class Method Delegates with try/except safeguards ---
 
     def hex_to_signed_int(self, hex_str: str, bits: int = 32) -> int:
-        """Converts hex representation to signed integer (delegate)."""
+        """Converts hex representation to signed integer (delegate).
+
+        Args:
+            hex_str: The hexadecimal string to convert.
+            bits: The bit-width of the target integer.
+
+        Returns:
+            The decoded signed integer value.
+        """
         try:
             return telemetry.hex_to_signed_int(hex_str, bits)
         except Exception as e:
@@ -491,7 +499,14 @@ class GridDashboard(tk.Tk):
             logging.error(f"Error in update_load_label: {e}")
 
     def process_chunk(self, xml_data: str) -> None:
-        """Backward-compatibility mapping for process_serial_chunk (delegate)."""
+        """Backward-compatibility mapping for process_serial_chunk (delegate).
+
+        Args:
+            xml_data: The XML string payload containing serial telemetry.
+
+        Returns:
+            None.
+        """
         try:
             self.process_serial_chunk(xml_data)
         except Exception as e:
@@ -757,7 +772,14 @@ class GridDashboard(tk.Tk):
                     self.ser.close()
 
     def process_serial_chunk(self, xml_data: str) -> None:
-        """Parses XML grid updates and logs to history."""
+        """Parses XML grid updates and logs to history.
+
+        Args:
+            xml_data: The XML string block read from the serial interface.
+
+        Returns:
+            None.
+        """
         actual_kw = telemetry.parse_xml_telemetry(xml_data)
         if actual_kw is None:
             return
@@ -1006,7 +1028,15 @@ class GridDashboard(tk.Tk):
             self.weather_label.config(text=f"{temp_str} | {sky_str}")
 
     def update_chart(self, label_text: str, color: str) -> None:
-        """Draws current line coordinates and stacked bars on the canvas."""
+        """Draws current line coordinates and stacked bars on the canvas.
+
+        Args:
+            label_text: The status text label to update.
+            color: The hex or Tkinter color string to use for the status label.
+
+        Returns:
+            None.
+        """
         if self.status_label is not None:
             self.status_label.config(text=label_text, fg=color)
         t0 = time.perf_counter()
@@ -1196,7 +1226,14 @@ class GridDashboard(tk.Tk):
         self.after(2000, self.fast_render_loop)
 
     def update_background_summary(self, text: str) -> None:
-        """Schedules thread-safe update of summary text state variables."""
+        """Schedules thread-safe update of summary text state variables.
+
+        Args:
+            text: The raw summary text string received from the AI stager.
+
+        Returns:
+            None.
+        """
         marker = "[Live Local Delta (Jetson)"
         if marker in text:
             self.baseline_text = text.split(marker)[0].strip()
@@ -1223,7 +1260,15 @@ class GridDashboard(tk.Tk):
             self.canvas.draw_idle()
 
     def wrap_text(self, text: str, width: int = 100) -> str:
-        """Standard word wrapping formatting utility."""
+        """Standard word wrapping formatting utility.
+
+        Args:
+            text: The text to be wrapped.
+            width: The maximum character width of each line.
+
+        Returns:
+            The wrapped text with paragraph formatting.
+        """
         import textwrap
         lines = []
         for p in text.split('\n'):
@@ -1235,7 +1280,14 @@ class GridDashboard(tk.Tk):
         return '\n'.join(lines)
 
     def update_ui_text(self, text: str) -> None:
-        """Safely updates status label text."""
+        """Safely updates status label text.
+
+        Args:
+            text: The status message string to set on the UI status label.
+
+        Returns:
+            None.
+        """
         if self.status_label is not None:
             self.after(0, lambda: self.status_label.config(text=text))
     def local_delta_loop(self) -> None:
@@ -1359,7 +1411,15 @@ class GridDashboard(tk.Tk):
             self.after(100, self.process_ui_queue)
 
     def handle_signal(self, signum: int, frame: Any) -> None:
-        """Interprets termination signals and triggers destruction."""
+        """Interprets termination signals and triggers destruction.
+
+        Args:
+            signum: The POSIX signal number received (e.g., signal.SIGINT).
+            frame: The current stack frame object (or None) when the signal was intercepted.
+
+        Returns:
+            None.
+        """
         self.after(0, self.shutdown_from_signal)
 
     def shutdown_from_signal(self) -> None:
