@@ -832,7 +832,8 @@ def query_local_ollama(prompt: str, model: str) -> str:
         "stream": False,
         "options": {
             "num_predict": 2048,
-            "num_ctx": 8192
+            "num_ctx": 8192,
+            "temperature": 0.1
         }
     }
     data = json.dumps(payload).encode('utf-8')
