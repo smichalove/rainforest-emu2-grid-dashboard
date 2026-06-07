@@ -16,6 +16,7 @@ merged_summary.json
 
 # Scratch and local testing files
 scratch/
+planning/
 June 1, 2026/
 weather_cache.json
 active_local_job.json

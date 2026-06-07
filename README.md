@@ -42,15 +42,15 @@ The prompt includes hourly aggregated Net Grid import/export statistics, SolarEd
 > Before publishing or deploying this project in your own environment, you should review and profile these prompts. We recommend using a powerful AI (such as Gemini) to adapt and tune these system instructions, orientation angles, and billing rules to match your specific home configuration and local utility plans.
 
 ### Authentication Setup
-The dashboard automatically searches for credentials using one of the following methods:
-1. **Google Cloud Service Account JSON (Headless/Vertex AI):**
-   - Place the service account JSON key at `~/Auth/service_account.json` (or `auth/service_account.json` in the application directory).
-   - The script routes queries via Vertex AI using the project `<your-gcp-project-id>` and location `global`.
-   - Detailed instructions on setting up your Vertex AI Google Cloud account and generating service account keys can be found in the [veo-video-creation-workflow README](https://github.com/<your-github-username>/veo-video-creation-workflow/blob/main/README.md).
-2. **Developer API Key:**
-   - Create a `.env` file in the same directory as `dashboard.py` and define:
+The dashboard automatically authenticates using Vertex AI on Google Cloud:
+1. **Google Cloud Service Account JSON:**
+   - Place your service account JSON credentials key at `~/Auth/service_account.json` (or `auth/service_account.json` in the application directory).
+   - The application dynamically sets the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to point to this JSON file.
+2. **GCP Project Configuration:**
+   - Create a `.env` file in the same directory as `dashboard.py` and define your Google Cloud project and location:
      ```env
-     GEMINI_API_KEY="your_api_key_here"
+     GCP_PROJECT="your-gcp-project-id"
+     GOOGLE_CLOUD_LOCATION="global"
      ```
 
 ### SolarEdge API Configuration

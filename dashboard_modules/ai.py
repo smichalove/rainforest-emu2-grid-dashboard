@@ -229,8 +229,13 @@ def fetch_gemini_summary(
         # Query remote Vertex AI (Gemini) via Google GenAI SDK
         try:
             genai = get_genai()
-            # Initialize client. The SDK loads GCP PROJECT and auth credentials implicitly.
-            if gcp_project_id:
+            import os
+            # Initialize client. Use Vertex AI if service account credentials are set up.
+            if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ:
+                project = gcp_project_id or os.environ.get("GOOGLE_CLOUD_PROJECT") or "mutua-477100"
+                location = os.environ.get("GOOGLE_CLOUD_LOCATION") or "global"
+                client = genai.Client(vertexai=True, project=project, location=location)
+            elif gcp_project_id:
                 client = genai.Client(http_options={'headers': {'X-Goog-User-Project': gcp_project_id}})
             else:
                 client = genai.Client()
