@@ -27,15 +27,17 @@ Because the monitor reads data directly from the Zigbee wireless network inside 
 - **Chillicon Cloud API Integration**: Polls actual microinverter solar generation (production power in kW and cumulative lifetime generation in Wh) from Chillicon Cloud every 15 minutes using persistent session cookie authentication.
 - **Stacked Solar PV Chart**: Stacks the actual Chillicon generation (plotted as a bright neon yellow cap) on top of the SolarEdge PV bars (warm gold base) on a unified 10-minute grid, displaying your total combined solar output on the secondary Y-axis.
 - **Hands-Free Kiosk Mode**: Configured to boot completely headless and automatically launch into fullscreen without sleeping.
-- **Gemini Background Summaries**: Uses a background thread to call the Gemini 2.5 Flash model (via Vertex AI or Developer API Key) to analyze power trends and render a blue narrative watermark summary directly on the graph background, formatted with smart 80-character line wrapping.
+- **AI Background Summaries**: Renders a narrative, statistical, and mathematical analysis summary directly on the graph background, formatted with smart 80-character line wrapping. Supports both Google Cloud Vertex AI and fully local Nvidia Jetson-based edge models (Ollama/Gemma 4).
 
 ---
 
 ## AI Background Summaries & Authentication
 
-The dashboard integrates the **`google-genai`** SDK to query Gemini every 15 minutes in a non-blocking background thread. The generated summary is cached locally to disk at `gemini_summary.json` inside the repository directory and loads instantly on startup. 
+The dashboard displays a narrative, statistical, and mathematical analysis summary directly on the graph watermark. To optimize resource consumption and isolate heavy inference loops from the real-time GUI, the dashboard utilizes a **Decoupled Architecture**:
+- **Baseline Summary Generation (every 4 hours)**: Feeds bulk historical telemetry to the stager to update and cache a high-fidelity baseline summary.
+- **Real-Time Delta Updates (every 15 minutes)**: Pulls lightweight delta updates and overlays them using the local edge server on the Nvidia Jetson.
 
-The prompt includes hourly aggregated Net Grid import/export statistics, SolarEdge solar generation, battery stats (`Battery_Avg_kW` average discharge rate and `Battery_SoC` average charge percentage), and actual Chillicon generation (`Chillicon_Avg_kW`). This enables Gemini to make highly accurate summaries and correctly separate battery dispatch behavior during Puget Sound Energy (PSE) Flex events (reimbursed at a premium rate of **$0.50 / kWh** instead of the standard $0.19 / kWh) from your actual solar arrays' generation without needing mathematical inference.
+The prompt includes hourly aggregated Net Grid import/export statistics, SolarEdge solar generation, battery stats (`Battery_Avg_kW` average discharge rate and `Battery_SoC` average charge percentage), and actual Chillicon generation (`Chillicon_Avg_kW`). This enables the model to make highly accurate summaries and correctly separate battery dispatch behavior during Puget Sound Energy (PSE) Flex events (reimbursed at a premium rate of **$0.50 / kWh** instead of the standard $0.19 / kWh) from your actual solar arrays' generation without needing mathematical inference.
 
 > [!WARNING]
 > **Prompt Personalization Warning:** The system prompts (such as `gemma_hybrid_prompt.txt` and `gemini_prompt.txt`) are heavily customized for the developer's specific microgrid layout, geographical/climatological constraints (e.g. South-West and North-West facing solar arrays, Seattle daylight windows), utility rates (Puget Sound Energy's standard and Flex event tiers), and lack of an EV (Electric Vehicle).
@@ -82,8 +84,8 @@ To enable the Chillicon Cloud API integration, configure your login credentials 
 For production systems, this repository supports a **decoupled architecture**. This separates the resource-heavy LLM inference from the real-time Tkinter GUI process.
 
 You can configure this using the `LLM_MODE` setting in your `.env` file:
-* **`LLM_MODE=direct` (Default)**: The GUI runs an inline background thread that queries the Gemini API directly every 15 minutes. Best for simple, out-of-the-box local developer testing.
-* **`LLM_MODE=decoupled`**: The GUI runs as a pure cache consumer, disabling internal API calls and polling `gemini_summary.json` every 10 seconds for updates. This lets an external background process update the cache.
+* **`LLM_MODE=direct` (Default)**: The GUI runs an inline background thread that queries the remote Vertex AI API directly every 15 minutes. Best for simple, out-of-the-box local developer testing.
+* **`LLM_MODE=decoupled`**: The GUI runs as a pure cache consumer, disabling internal API calls and polling `gemini_summary.json` every 10 seconds for updates. This lets the local Jetson edge server or an external background stager update the cache.
 
 ### Cloud Batch Staging (Raspberry Pi)
 When running `LLM_MODE=decoupled` on the Raspberry Pi:
