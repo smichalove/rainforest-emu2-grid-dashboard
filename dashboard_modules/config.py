@@ -34,7 +34,7 @@ DEFAULT_WEATHER_FALLBACK: Dict[str, float] = {
 IMPORT_COLOR: str = '#f43f5e'          # Modern rose/crimson red
 EXPORT_COLOR: str = '#00ff00'          # Classic neon green
 EXPECTED_SOLAR_COLOR: str = '#ffff00'  # Bright yellow for expected weather-modulated solar
-CONSUMPTION_COLOR: str = '#ff5e00'     # Neon orange for household consumption
+CONSUMPTION_COLOR: str = 'white'     # White for household consumption / appliance load
 
 # Slide Rotation Interval Settings (in milliseconds)
 SLIDE_1_DURATION_MS: int = 90000       # 1.5 minutes
