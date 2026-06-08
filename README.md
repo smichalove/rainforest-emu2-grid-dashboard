@@ -12,6 +12,7 @@ A robust, 24-hour real-time grid monitoring dashboard using a Rainforest EMU-2 s
 - **Raspberry Pi** (Pi 3 or 4 recommended)
 - **Rainforest EMU-2** connected via USB (`/dev/ttyACM0`)
 - **HDMI Monitor** (The script dynamically scales to fullscreen, mimicking commercial 10" or larger solar dashboards)
+- **NVIDIA Jetson Orin Nano / Orin Nano Super Developer Kit** (Optional) - Dedicated local AI server (minimum 8GB unified memory recommended) to run decoupled local Edge AI offline via Ollama.
 
 ## Connecting to Your Smart Meter (PSE & Others)
 Because the monitor reads data directly from the Zigbee wireless network inside your utility's smart meter, it must be paired and provisioned with the meter:
@@ -42,6 +43,17 @@ The prompt includes hourly aggregated Net Grid import/export statistics, SolarEd
 > [!WARNING]
 > **Prompt Personalization Warning:** The system prompts (such as `gemma_hybrid_prompt.txt` and `gemini_prompt.txt`) are heavily customized for the developer's specific microgrid layout, geographical/climatological constraints (e.g. South-West and North-West facing solar arrays, Seattle daylight windows), utility rates (Puget Sound Energy's standard and Flex event tiers), and lack of an EV (Electric Vehicle).
 > Before publishing or deploying this project in your own environment, you should review and profile these prompts. We recommend using a powerful AI (such as Gemini) to adapt and tune these system instructions, orientation angles, and billing rules to match your specific home configuration and local utility plans.
+### Supported AI Models
+
+The architecture supports both cloud-based LLM APIs and local edge inference, depending on your deployment preferences:
+
+#### 1. Cloud-Based Models (Google Cloud Vertex AI)
+* **`gemini-2.5-flash`** (Default): Primary model used for compiling large 24-hour historical baselines. Runs via high-speed direct API or cost-optimized GCS batch jobs (with a 50% discount per token).
+* **`gemini-2.5-pro`** (Optional): Can be configured for deeper qualitative microgrid reports or complex utility policy reasoning.
+
+#### 2. Local Edge Models (NVIDIA Jetson Ollama)
+* **`gemma4-it-q4`** (Default): A custom edge-optimized 5.1B Instruct model (using `Q4_K_M` GGUF quantization). Fits in **1.6 GB** of active VRAM, offering extremely fast, low-latency delta and DFT summary predictions on constrained edge hardware.
+* **`gemma4-vision-q4`** (Optional): Compiled using the `F16` multimodal projector adapter. Allows the local stager to perform visual analysis of the generated dashboard plots.
 
 ### Authentication Setup
 The dashboard automatically authenticates using Vertex AI on Google Cloud:
