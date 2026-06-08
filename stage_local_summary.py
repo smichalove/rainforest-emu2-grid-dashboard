@@ -1,3 +1,34 @@
+"""Jetson Edge AI Server: Local Telemetry Processing and Inference Daemon.
+
+This script acts as the offline Edge AI stager and API server running on the
+Nvidia Jetson Orin Nano server. It computes daily energy baseline metrics,
+performs real-time delta analysis (integrating recent telemetry with open weather
+predictions), and manages local LLM generations via Ollama.
+
+Architecture & Functional Blocks:
+1. HTTP API Server (/api/analyze):
+   An HTTP API endpoint that accepts POST requests containing client-cached
+   baselines, manages baseline freshness validation, and returns live delta bullet
+   points alongside current metrics and cached spectral coefficients.
+2. Telemetry Processing Pipeline:
+   Aligns multi-source CSV files (Grid energy, SolarEdge generation, battery state
+   of charge, and Chillicon micro-inverters) into uniform hourly buckets.
+3. Local LLM Integration (Ollama):
+   Uses a local Ollama service running the 'gemma4-it-q4' model. It dynamically
+   generates:
+     - 24-hour baseline reports (summarizing historical logs via gemma_prompt.txt).
+     - Real-time delta evaluations (explaining current anomalies via gemma_hybrid_prompt.txt).
+     - Diurnal and semi-diurnal spectral explanations (via gemma_dft_prompt.txt).
+4. Thread Synchronization & Memory Management:
+   To prevent memory contention (OOM) on the Jetson Orin Nano's unified memory
+   architecture, a global thread synchronization lock ('analysis_lock') staggers:
+     - Background full-history DFT math processing (running every 30 minutes).
+     - Interactive API requests querying local LLM models.
+5. Spectrum Calculation Cache:
+   Maintains a periodically updated background cache of the full-history DFT
+   spectrum, allowing quick client UI responses without real-time computation delays.
+"""
+
 import os
 import json
 import time
@@ -14,6 +45,10 @@ import logging
 from collections import defaultdict
 from typing import Dict, List, Tuple, Optional, Any
 import threading
+from dashboard_modules.ai import generate_hourly_summaries
+
+# Global thread synchronization lock to prevent concurrent CPU/GPU resource contention
+analysis_lock: threading.Lock = threading.Lock()
 
 # Configure logging
 logging.basicConfig(
@@ -882,8 +917,304 @@ def calculate_remaining_lines(baseline_text: str, max_allowed: int = 30) -> int:
     return max(3, remaining)
 
 
-def run_analysis_workflow(baseline_ts_str: str, baseline_text: str, batch_interval_hours: int = 4) -> Dict[str, Any]:
-    """Runs the quantitative modeling and local LLM summary generation workflow."""
+def calculate_baseline_metrics(records: List[Tuple[Any, ...]]) -> Dict[str, float]:
+    """Computes daily metrics from aligned telemetry records.
+
+    Args:
+        records: A list of aligned hourly records. Each record should contain:
+            (hour_str, avg_kw, min_kw, max_kw, median_kw, se_avg, se_max,
+             se_energy, bat_avg, bat_soc, ch_avg, ch_max, ch_energy)
+
+    Returns:
+        A dictionary containing computed baseline energy statistics.
+
+    Raises:
+        None
+    """
+    total_imported: float = 0.0
+    total_exported: float = 0.0
+    se_generated: float = 0.0
+    battery_discharged: float = 0.0
+    battery_charged: float = 0.0
+    chilicon_generated: float = 0.0
+    inferred_chilicon: float = 0.0
+
+    peak_grid_import: float = 0.0
+    peak_grid_export: float = 0.0
+    peak_se_pv: float = 0.0
+    peak_chilicon_pv: float = 0.0
+
+    for r in records:
+        (
+            _,
+            avg_kw,
+            min_kw,
+            max_kw,
+            _,
+            se_avg,
+            se_max,
+            se_energy,
+            bat_avg,
+            _,
+            ch_avg,
+            ch_max,
+            ch_energy,
+        ) = r
+
+        # 1. Grid Imports / Exports (kWh)
+        if avg_kw > 0:
+            total_imported += avg_kw * 1.0
+        else:
+            total_exported += abs(avg_kw) * 1.0
+
+        if max_kw > 0:
+            peak_grid_import = max(peak_grid_import, max_kw)
+        if min_kw < 0:
+            peak_grid_export = max(peak_grid_export, abs(min_kw))
+
+        # 2. SolarEdge Generated
+        se_generated += se_energy
+        peak_se_pv = max(peak_se_pv, se_max)
+
+        # 3. Battery Activity
+        if bat_avg > 0:
+            battery_discharged += bat_avg * 1.0
+        else:
+            battery_charged += abs(bat_avg) * 1.0
+
+        # 4. Chillicon Generated
+        chilicon_generated += ch_energy
+        peak_chilicon_pv = max(peak_chilicon_pv, ch_max)
+
+        # 5. Inferred Chillicon
+        if avg_kw < 0:
+            grid_export_rate = abs(avg_kw)
+            inferred_rate = grid_export_rate - se_avg - max(0.0, bat_avg)
+            if inferred_rate > 0:
+                inferred_chilicon += inferred_rate * 1.0
+
+    # Net Billing Impact ($0.19 import/export, $0.31 flex bonus for battery discharge)
+    import_cost: float = total_imported * 0.19
+    export_credit: float = total_exported * 0.19
+    flex_bonus: float = battery_discharged * 0.31
+    net_credit: float = export_credit - import_cost + flex_bonus
+
+    # Estimated Home Consumption
+    total_solar: float = se_generated + (
+        chilicon_generated if chilicon_generated > 0 else inferred_chilicon
+    )
+    home_consumption: float = (
+        total_solar
+        + total_imported
+        - total_exported
+        + battery_discharged
+        - battery_charged
+    )
+    if home_consumption < 0:
+        home_consumption = 0.0
+
+    return {
+        "total_imported": total_imported,
+        "total_exported": total_exported,
+        "se_generated": se_generated,
+        "battery_discharged": battery_discharged,
+        "battery_charged": battery_charged,
+        "chilicon_generated": chilicon_generated,
+        "inferred_chilicon": inferred_chilicon,
+        "peak_grid_import": peak_grid_import,
+        "peak_grid_export": peak_grid_export,
+        "peak_se_pv": peak_se_pv,
+        "peak_chilicon_pv": peak_chilicon_pv,
+        "net_credit": net_credit,
+        "home_consumption": home_consumption,
+    }
+
+
+def calculate_baseline_metrics_for_range(
+    start_dt: datetime.datetime, end_dt: datetime.datetime
+) -> Dict[str, float]:
+    """Filters hourly summary CSV rows within [start_dt, end_dt] and calculates metrics.
+
+    Args:
+        start_dt: Start of the 24-hour evaluation window.
+        end_dt: End of the 24-hour evaluation window.
+
+    Returns:
+        A dictionary containing computed baseline energy statistics.
+
+    Raises:
+        None
+    """
+    csv_str: str = generate_hourly_summaries(
+        GRID_HISTORY, SE_HISTORY, SE_BATTERY_HISTORY, CHILICON_HISTORY
+    )
+    if not csv_str:
+        return {
+            "total_imported": 0.0,
+            "total_exported": 0.0,
+            "se_generated": 0.0,
+            "battery_discharged": 0.0,
+            "battery_charged": 0.0,
+            "chilicon_generated": 0.0,
+            "inferred_chilicon": 0.0,
+            "peak_grid_import": 0.0,
+            "peak_grid_export": 0.0,
+            "peak_se_pv": 0.0,
+            "peak_chilicon_pv": 0.0,
+            "net_credit": 0.0,
+            "home_consumption": 0.0,
+        }
+
+    records: List[Tuple[Any, ...]] = []
+    lines: List[str] = csv_str.strip().split("\n")
+    if len(lines) <= 1:
+        return calculate_baseline_metrics([])
+
+    # Header is lines[0]
+    for line in lines[1:]:
+        parts = line.split(",")
+        if len(parts) < 13:
+            continue
+        hour_str = parts[0]
+        dt = parse_timestamp(hour_str)
+        if not dt:
+            continue
+        if start_dt <= dt <= end_dt:
+            try:
+                records.append(
+                    (
+                        hour_str,
+                        float(parts[1]),   # Avg_kW
+                        float(parts[2]),   # Min_kW
+                        float(parts[3]),   # Max_kW
+                        float(parts[4]),   # Median_kW
+                        float(parts[5]),   # SE_Avg_kW
+                        float(parts[6]),   # SE_Max_kW
+                        float(parts[7]),   # SE_Energy_kWh
+                        float(parts[8]),   # Battery_Avg_kW
+                        float(parts[9]),   # Battery_SoC
+                        float(parts[10]),  # Chillicon_Avg_kW
+                        float(parts[11]),  # Chillicon_Max_kW
+                        float(parts[12]),  # Chillicon_Energy_kWh
+                    )
+                )
+            except ValueError:
+                continue
+
+    return calculate_baseline_metrics(records)
+
+
+def generate_local_baseline(baseline_dt: datetime.datetime) -> str:
+    """Formats the baseline prompt and queries Ollama for the 24h summary.
+
+    Args:
+        baseline_dt: The datetime threshold of the baseline start (e.g. 24h ago).
+
+    Returns:
+        The generated baseline summary text.
+
+    Raises:
+        FileNotFoundError: If the prompt file is missing.
+    """
+    start_dt: datetime.datetime = baseline_dt - datetime.timedelta(hours=24)
+    end_dt: datetime.datetime = baseline_dt
+
+    stats: Dict[str, float] = calculate_baseline_metrics_for_range(start_dt, end_dt)
+
+    prompt_path: str = os.path.join(SCRIPT_DIR, "gemma_prompt.txt")
+    if not os.path.exists(prompt_path):
+        raise FileNotFoundError(f"Baseline prompt template {prompt_path} not found.")
+
+    with open(prompt_path, "r", encoding="utf-8") as pf:
+        template: str = pf.read()
+
+    day_date: str = end_dt.strftime("%Y-%m-%d")
+
+    baseline_prompt: str = template.format(
+        total_imported=stats["total_imported"],
+        total_exported=stats["total_exported"],
+        se_generated=stats["se_generated"],
+        inferred_chilicon=stats["inferred_chilicon"],
+        net_credit=stats["net_credit"],
+        peak_grid_import=stats["peak_grid_import"],
+        peak_se_pv=stats["peak_se_pv"],
+        home_consumption=stats["home_consumption"],
+        day_date=day_date,
+    )
+
+    logging.info(
+        f"Submitting query for baseline on {day_date} to Ollama model {DEFAULT_MODEL}..."
+    )
+    return query_local_ollama(baseline_prompt, DEFAULT_MODEL)
+
+
+def run_analysis_workflow(
+    baseline_ts_str: str, baseline_text: str, batch_interval_hours: int = 4
+) -> Dict[str, Any]:
+    """Runs the quantitative modeling and local LLM summary generation workflow.
+
+    Args:
+        baseline_ts_str: The baseline timestamp string.
+        baseline_text: The baseline summary text.
+        batch_interval_hours: Interval for batch runs in hours.
+
+    Returns:
+        A dictionary with response texts and telemetry/model metrics.
+
+    Raises:
+        ValueError: If baseline timestamp cannot be parsed or generated.
+    """
+    analysis_lock.acquire()
+    try:
+        baseline_dt = parse_timestamp(baseline_ts_str)
+
+        # Check if baseline is expired (>24 hours) or empty/placeholder
+        is_expired: bool = False
+        if not baseline_dt:
+            is_expired = True
+        else:
+            age: float = (datetime.datetime.now() - baseline_dt).total_seconds()
+            if age > 86400:  # 24 hours in seconds
+                is_expired = True
+
+        is_placeholder: bool = (
+            not baseline_text
+            or baseline_text.strip() == ""
+            or "Awaiting AI Analysis..." in baseline_text
+        )
+
+        if is_expired or is_placeholder:
+            logging.info(
+                "Baseline is expired or placeholder. Generating fresh baseline locally..."
+            )
+            new_baseline_dt: datetime.datetime = datetime.datetime.now()
+            try:
+                baseline_text = generate_local_baseline(new_baseline_dt)
+                baseline_dt = new_baseline_dt
+                baseline_ts_str = new_baseline_dt.strftime("%Y-%m-%d %H:%M:%S")
+                logging.info(
+                    f"Fresh baseline generated successfully. Timestamp: {baseline_ts_str}"
+                )
+            except Exception as e:
+                logging.error(f"Failed to generate local baseline: {e}")
+                if not baseline_dt:
+                    baseline_dt = datetime.datetime.now()
+                    baseline_ts_str = baseline_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        res: Dict[str, Any] = _run_analysis_workflow_inner(
+            baseline_ts_str, baseline_text, batch_interval_hours
+        )
+        res["baseline_text"] = baseline_text
+        res["baseline_timestamp"] = baseline_ts_str
+        return res
+    finally:
+        analysis_lock.release()
+
+
+def _run_analysis_workflow_inner(
+    baseline_ts_str: str, baseline_text: str, batch_interval_hours: int = 4
+) -> Dict[str, Any]:
+    """Internal implementation of quantitative modeling and summary generation."""
     baseline_dt = parse_timestamp(baseline_ts_str)
     if not baseline_dt:
         raise ValueError(f"Could not parse baseline timestamp: {baseline_ts_str}")
@@ -1276,7 +1607,8 @@ def background_full_history_math_loop() -> None:
     while True:
         try:
             logging.info("Background Math: Starting full-history DFT calculation...")
-            run_full_history_math()
+            with analysis_lock:
+                run_full_history_math()
         except Exception as e:
             logging.error(f"Background Math Loop Error: {e}")
         
