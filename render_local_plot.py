@@ -564,7 +564,8 @@ class OfflineViewer(tk.Tk):
                         '24h Diurnal',
                         '12h Semi-Diurnal'
                     ],
-                    facecolor='black', edgecolor='white', labelcolor='white', fontsize=8
+                    facecolor='black', edgecolor='white', labelcolor='white', fontsize=8,
+                    loc='lower right'
                 )
                 max_amp = max(max(grid_amp), max(solar_amp), max(expected_solar_amp), max(consumption_amp)) if grid_amp else 1.0
                 self.ax_freq.set_ylim(0, max_amp * 1.85)

@@ -1186,7 +1186,8 @@ class GridDashboard(tk.Tk):
                         '24h Diurnal',
                         '12h Semi-Diurnal'
                     ],
-                    facecolor='black', edgecolor='white', labelcolor='white', fontsize=8
+                    facecolor='black', edgecolor='white', labelcolor='white', fontsize=8,
+                    loc='lower right'
                 )
                 
                 max_amp = max(max(grid_amp), max(solar_amp), max(expected_solar_amp), max(consumption_amp)) if grid_amp else 1.0
@@ -1348,6 +1349,13 @@ class GridDashboard(tk.Tk):
                         llm_response = res_data.get("response", "").strip()
                         dft_explanation = res_data.get("dft_explanation", "").strip()
                         metrics = res_data.get("metrics", {})
+                        returned_baseline_text = res_data.get("baseline_text", "").strip()
+                        returned_baseline_timestamp = res_data.get("baseline_timestamp", "").strip()
+
+                        if returned_baseline_text:
+                            clean_baseline = returned_baseline_text
+                        if returned_baseline_timestamp:
+                            ts_str = returned_baseline_timestamp
                         
                         if llm_response:
                             checked_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1366,12 +1374,13 @@ class GridDashboard(tk.Tk):
                                     cache_data["metrics"] = metrics
                                 cache_data["dft_explanation"] = dft_explanation
                                 cache_data["summary"] = f"{clean_baseline}\n{delta_text}"
+                                cache_data["timestamp"] = ts_str
                                 spec_data = res_data.get("full_history_spectrum")
                                 if spec_data:
                                     cache_data["full_history_spectrum"] = spec_data
                                     self.cached_full_history_spectrum = spec_data
                                 io.write_safe_json(self.summary_cache_file, cache_data)
-                                logging.info("Local Delta Loop: Successfully updated cached summary, DFT explanation, metrics, and spectrum.")
+                                logging.info("Local Delta Loop: Successfully updated cached summary, DFT explanation, metrics, timestamp, and spectrum.")
                             except Exception as cache_err:
                                 logging.error(f"Local Delta Loop: Failed to save to cache: {cache_err}")
                                     
