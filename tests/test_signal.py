@@ -139,6 +139,8 @@ def test_prompt_formatting_success() -> None:
             delta_export=0.0,
             delta_peak=2.5,
             delta_solar=3.0,
+            delta_se_solar=1.8,
+            delta_ch_solar=1.2,
             delta_bat_charge=0.5,
             delta_bat_discharge=0.4,
             delta_se_load=1.2,

@@ -9,7 +9,9 @@ Live Telemetry since baseline ({baseline_time} to {current_time}):
 - Net Grid Import: {delta_import:.2f} kWh
 - Net Grid Export: {delta_export:.2f} kWh
 - Peak Grid Demand: {delta_peak:.2f} kW
-- Solar PV Generation: {delta_solar:.2f} kWh
+- Solar PV Generation (Combined): {delta_solar:.2f} kWh
+- SolarEdge PV Generation (NW Array): {delta_se_solar:.2f} kWh
+- Chillicon PV Generation (SW Array): {delta_ch_solar:.2f} kWh
 - Battery Energy Charged: {delta_bat_charge:.2f} kWh
 - Battery Energy Discharged: {delta_bat_discharge:.2f} kWh
 - SolarEdge Appliance Load (Approx) Energy: {delta_se_load:.2f} kWh
@@ -59,6 +61,10 @@ Use the following physical laws of the microgrid system to perform your reasonin
    - Seasonality Predictor: During hot summer months, expecting a prominent late-afternoon grid demand spike (air conditioning load) displacing the traditional evening peak.
 3. Grid Flatline Anomaly: A low Bimodality Ratio (< 0.5) indicates a loss of normal bimodal rhythm, suggesting either continuous high load (like continuous heavy appliance usage) or continuous heavy export.
 4. Grid Slope Ramp: A steep grid demand slope (dG/dt > +3.0 kW/hr) indicates high-power appliance startup.
+5. PSE Flex Events and Rates:
+   - Standard PSE rate is $0.19 / kWh for both grid import (cost) and standard solar export (credit).
+   - Battery energy discharged during a PSE Flex event is reimbursed at a premium rate of $0.50 / kWh (a net $0.31 / kWh bonus).
+   - Post-Flex Recycle / Recharge Phase: After a Flex event is over, it is typical to see a temporary spike in household import from the grid whilst the battery recycles/recharges. This import is billed at the normal $0.19 / kWh rate. This is expected system behavior and should be summarized as such, rather than flagged as an unexplained home demand spike.
 
 === ANALYSIS INSTRUCTIONS (EVALUATION TEST CASES) ===
 Compare the live statistics and signal behaviors against the baseline. Flag a deviation if the data matches any of the following test cases:

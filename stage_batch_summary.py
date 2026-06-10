@@ -44,8 +44,8 @@ ACTIVE_BATCH_STATE: str = os.path.join(SCRIPT_DIR, "active_batch_job.json")
 
 # Local Telemetry CSV History Paths (Matching dashboard.py dynamic resolver)
 HOME_DIR: str = os.path.expanduser("~")
-LOCAL_GRID: str = os.path.join(SCRIPT_DIR, "grid_history.csv")
-GRID_HISTORY: str = LOCAL_GRID if os.path.exists(LOCAL_GRID) else os.path.join(HOME_DIR, "grid_history.csv")
+LOCAL_GRID: str = os.path.join(SCRIPT_DIR, "grid_history.db")
+GRID_HISTORY: str = LOCAL_GRID if os.path.exists(LOCAL_GRID) else os.path.join(HOME_DIR, "grid_history.db")
 
 LOCAL_SE: str = os.path.join(SCRIPT_DIR, "solaredge_history.csv")
 SE_HISTORY: str = LOCAL_SE if os.path.exists(LOCAL_SE) else os.path.join(HOME_DIR, "solaredge_history.csv")

@@ -425,36 +425,43 @@ def test_calculate_solar_correlation():
 @patch('stage_local_summary.calculate_solar_tod_stats')
 @patch('stage_local_summary.calculate_solar_correlation')
 @patch('stage_local_summary.fetch_weather')
-@patch('stage_local_summary.DEFAULT_MODEL', 'gemma2:2b')
 def test_run_analysis_workflow(mock_weather, mock_corr, mock_tod, mock_grid, mock_flow, mock_deltas, mock_urlopen):
     """Test run_analysis_workflow coordinates stats, weather, and local Ollama queries."""
     from stage_local_summary import run_analysis_workflow
+    import stage_local_summary
     
-    mock_weather.return_value = (16.0, 50.0, "2026-05-30T05:15", "2026-05-30T21:30")
-    mock_corr.return_value = 0.95
-    mock_tod.return_value = (2.0, 0.2)
-    mock_grid.return_value = (1.5, 0.5)
-    mock_flow.return_value = {
-        "load_min": 0.2,
-        "load_max": 1.8,
-        "load_avg": 0.9
-    }
-    mock_deltas.return_value = {
-        "delta_import": 1.2,
-        "delta_export": 0.0,
-        "delta_peak": 2.5,  # (2.5 - 1.5)/0.5 = 2.0
-        "delta_solar": 3.0,
-        "delta_bat_charge": 0.5,
-        "delta_bat_discharge": 0.4,
-        "delta_se_load": 1.2
-    }
-    
-    # Mock Ollama API response
-    mock_resp = MagicMock()
-    mock_resp.read.return_value = b'{"response":"System operating within baseline limits"}'
-    mock_urlopen.return_value.__enter__.return_value = mock_resp
-    
-    result = run_analysis_workflow("2026-05-30 10:00:00", "Baseline Summary Text")
-    assert result is not None
-    assert "response" in result
-    assert "System operating within baseline limits" in result["response"]
+    orig_model = stage_local_summary.DEFAULT_MODEL
+    stage_local_summary.DEFAULT_MODEL = 'gemma2:2b'
+    try:
+        mock_weather.return_value = (16.0, 50.0, "2026-05-30T05:15", "2026-05-30T21:30")
+        mock_corr.return_value = 0.95
+        mock_tod.return_value = (2.0, 0.2)
+        mock_grid.return_value = (1.5, 0.5)
+        mock_flow.return_value = {
+            "load_min": 0.2,
+            "load_max": 1.8,
+            "load_avg": 0.9
+        }
+        mock_deltas.return_value = {
+            "delta_import": 1.2,
+            "delta_export": 0.0,
+            "delta_peak": 2.5,  # (2.5 - 1.5)/0.5 = 2.0
+            "delta_solar": 3.0,
+            "delta_se_solar": 1.8,
+            "delta_ch_solar": 1.2,
+            "delta_bat_charge": 0.5,
+            "delta_bat_discharge": 0.4,
+            "delta_se_load": 1.2
+        }
+        
+        # Mock Ollama API response
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b'{"response":"System operating within baseline limits"}'
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+        
+        result = run_analysis_workflow("2026-05-30 10:00:00", "Baseline Summary Text")
+        assert result is not None
+        assert "response" in result
+        assert "System operating within baseline limits" in result["response"]
+    finally:
+        stage_local_summary.DEFAULT_MODEL = orig_model

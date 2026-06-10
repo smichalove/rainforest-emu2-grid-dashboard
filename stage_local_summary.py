@@ -848,6 +848,8 @@ def calculate_deltas(baseline_dt: datetime.datetime) -> Dict[str, float]:
         "delta_export": delta_export,
         "delta_peak": delta_peak,
         "delta_solar": delta_solar,
+        "delta_se_solar": se_kwh,
+        "delta_ch_solar": ch_kwh,
         "delta_bat_charge": delta_bat_charge,
         "delta_bat_discharge": delta_bat_discharge,
         "delta_se_load": delta_se_load
@@ -973,7 +975,6 @@ def calculate_baseline_metrics(records: List[Tuple[Any, ...]]) -> Dict[str, floa
     battery_discharged: float = 0.0
     battery_charged: float = 0.0
     chilicon_generated: float = 0.0
-    inferred_chilicon: float = 0.0
 
     peak_grid_import: float = 0.0
     peak_grid_export: float = 0.0
@@ -1022,13 +1023,6 @@ def calculate_baseline_metrics(records: List[Tuple[Any, ...]]) -> Dict[str, floa
         chilicon_generated += ch_energy
         peak_chilicon_pv = max(peak_chilicon_pv, ch_max)
 
-        # 5. Inferred Chillicon
-        if avg_kw < 0:
-            grid_export_rate = abs(avg_kw)
-            inferred_rate = grid_export_rate - se_avg - max(0.0, bat_avg)
-            if inferred_rate > 0:
-                inferred_chilicon += inferred_rate * 1.0
-
     # Net Billing Impact ($0.19 import/export, $0.31 flex bonus for battery discharge)
     import_cost: float = total_imported * 0.19
     export_credit: float = total_exported * 0.19
@@ -1036,9 +1030,7 @@ def calculate_baseline_metrics(records: List[Tuple[Any, ...]]) -> Dict[str, floa
     net_credit: float = export_credit - import_cost + flex_bonus
 
     # Estimated Home Consumption
-    total_solar: float = se_generated + (
-        chilicon_generated if chilicon_generated > 0 else inferred_chilicon
-    )
+    total_solar: float = se_generated + chilicon_generated
     home_consumption: float = (
         total_solar
         + total_imported
@@ -1056,7 +1048,7 @@ def calculate_baseline_metrics(records: List[Tuple[Any, ...]]) -> Dict[str, floa
         "battery_discharged": battery_discharged,
         "battery_charged": battery_charged,
         "chilicon_generated": chilicon_generated,
-        "inferred_chilicon": inferred_chilicon,
+        "inferred_chilicon": 0.0,
         "peak_grid_import": peak_grid_import,
         "peak_grid_export": peak_grid_export,
         "peak_se_pv": peak_se_pv,
@@ -1170,7 +1162,9 @@ def generate_local_baseline(baseline_dt: datetime.datetime) -> str:
         total_imported=stats["total_imported"],
         total_exported=stats["total_exported"],
         se_generated=stats["se_generated"],
-        inferred_chilicon=stats["inferred_chilicon"],
+        chilicon_generated=stats["chilicon_generated"],
+        battery_charged=stats["battery_charged"],
+        battery_discharged=stats["battery_discharged"],
         net_credit=stats["net_credit"],
         peak_grid_import=stats["peak_grid_import"],
         peak_se_pv=stats["peak_se_pv"],
@@ -1481,6 +1475,8 @@ Output:
         delta_export=deltas["delta_export"],
         delta_peak=deltas["delta_peak"],
         delta_solar=deltas["delta_solar"],
+        delta_se_solar=deltas["delta_se_solar"],
+        delta_ch_solar=deltas["delta_ch_solar"],
         delta_bat_charge=deltas["delta_bat_charge"],
         delta_bat_discharge=deltas["delta_bat_discharge"],
         delta_se_load=deltas["delta_se_load"],

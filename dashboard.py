@@ -1376,6 +1376,7 @@ class GridDashboard(tk.Tk):
 
                         if returned_baseline_text:
                             clean_baseline = returned_baseline_text
+                            self.baseline_text = clean_baseline
                         if returned_baseline_timestamp:
                             ts_str = returned_baseline_timestamp
                         

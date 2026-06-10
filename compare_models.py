@@ -20,8 +20,8 @@ OLLAMA_ENDPOINT: str = os.environ.get("OLLAMA_HOST", "http://localhost:11434/api
 
 # History Paths
 HOME_DIR: str = os.path.expanduser("~")
-LOCAL_GRID: str = os.path.join(SCRIPT_DIR, "grid_history.csv")
-GRID_HISTORY: str = LOCAL_GRID if os.path.exists(LOCAL_GRID) else os.path.join(HOME_DIR, "grid_history.csv")
+LOCAL_GRID: str = os.path.join(SCRIPT_DIR, "grid_history.db")
+GRID_HISTORY: str = LOCAL_GRID if os.path.exists(LOCAL_GRID) else os.path.join(HOME_DIR, "grid_history.db")
 
 LOCAL_SE: str = os.path.join(SCRIPT_DIR, "solaredge_history.csv")
 SE_HISTORY: str = LOCAL_SE if os.path.exists(LOCAL_SE) else os.path.join(HOME_DIR, "solaredge_history.csv")
@@ -573,14 +573,17 @@ Here are the pre-calculated statistics for the day from the telemetry logs:
 - Total Net Imported: {total_imported:.3f} kWh
 - Total Net Exported: {total_exported:.3f} kWh
 - SolarEdge Generated: {se_generated:.3f} kWh
+- Chillicon Generated (Reported): {chilicon_generated:.3f} kWh
 - Inferred Chillicon Contribution: {inferred_chilicon:.3f} kWh
+- Battery Energy Charged: {battery_charged:.3f} kWh
+- Battery Energy Discharged: {battery_discharged:.3f} kWh
 - Net Energy Credit: ${net_credit:.2f}
 - Peak Net Grid Demand: {peak_grid_import:.3f} kW
 - Peak SolarEdge PV: {peak_se_pv:.3f} kW
 - Total Home Consumption: {home_consumption:.3f} kWh
 
 Instructions:
-1. Provide a list of key statistics (Total Net Imported, Total Net Exported, SolarEdge Generated, Net Energy Cost/Credit, Peak Net Grid Demand, Peak SolarEdge PV, and Inferred Chillicon Contribution) using EXACTLY the pre-calculated values provided above. Do NOT perform any math or estimate values yourself.
+1. Provide a list of key statistics (Total Net Imported, Total Net Exported, SolarEdge Generated, Chillicon Generated (Reported), Inferred Chillicon Contribution, Battery Energy Charged, Battery Energy Discharged, Net Energy Cost/Credit, Peak Net Grid Demand, and Peak SolarEdge PV) using EXACTLY the pre-calculated values provided above. Do NOT perform any math or estimate values yourself.
 2. Write a short 5 to 6 sentence paragraph summary explaining these stats, detailing SolarEdge performance, battery status (highlighting if Flex events with battery discharging occurred), Chillicon contribution, and PSE billing impact.
 3. Keep the output under 12 lines.
 4. Do NOT use markdown code blocks, bold text (**), asterisks, or any text formatting other than plain text.
@@ -591,7 +594,10 @@ Instructions:
                 total_imported=stats['total_imported'],
                 total_exported=stats['total_exported'],
                 se_generated=stats['se_generated'],
+                chilicon_generated=stats['chilicon_generated'],
                 inferred_chilicon=stats['inferred_chilicon'],
+                battery_charged=stats['battery_charged'],
+                battery_discharged=stats['battery_discharged'],
                 net_credit=stats['net_credit'],
                 peak_grid_import=stats['peak_grid_import'],
                 peak_se_pv=stats['peak_se_pv'],
