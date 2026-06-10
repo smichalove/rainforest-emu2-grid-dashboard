@@ -56,7 +56,7 @@ class OfflineViewer(tk.Tk):
         self.chilicon_energy: List[float] = []
 
         # File paths
-        self.history_file = os.path.join(SCRIPT_DIR, 'grid_history.csv')
+        self.history_file = os.path.join(SCRIPT_DIR, 'grid_history.db')
         self.se_history_file = os.path.join(SCRIPT_DIR, 'solaredge_history.csv')
         self.se_battery_history_file = os.path.join(SCRIPT_DIR, 'solaredge_battery_history.csv')
         self.se_flow_history_file = os.path.join(SCRIPT_DIR, 'solaredge_flow_history.csv')
@@ -604,12 +604,22 @@ class OfflineViewer(tk.Tk):
             time.sleep(30)
 
     def poll_remote_data(self) -> None:
-        """Sync files from remote kiosk."""
+        """Syncs the database and telemetry CSV/JSON cache files from the remote kiosk.
+
+        Raises:
+            subprocess.SubprocessError: If the SCP network transfer fails (logged internally).
+        """
         logging.info("Checking remote updates from rainforestpi...")
-        # Syncing code runs command line helper script
         import subprocess
         try:
-            subprocess.run(["scp", "steven@rainforestpi:~/rainforest-emu2-grid-dashboard/*.csv", "steven@rainforestpi:~/rainforest-emu2-grid-dashboard/*.json", SCRIPT_DIR], timeout=15)
+            subprocess.run([
+                "scp", 
+                "steven@rainforestpi:~/rainforest-emu2-grid-dashboard/grid_history.db",
+                "steven@rainforestpi:~/rainforest-emu2-grid-dashboard/solaredge*.csv",
+                "steven@rainforestpi:~/rainforest-emu2-grid-dashboard/chilicon*.csv",
+                "steven@rainforestpi:~/rainforest-emu2-grid-dashboard/*.json",
+                SCRIPT_DIR
+            ], timeout=15)
             self.load_history_files(self.cutoff_hours)
             self.load_cached_summary()
         except Exception as e:

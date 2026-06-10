@@ -47,13 +47,25 @@ def generate_hourly_summaries(
     se_battery_history_path: str,
     chilicon_history_path: str
 ) -> str:
-    """Parses local CSV logs and computes hourly aggregate statistics for reports.
+    """Parses local database or CSV logs and computes hourly aggregate statistics.
+
+    Args:
+        grid_history_path: Absolute path to the grid SQLite DB or legacy CSV.
+        se_history_path: Absolute path to the SolarEdge generation history CSV.
+        se_battery_history_path: Absolute path to the SolarEdge battery state CSV.
+        chilicon_history_path: Absolute path to the Chillicon micro-inverters CSV.
 
     Returns:
         A compact CSV string where each row represents one hour of aligned data.
     """
     import os
-    grid_rows = read_clean_csv(grid_history_path)
+    if grid_history_path.endswith('.db'):
+        from . import db
+        db_ts, db_vals = db.query_history(grid_history_path, cutoff_hours=999999)
+        grid_rows = [[ts.isoformat(), f"{val:.3f}"] for ts, val in zip(db_ts, db_vals)]
+    else:
+        grid_rows = read_clean_csv(grid_history_path)
+        
     if not grid_rows:
         logging.warning(f"No grid history found at {grid_history_path}.")
         return ""

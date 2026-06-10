@@ -11,6 +11,7 @@ from typing import List, Optional, Tuple
 
 # Local imports
 from .io import read_clean_csv, write_csv_row
+from . import db
 
 # Lazy load serial only when needed to prevent crashes on systems without serial drivers
 serial_module = None
@@ -101,15 +102,18 @@ def parse_xml_telemetry(xml_data: str) -> Optional[float]:
 
 
 def load_grid_history(filepath: str, cutoff_hours: int = 24) -> Tuple[List[datetime.datetime], List[float]]:
-    """Loads historical measurements from CSV, cleaning corruptions and null-bytes.
+    """Loads historical measurements from database or CSV.
 
     Args:
-        filepath: Filesystem path to the CSV history file.
+        filepath: Filesystem path to the database or CSV history file.
         cutoff_hours: Number of hours in the past to load.
 
     Returns:
         A tuple of (timestamps, usage_in_kw).
     """
+    if filepath.endswith('.db'):
+        return db.query_history(filepath, cutoff_hours)
+
     now = datetime.datetime.now()
     cutoff = now - datetime.timedelta(hours=cutoff_hours)
     
@@ -132,11 +136,14 @@ def load_grid_history(filepath: str, cutoff_hours: int = 24) -> Tuple[List[datet
 
 
 def log_grid_telemetry(filepath: str, timestamp: datetime.datetime, actual_kw: float) -> None:
-    """Appends a single grid telemetry reading to the CSV history log.
+    """Logs a single grid telemetry reading to the database or CSV.
 
     Args:
-        filepath: Filesystem path to log telemetry.
+        filepath: Filesystem path to log telemetry (database or CSV).
         timestamp: Timestamp of the reading.
         actual_kw: The grid import/export in kW.
     """
-    write_csv_row(filepath, [timestamp.isoformat(), f"{actual_kw:.3f}"])
+    if filepath.endswith('.db'):
+        db.insert_reading(filepath, timestamp.isoformat(), actual_kw)
+    else:
+        write_csv_row(filepath, [timestamp.isoformat(), f"{actual_kw:.3f}"])

@@ -6,12 +6,13 @@ loops, and robust backward-compatible helper delegates.
 
 Repository Module Map Reference (loaded via dashboard_modules package):
 1. config.py: Centralizes GUI styling parameters (fonts, colors, coordinates, frame metrics) and default lat/lon constants.
-2. io.py: Provides atomic, thread-safe JSON read/write handles and null-byte cleanup for telemetry CSV files.
-3. telemetry.py: Manages EMU-2 serial polling, signed hex-to-dec XML conversions, and rolling telemetry data arrays.
-4. solar.py: Handles SolarEdge and Chillicon Cloud API sessions, requests, cookies, and authentication.
-5. weather.py: Integrates current forecast and past 5-day weather history metrics via Open-Meteo REST calls.
-6. spectral.py: Pure mathematical library for DTFT amplitude/phase calculation, curve derivatives (slopes), and signal SNR calculations.
-7. ai.py: Interfaces with Google Cloud Storage and Vertex AI GenAI SDKs for bulk baseline summary prediction jobs.
+2. db.py: Manages the SQLite grid telemetry database, including initialization, insertions, queries, and CSV migrations.
+3. io.py: Provides atomic, thread-safe JSON read/write handles and null-byte cleanup for telemetry CSV files.
+4. telemetry.py: Manages EMU-2 serial polling, signed hex-to-dec XML conversions, and database history loading.
+5. solar.py: Handles SolarEdge and Chillicon Cloud API sessions, requests, cookies, and authentication.
+6. weather.py: Integrates current forecast and past 5-day weather history metrics via Open-Meteo REST calls.
+7. spectral.py: Pure mathematical library for DTFT amplitude/phase calculation, curve derivatives (slopes), and signal SNR calculations.
+8. ai.py: Interfaces with Google Cloud Storage and Vertex AI GenAI SDKs for bulk baseline summary prediction jobs.
 """
 
 import csv
@@ -197,7 +198,7 @@ class GridDashboard(tk.Tk):
         self.cached_full_history_spectrum: Dict[str, Any] = {}
 
         # Resolve paths
-        self.history_file = os.path.join(script_dir, 'grid_history.csv')
+        self.history_file = os.path.join(script_dir, 'grid_history.db')
         self.se_history_file = os.path.join(script_dir, 'solaredge_history.csv')
         self.se_battery_history_file = os.path.join(script_dir, 'solaredge_battery_history.csv')
         self.se_flow_history_file = os.path.join(script_dir, 'solaredge_flow_history.csv')
@@ -532,7 +533,28 @@ class GridDashboard(tk.Tk):
     # --- End of backward-compatibility class methods ---
 
     def load_history_files(self) -> None:
-        """Loads all CSV history arrays on startup."""
+        """Loads all database/CSV history arrays on startup."""
+        if self.history_file.endswith('.db'):
+            csv_backup_path = self.history_file[:-3] + '.csv'
+            if os.path.exists(csv_backup_path):
+                logging.info(f"Startup: Found legacy CSV telemetry file: {csv_backup_path}. Migrating to SQLite...")
+                try:
+                    from dashboard_modules import db
+                    db.migrate_csv(self.history_file, csv_backup_path)
+                    bak_path = csv_backup_path + '.bak'
+                    if os.path.exists(bak_path):
+                        os.remove(bak_path)
+                    os.rename(csv_backup_path, bak_path)
+                    logging.info(f"Startup: Successfully migrated and renamed {csv_backup_path} to {bak_path}")
+                except Exception as migrate_err:
+                    logging.error(f"Startup: Failed to migrate legacy CSV to SQLite: {migrate_err}")
+            else:
+                try:
+                    from dashboard_modules import db
+                    db.init_db(self.history_file)
+                except Exception as db_err:
+                    logging.error(f"Startup: Failed to initialize SQLite database: {db_err}")
+
         self.load_history()
         self.load_solaredge_history()
         self.load_chilicon_history()

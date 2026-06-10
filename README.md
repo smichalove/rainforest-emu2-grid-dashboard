@@ -3,7 +3,7 @@
 ![EMU-2 Grid Dashboard Preview - Slide 1 (Time Domain)](dashboard_preview.jpeg)
 ![EMU-2 Grid Dashboard Preview - Slide 2 (Frequency Domain)](dashboard_preview_slide2.jpeg)
 
-A robust, 24-hour real-time grid monitoring dashboard using a Rainforest EMU-2 smart meter connected to a Raspberry Pi. It automatically boots into a fullscreen kiosk mode over HDMI, safely bypasses modern Wayland graphic quirks, and seamlessly persists data to a CSV to survive power outages.
+A robust, 24-hour real-time grid monitoring dashboard using a Rainforest EMU-2 smart meter connected to a Raspberry Pi. It automatically boots into a fullscreen kiosk mode over HDMI, safely bypasses modern Wayland graphic quirks, and seamlessly persists data to SQLite and local CSVs to survive power outages.
 
 > [!NOTE]
 > **Product & Compatibility Note:** The Rainforest EMU-2 is a legacy hardware product that has been discontinued. For deployments using current-generation hardware, the **Rainforest EAGLE 3** features a local API that outputs a very similar XML structure, making this dashboard framework highly compatible and adaptable for it.
@@ -23,7 +23,7 @@ Because the monitor reads data directly from the Zigbee wireless network inside 
 ## Key Features
 - **Real-Time Data Parsing**: Decodes raw XML telemetry (`<InstantaneousDemand>`) directly from the EMU-2 serial port.
 - **Rolling 24-Hour Graph**: Features a dynamic rolling 24-hour X-axis with the newest readings always positioned on the far right, ensuring the graph is always fully populated with historical context.
-- **Persistent Data**: Logs data automatically to `grid_history.csv` every 15 seconds, SolarEdge PV to `solaredge_history.csv` every 15 minutes, battery metrics to `solaredge_battery_history.csv` every 15 minutes, and Chillicon production to `chilicon_history.csv` every 15 minutes, retroactively reloading the graph and historical context immediately upon boot.
+- **Persistent Data**: Logs grid demand automatically to an optimized SQLite database `grid_history.db` every 15 seconds (with automatic one-time migration of legacy `grid_history.csv` files on first boot), SolarEdge PV to `solaredge_history.csv` every 15 minutes, battery metrics to `solaredge_battery_history.csv` every 15 minutes, and Chillicon production to `chilicon_history.csv` every 15 minutes, retroactively reloading the graph and historical context immediately upon boot.
 - **SolarEdge PV & Battery Integration**: Polls SolarEdge `/currentPowerFlow` to track real-time solar panel output, signed battery charge/discharge rates, and State of Charge (SoC %).
 - **Chillicon Cloud API Integration**: Polls actual microinverter solar generation (production power in kW and cumulative lifetime generation in Wh) from Chillicon Cloud every 15 minutes using persistent session cookie authentication.
 - **Stacked Solar PV Chart**: Stacks the actual Chillicon generation (plotted as a bright neon yellow cap) on top of the SolarEdge PV bars (warm gold base) on a unified 10-minute grid, displaying your total combined solar output on the secondary Y-axis.
@@ -119,7 +119,7 @@ To perform inference completely offline on local Nvidia hardware (such as an Nvi
 Instead of running mathematical integrations and LLM queries directly on the Raspberry Pi (which has constrained CPU/memory and is prone to SD card failure under continuous disk writes), the dashboard offloads the heavy lifting to the Jetson Orin:
 
 1. **Computational Offloading:** The Jetson Orin performs all quantitative telemetry math (integrals, peaks, rolling averages, standard deviations, and Pearson correlation coefficients), computes a **Discrete Fourier Transform (DFT)** to analyze 24-hour diurnal and 12-hour bimodal sinus rhythms, calculates time-domain curve slopes (derivatives) over 3-hour windows, and runs local LLM inference via Ollama.
-2. **Automated Backup & SD Card Longevity:** On each analysis cycle, the Pi dashboard transfers its telemetry CSVs directly to the Jetson's NVMe SSD using `rsync`. This provides automatic remote backups and protects the Pi's SD card from continuous disk scans.
+2. **Automated Backup & SD Card Longevity:** On each analysis cycle, the Pi dashboard transfers its database snapshot and CSV telemetry files directly to the Jetson's NVMe SSD using `rsync`. This provides automatic remote backups and protects the Pi's SD card from continuous disk scans.
 3. **Predictor-Driven Modeling:** The Jetson edge server fetches local forecasts (temperature, cloud cover, sunrise, and sunset) from the Open-Meteo API. It dynamically calculates the daylight duration (length of day) to scale solar sinus width expectations, classifies day types (weekday vs. weekend demand profiles), and monitors recent curve slopes to ground the local edge model within its 2048-token context window.
 
 ```mermaid
@@ -141,7 +141,7 @@ sequenceDiagram
 
     %% Cloud Batch Flow
     Note over Stager: Asynchronous loop (e.g. 4-hour cycle)
-    Stager->>Stager: Parse local CSVs
+    Stager->>Stager: Parse database & CSVs
     Stager->>GCS: Upload staging_request.jsonl
     Stager->>Vertex: Create Batch Prediction Job
     Vertex-->>GCS: Write predictions.jsonl when done
@@ -150,13 +150,13 @@ sequenceDiagram
     
     %% Local Delta Flow
     Note over Pi: Every 15 minutes
-    Pi->>JS: rsync local CSV files to Jetson backup directory
+    Pi->>JS: rsync database snapshot & CSV files to Jetson backup directory
     Pi->>Cache: Read baseline summary text & timestamp
     Pi->>JS: HTTP POST /api/analyze (baseline text, timestamp)
     
     Note over JS: Math Phase on Jetson
     JS->>JS: Fetch today's weather forecast from Open-Meteo API
-    JS->>JS: Read backup CSV files locally
+    JS->>JS: Read database & CSV files locally
     JS->>JS: Compute delta metrics (kWh/kW) since baseline timestamp
     JS->>JS: Calculate quantitative stats (std dev, rolling averages)
     JS->>JS: Adjust solar anomaly thresholds based on cloud cover %
@@ -344,8 +344,9 @@ The dashboard architecture has been completely refactored from a monolithic scri
 
 ### 1. `dashboard_modules/` Package
 * **`config.py`**: Centralizes global styling, API keys, and environment variables.
+* **`db.py`**: Manages the SQLite telemetry database (`grid_history.db`), handling schema initialization, thread-safe write queues, automatic migration from legacy CSV data, and historical querying.
 * **`io.py`**: A dedicated, thread-safe file handling layer. It features null-byte stripping for corrupted CSV lines and uses atomic swap-files for JSON caches to completely eliminate file corruption during sudden power losses.
-* **`telemetry.py`**: Handles raw serial polling, XML parsing, and history loading for the Rainforest EMU-2 hardware.
+* **`telemetry.py`**: Handles raw serial polling, XML parsing, and database history operations for the Rainforest EMU-2 hardware.
 * **`solar.py`**: Manages API clients, session cookies, and authentication for SolarEdge and Chillicon external endpoints.
 * **`weather.py`**: Performs asynchronous requests to Open-Meteo for cloud cover and sunrise/sunset metrics.
 * **`spectral.py`**: A pure, headless mathematical library executing Discrete Fourier Transforms (DFT), signal gap interpolations, and SNR noise floor calculations.
@@ -353,7 +354,7 @@ The dashboard architecture has been completely refactored from a monolithic scri
 
 ### 2. UI & Daemon Entry Points
 * **`dashboard.py`**: The main Tkinter Kiosk GUI application. It acts as a supervisor, launching the headless data acquisition threads and rendering Matplotlib canvases. It includes a built-in watchdog that detects API timeouts or serial crashes and safely heals/restarts the threads.
-* **`render_local_plot.py`**: A mock emulator that generates static PNGs of the dashboard using offline history CSVs, allowing developers to test UI layout changes without physical hardware.
+* **`render_local_plot.py`**: A mock emulator that generates static PNGs of the dashboard using offline history databases and CSVs, allowing developers to test UI layout changes without physical hardware.
 * **`stage_batch_summary.py`**: Background cron job that feeds bulk arrays of telemetry to Google Cloud Vertex AI to cache high-fidelity baseline LLM summaries.
 * **`stage_local_summary.py`**: Lightweight HTTP daemon built for Nvidia Jetson servers to receive telemetry arrays, perform frequency-domain spectral math, and run fast local LLM inferences (`gemma4-it-q4`) on live deltas.
 * **`snr_analysis.py`**: Standalone mathematical helper module implementing DTFT spectrum and signal SNR calculators.
@@ -495,7 +496,7 @@ Based on Vertex AI pricing for `gemini-2.5-flash`:
 
 ## Mathematical & Frequency-Domain Grounding (DFT & Slopes)
 
-To give the local edge LLM a deep physical understanding of the electrical system, the Jetson Edge Server translates raw time-domain CSV logs into the frequency domain using a zero-dependency Discrete Fourier Transform (DFT) and computes time-domain rate-of-change slopes.
+To give the local edge LLM a deep physical understanding of the electrical system, the Jetson Edge Server translates raw time-domain database and CSV telemetry into the frequency domain using a zero-dependency Discrete Fourier Transform (DFT) and computes time-domain rate-of-change slopes.
 
 ### 1. Discrete Fourier Transform (Diurnal & Semi-Diurnal Harmonics)
 For a 48-hour time series of hourly measurements $x = [x_0, \dots, x_{47}]$, we compute the complex DFT coefficient $X_k$ for specific frequency bins $k$:

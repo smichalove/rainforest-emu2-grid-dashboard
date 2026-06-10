@@ -10,7 +10,7 @@ from collections import defaultdict
 from typing import Dict, List, Tuple, Optional, Any
 
 SCRIPT_DIR: str = os.path.dirname(os.path.abspath(__file__))
-GRID_HISTORY: str = os.path.join(SCRIPT_DIR, "grid_history.csv")
+GRID_HISTORY: str = os.path.join(SCRIPT_DIR, "grid_history.db")
 SE_HISTORY: str = os.path.join(SCRIPT_DIR, "solaredge_history.csv")
 SE_BATTERY_HISTORY: str = os.path.join(SCRIPT_DIR, "solaredge_battery_history.csv")
 CHILICON_HISTORY: str = os.path.join(SCRIPT_DIR, "chilicon_history.csv")
@@ -120,23 +120,41 @@ def calculate_metrics(records: List[Tuple]) -> Dict[str, Any]:
     }
 
 
-def load_day_records(day_date: str) -> List[Tuple]:
-    """Loads and aligns hourly records for a specific day from local CSVs."""
-    grid_rows = sanitize_reader(GRID_HISTORY)
+def load_day_records(day_date: str) -> List[Tuple[str, float, float, float, float, float, float, float, float, float, float, float, float]]:
+    """Loads and aligns hourly records for a specific day from database or local CSVs.
+
+    Args:
+        day_date: The date string (YYYY-MM-DD) to query and align records for.
+
+    Returns:
+        A list of aligned hourly tuples containing statistics for grid, solar, battery,
+        and microinverter values.
+    """
     se_rows = sanitize_reader(SE_HISTORY)
     bat_rows = sanitize_reader(SE_BATTERY_HISTORY)
     ch_rows = sanitize_reader(CHILICON_HISTORY)
     
     hourly_data = defaultdict(list)
-    for row in grid_rows:
-        if len(row) == 2:
-            ts, val = row[0].strip(), row[1].strip()
-            if ts.startswith(day_date):
-                hour_key = ts[:13].replace('T', ' ') + ":00"
-                try:
-                    hourly_data[hour_key].append(float(val))
-                except ValueError:
-                    pass
+    if GRID_HISTORY.endswith('.db'):
+        from dashboard_modules import db
+        # Cutoff hours 999999 to load the whole history for daily filtering
+        db_ts, db_vals = db.query_history(GRID_HISTORY, cutoff_hours=999999)
+        for ts, val in zip(db_ts, db_vals):
+            ts_str = ts.isoformat()
+            if ts_str.startswith(day_date):
+                hour_key = ts_str[:13].replace('T', ' ') + ":00"
+                hourly_data[hour_key].append(val)
+    else:
+        grid_rows = sanitize_reader(GRID_HISTORY)
+        for row in grid_rows:
+            if len(row) == 2:
+                ts, val = row[0].strip(), row[1].strip()
+                if ts.startswith(day_date):
+                    hour_key = ts[:13].replace('T', ' ') + ":00"
+                    try:
+                        hourly_data[hour_key].append(float(val))
+                    except ValueError:
+                        pass
 
     se_hourly = defaultdict(list)
     for row in se_rows:
@@ -269,7 +287,7 @@ Instructions:
     # 3. Query local Ollama Gemma 2B
     print("\n--- 3. Local Model (Gemma 2B) Output ---")
     try:
-        url = "http://localhost:11434/api/generate"
+        url = os.environ.get("OLLAMA_HOST") or "http://localhost:11434/api/generate"
         payload = {
             "model": "gemma2:2b",
             "prompt": formatted_prompt,

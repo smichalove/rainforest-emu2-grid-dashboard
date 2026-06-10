@@ -13,6 +13,10 @@ grid_history.csv
 gemini_summary.json
 solaredge_integration_plan.md
 merged_summary.json
+*.db
+*.bak
+
+
 
 # Scratch and local testing files
 scratch/

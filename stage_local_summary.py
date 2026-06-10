@@ -46,6 +46,7 @@ from collections import defaultdict
 from typing import Dict, List, Tuple, Optional, Any
 import threading
 from dashboard_modules.ai import generate_hourly_summaries
+from dashboard_modules import db
 
 # Global thread synchronization lock to prevent concurrent CPU/GPU resource contention
 analysis_lock: threading.Lock = threading.Lock()
@@ -64,7 +65,7 @@ BACKUP_DIR: str = os.environ.get("JETSON_BACKUP_PATH") or os.path.join(SCRIPT_DI
 os.makedirs(BACKUP_DIR, exist_ok=True)
 
 # Local Telemetry CSV History Paths (read from SCP backup directory)
-GRID_HISTORY: str = os.path.join(BACKUP_DIR, "grid_history.csv")
+GRID_DB: str = os.path.join(BACKUP_DIR, "grid_history.db")
 SE_HISTORY: str = os.path.join(BACKUP_DIR, "solaredge_history.csv")
 SE_BATTERY_HISTORY: str = os.path.join(BACKUP_DIR, "solaredge_battery_history.csv")
 SE_FLOW_HISTORY: str = os.path.join(BACKUP_DIR, "solaredge_flow_history.csv")
@@ -249,7 +250,18 @@ def interpolate_gaps(series: List[Optional[float]]) -> List[float]:
 
 
 def extract_hourly_series(filepath: str, end_time: datetime.datetime, window_hours: int = 48) -> Tuple[List[float], float]:
-    """Extracts a uniform hourly series from the history CSV, filling any gaps."""
+    """Extracts a uniform hourly series from the history database or CSV, filling any gaps.
+
+    Args:
+        filepath: Absolute path to the database or CSV history file.
+        end_time: The end boundary datetime for the series window.
+        window_hours: The number of hourly buckets to extract.
+
+    Returns:
+        A tuple containing:
+            - A list of uniform hourly floats representing the telemetry values.
+            - The starting hour of the series as a float.
+    """
     if not os.path.exists(filepath):
         return [0.0] * window_hours, float(end_time.hour)
         
@@ -261,19 +273,25 @@ def extract_hourly_series(filepath: str, end_time: datetime.datetime, window_hou
     
     hourly_values = defaultdict(list)
     try:
-        with open(filepath, 'r') as f:
-            clean_lines = (line.replace('\x00', '') for line in f)
-            reader = csv.reader(clean_lines)
-            for row in reader:
-                if len(row) >= 2:
-                    ts = parse_timestamp(row[0])
-                    if ts:
-                        hour_key = ts.strftime("%Y-%m-%d %H:00")
-                        try:
-                            val = float(row[1])
-                            hourly_values[hour_key].append(val)
-                        except ValueError:
-                            pass
+        if filepath.endswith('.db'):
+            db_ts, db_vals = db.query_history(filepath, window_hours + 2, reference_time=end_time)
+            for ts, val in zip(db_ts, db_vals):
+                hour_key = ts.strftime("%Y-%m-%d %H:00")
+                hourly_values[hour_key].append(val)
+        else:
+            with open(filepath, 'r') as f:
+                clean_lines = (line.replace('\x00', '') for line in f)
+                reader = csv.reader(clean_lines)
+                for row in reader:
+                    if len(row) >= 2:
+                        ts = parse_timestamp(row[0])
+                        if ts:
+                            hour_key = ts.strftime("%Y-%m-%d %H:00")
+                            try:
+                                val = float(row[1])
+                                hourly_values[hour_key].append(val)
+                            except ValueError:
+                                pass
     except Exception as e:
         logging.error(f"Error reading {filepath} in extract_hourly_series: {e}")
         
@@ -380,10 +398,10 @@ def format_decimal_hour(hour: float) -> str:
 
 
 def detect_telemetry_gaps(filepath: str, baseline_dt: datetime.datetime, end_time: datetime.datetime) -> List[str]:
-    """Scans the telemetry history file for any gaps > 30 minutes since baseline_dt.
+    """Scans the telemetry history database or CSV for any gaps > 30 minutes since baseline_dt.
 
     Args:
-        filepath: Absolute path to the CSV history file.
+        filepath: Absolute path to the history file.
         baseline_dt: The baseline datetime threshold.
         end_time: The current timestamp representing "now" for evaluation.
 
@@ -396,14 +414,21 @@ def detect_telemetry_gaps(filepath: str, baseline_dt: datetime.datetime, end_tim
 
     rows_ts: List[datetime.datetime] = []
     try:
-        with open(filepath, 'r') as f:
-            clean_lines = (line.replace('\x00', '') for line in f)
-            reader = csv.reader(clean_lines)
-            for row in reader:
-                if len(row) >= 2:
-                    ts = parse_timestamp(row[0])
-                    if ts and ts >= baseline_dt:
-                        rows_ts.append(ts)
+        if filepath.endswith('.db'):
+            hours_back = int((end_time - baseline_dt).total_seconds() / 3600.0) + 2
+            db_ts, _ = db.query_history(filepath, hours_back, reference_time=end_time)
+            for ts in db_ts:
+                if ts >= baseline_dt:
+                    rows_ts.append(ts)
+        else:
+            with open(filepath, 'r') as f:
+                clean_lines = (line.replace('\x00', '') for line in f)
+                reader = csv.reader(clean_lines)
+                for row in reader:
+                    if len(row) >= 2:
+                        ts = parse_timestamp(row[0])
+                        if ts and ts >= baseline_dt:
+                            rows_ts.append(ts)
     except Exception as e:
         logging.error(f"Error checking telemetry gaps in {filepath}: {e}")
         return warnings
@@ -493,20 +518,24 @@ def compute_dft(series: List[float], start_hour: float) -> Dict[str, float]:
 
 
 def calculate_grid_stats(filepath: str) -> Tuple[float, float]:
-    """Calculates historical mean and standard deviation of grid demand from history CSV."""
+    """Calculates historical mean and standard deviation of grid demand from history database or CSV."""
     if not os.path.exists(filepath):
         return 0.0, 1.0
     vals = []
     try:
-        with open(filepath, 'r') as f:
-            clean_lines = (line.replace('\x00', '') for line in f)
-            reader = csv.reader(clean_lines)
-            for row in reader:
-                if len(row) >= 2:
-                    try:
-                        vals.append(float(row[1]))
-                    except ValueError:
-                        pass
+        if filepath.endswith('.db'):
+            _, db_vals = db.query_history(filepath, cutoff_hours=999999)
+            vals = db_vals
+        else:
+            with open(filepath, 'r') as f:
+                clean_lines = (line.replace('\x00', '') for line in f)
+                reader = csv.reader(clean_lines)
+                for row in reader:
+                    if len(row) >= 2:
+                        try:
+                            vals.append(float(row[1]))
+                        except ValueError:
+                            pass
     except Exception as e:
         logging.error(f"Error calculating grid stats: {e}")
     if not vals:
@@ -616,27 +645,34 @@ def calculate_solar_correlation(se_filepath: str, ch_filepath: str) -> float:
 
 
 def calculate_deltas(baseline_dt: datetime.datetime) -> Dict[str, float]:
-    """Calculates delta metrics since the baseline timestamp by parsing CSV files."""
+    """Calculates delta metrics since the baseline timestamp by parsing database or CSV files."""
     # 1. Grid import, export, and peak demand
     delta_import = 0.0
     delta_export = 0.0
     delta_peak = 0.0
     
-    if os.path.exists(GRID_HISTORY):
+    if os.path.exists(GRID_DB):
         rows = []
         try:
-            with open(GRID_HISTORY, 'r') as f:
-                clean_lines = (line.replace('\x00', '') for line in f)
-                reader = csv.reader(clean_lines)
-                for row in reader:
-                    if len(row) >= 2:
-                        ts = parse_timestamp(row[0])
-                        if ts and ts >= baseline_dt:
-                            try:
-                                val = float(row[1])
-                                rows.append((ts, val))
-                            except ValueError:
-                                pass
+            if GRID_DB.endswith('.db'):
+                hours_back = int((datetime.datetime.now() - baseline_dt).total_seconds() / 3600.0) + 2
+                db_ts, db_vals = db.query_history(GRID_DB, hours_back)
+                for ts, val in zip(db_ts, db_vals):
+                    if ts >= baseline_dt:
+                        rows.append((ts, val))
+            else:
+                with open(GRID_DB, 'r') as f:
+                    clean_lines = (line.replace('\x00', '') for line in f)
+                    reader = csv.reader(clean_lines)
+                    for row in reader:
+                        if len(row) >= 2:
+                            ts = parse_timestamp(row[0])
+                            if ts and ts >= baseline_dt:
+                                try:
+                                    val = float(row[1])
+                                    rows.append((ts, val))
+                                except ValueError:
+                                    pass
         except Exception as e:
             logging.error(f"Error reading grid history for deltas: {e}")
             
@@ -1046,7 +1082,7 @@ def calculate_baseline_metrics_for_range(
         None
     """
     csv_str: str = generate_hourly_summaries(
-        GRID_HISTORY, SE_HISTORY, SE_BATTERY_HISTORY, CHILICON_HISTORY
+        GRID_DB, SE_HISTORY, SE_BATTERY_HISTORY, CHILICON_HISTORY
     )
     if not csv_str:
         return {
@@ -1262,7 +1298,7 @@ def _run_analysis_workflow_inner(
     
     # 3. Extract 48-hour hourly telemetry series for DFT and Slope analysis
     now_dt = datetime.datetime.now()
-    grid_series, start_hour = extract_hourly_series(GRID_HISTORY, now_dt, 48)
+    grid_series, start_hour = extract_hourly_series(GRID_DB, now_dt, 48)
     se_series, _ = extract_hourly_series(SE_HISTORY, now_dt, 48)
     ch_series, _ = extract_hourly_series(CHILICON_HISTORY, now_dt, 48)
     
@@ -1297,7 +1333,7 @@ def _run_analysis_workflow_inner(
     grid_slope = calculate_slope(grid_series)
     
     # 6. Perform standard statistical calculations
-    grid_mean, grid_std = calculate_grid_stats(GRID_HISTORY)
+    grid_mean, grid_std = calculate_grid_stats(GRID_DB)
     current_hour_now = datetime.datetime.now().hour
     se_mean, se_std = calculate_solar_tod_stats(SE_HISTORY, current_hour_now)
     solar_corr = calculate_solar_correlation(SE_HISTORY, CHILICON_HISTORY)
@@ -1361,7 +1397,7 @@ def _run_analysis_workflow_inner(
             )
         
     # Check for telemetry gaps (power outages or recording halts) in GRID_HISTORY since baseline
-    outage_warnings = detect_telemetry_gaps(GRID_HISTORY, baseline_dt, datetime.datetime.now())
+    outage_warnings = detect_telemetry_gaps(GRID_DB, baseline_dt, datetime.datetime.now())
     warnings.extend(outage_warnings)
         
     # Format warning context to append to LLM instructions
@@ -1569,7 +1605,7 @@ def run_full_history_math() -> None:
         
         # Load full history from backups
         # (Using cutoff_hours=999999 to load everything)
-        ts, u = telemetry.load_grid_history(GRID_HISTORY, cutoff_hours=999999)
+        ts, u = telemetry.load_grid_history(GRID_DB, cutoff_hours=999999)
         if not ts:
             logging.info("Background Math: No grid history loaded.")
             return

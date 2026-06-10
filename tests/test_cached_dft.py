@@ -97,7 +97,7 @@ def test_jetson_background_math_calculation() -> None:
 
     try:
         # Patch paths in stage_local_summary
-        with patch('stage_local_summary.GRID_HISTORY', grid_path), \
+        with patch('stage_local_summary.GRID_DB', grid_path), \
              patch('stage_local_summary.SE_HISTORY', se_path), \
              patch('stage_local_summary.CHILICON_HISTORY', ch_path), \
              patch('dashboard_modules.weather.fetch_historical_weather', return_value={}):

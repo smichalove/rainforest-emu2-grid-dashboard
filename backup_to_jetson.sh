@@ -26,10 +26,27 @@ if ! ping -c 1 "$JETSON_HOST" > /dev/null 2>&1; then
     exit 1
 fi
 
-# 2. Run incremental rsync backup of CSV history and JSON cache files
+# 2. Prepare sync snapshot directory
+echo "[INFO] Preparing database and CSV snapshots..." >> "$LOG_FILE"
+SYNC_TEMP="${LOCAL_DIR}/sync_temp"
+mkdir -p "$SYNC_TEMP"
+
+# Safely backup grid_history.db using Python's SQLite backup API
+if ! python3 -c "import sqlite3; conn=sqlite3.connect('${LOCAL_DIR}/grid_history.db'); backup=sqlite3.connect('${SYNC_TEMP}/grid_history.db'); conn.backup(backup); conn.close(); backup.close()" >> "$LOG_FILE" 2>&1; then
+    echo "[ERROR] SQLite database backup failed." >> "$LOG_FILE"
+    exit 1
+fi
+
+# Copy current solar/battery CSVs to sync directory (ignoring missing files)
+cp "${LOCAL_DIR}"/solaredge*.csv "$SYNC_TEMP/" 2>/dev/null
+cp "${LOCAL_DIR}"/chilicon*.csv "$SYNC_TEMP/" 2>/dev/null
+
+# 3. Run incremental rsync backup of the sync directory
 echo "[INFO] Syncing data files to Jetson Orin Nano SSD..." >> "$LOG_FILE"
-if rsync -avz --include="*.csv" --include="*.json" --exclude="*" "${LOCAL_DIR}/" "${JETSON_USER}@${JETSON_HOST}:${BACKUP_DIR}/" >> "$LOG_FILE" 2>&1; then
+if rsync -avz --delete "${SYNC_TEMP}/" "${JETSON_USER}@${JETSON_HOST}:${BACKUP_DIR}/" >> "$LOG_FILE" 2>&1; then
     echo "[SUCCESS] Telemetry backup complete: $(date)" >> "$LOG_FILE"
+    # Clean up local SQLite snapshot file
+    rm -f "${SYNC_TEMP}/grid_history.db"
 else
     echo "[ERROR] Rsync transfer failed. Check SSH permissions." >> "$LOG_FILE"
     exit 1
