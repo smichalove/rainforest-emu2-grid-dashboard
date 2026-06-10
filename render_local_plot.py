@@ -104,6 +104,12 @@ class OfflineViewer(tk.Tk):
         # Load cached summaries
         self.load_cached_summary()
 
+        # Initialize time, date, and weather displays
+        init_dt = self.timestamps[-1] if self.timestamps else datetime.datetime.now()
+        self.time_label.config(text=init_dt.strftime("%H:%M"))
+        self.date_label.config(text=init_dt.strftime("%A, %b %d, %Y"))
+        self.update_weather_display()
+
         # Schedule Slide transitions
         if self.live_mode:
             self.after(config.SLIDE_1_DURATION_MS, self.rotate_slides)
