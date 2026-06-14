@@ -19,6 +19,7 @@ This document outlines the design and implementation plan for replacing the HTTP
 - `[x]` **Task 11: Deployment automation** -> Refactored [redeploy.sh](file:///redeploy.sh) to automate local gRPC stub builds, certificate replication, and `.env` pathing. (Completed)
 - `[x]` **Task 12: Visual & Drawing Validation** -> Execute `./plot_and_open.sh` and verify Matplotlib layout drawings locally prior to kiosk push. (Completed)
 - `[x]` **Task 13: Final Code Review & LGTM** -> Present a detailed diff to the user for explicit deployment approval. (Completed)
+- `[x]` **Task 14: Public Staging & Code Publication** -> Successfully initialized public staging git repository, configured [example_auth/](file:///example_auth) template directories, added [.agents/](file:///.agents) guidelines, and executed git commit/push of release `v3.6.0` to the remote public repository. (Completed)
 
 
 ---

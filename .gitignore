@@ -4,11 +4,9 @@ __pycache__/
 .env
 venv/
 env/
-agent.md
-.agents/
 Auth/
 auth/
-certs/
+/certs/
 Auth/certs/
 grid_history.csv
 *.csv
@@ -18,7 +16,20 @@ merged_summary.json
 *.db
 *.bak
 
+# Testing and caches
+.pytest_cache/
+emulated_jobs.json
+emulation_results.txt
+sample_rendering.txt
 
+# Design documentation files
+*.docx
+*.pdf
+*.gdoc
+
+# Staging tools
+build_public_staging.sh
+build_staging.py
 
 # Scratch and local testing files
 scratch/
@@ -28,9 +39,9 @@ June 1, 2026/
 weather_cache.json
 active_local_job.json
 
-
 # Local verification reports / internal artifacts
 jetson_noise_proof.md
 jetson_prompt_verification.md
 plot_description_image11.md
+
 

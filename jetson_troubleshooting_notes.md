@@ -4,25 +4,23 @@ This file documents the troubleshooting history and hardware state of the Nvidia
 
 ---
 
-## Current Status (Last Updated: May 29, 2026 - 8:35 AM)
+## Current Status (Last Updated: June 14, 2026 - 1:30 PM)
 
-### 1. Hardware Setup & Connections
-- **Host Machine**: M2 Apple Silicon Mac.
-- **Connection Cable**: Good high-quality **SUMPK USB C-to-C cable** plugged directly into the first Mac USB-C port and the Jetson's USB-C port.
-- **Display Connections**: 
-  - **RESOLVED**: Switched to a direct **DP-to-DP cable** (no adapter). Display is now fully working and showing the UEFI Boot / Shell interface.
-- **Flash Storage Media**:
-  - **microSD Card**: Flashed with **JetPack 5.1.2** (being replaced with JP 6.0).
-  - **M.2 NVMe SSD**: Flashed with **JetPack 5.1.2** (being replaced with JP 6.0).
+### 1. Hardware & OS State (Resolved)
+- **Jetson Orin Nano Host**: `steven@192.168.8.68` (or `nvjetson`).
+- **OS Version**: Flashed with **JetPack 6.2 (L4T 36.4.3)** on M.2 NVMe SSD (ext4, partition expanded to 1TB). PCIe controller issues resolved using `pcie_aspm=off` appended to bootloader command lines.
+- **NTP Clock Sync**: Enabled on the Jetson to act as the local NTP server for the Pi kiosk to prevent certificate validation errors.
+- **Display Adapter**: Direct DP-to-DP cable connection verified.
+- **Secure Remote Backups**: Configured low-privilege `grid_backup` user on the Jetson with SSH key-based access locked to the `rrsync` script for secure, directory-restricted backups.
 
-### 2. Verified UEFI / Storage States
-- **UEFI Bootloader**: Functional. The internal QSPI NOR flash bootloader is working and displays the UEFI Shell on boot.
-### Step 1: Flash JetPack 6.2 Image (Current Step)
-- **Root Cause of previous issue**: Flashing JetPack 6.0 (L4T 36.3.0) on a motherboard with `36.4.3` firmware caused a kernel-firmware mismatch. The kernel booted but failed to initialize the PCIe controller, making the NVMe SSD invisible to the OS and dropping to a minimal initramfs shell.
-- **Action**: The user is currently downloading the **JetPack 6.2 (L4T 36.4.3)** SD card image, which is the exact match for the motherboard firmware.
-- The image will be flashed directly to the NVMe SSD via BalenaEtcher on the Mac.
+### 2. Edge AI & Telemetry Staging State (Resolved)
+- **mTLS gRPC Infrastructure**: Migrated telemetry streaming and delta LLM prompts to gRPC on port `50051`. Zero-trust client/server authentication is enforced via mutual TLS (mTLS) certificates signed by a custom Local CA.
+- **Relational Databases**: Created SQLite databases `backups/grid_history.db` and `analysis_history.db` (replacing flat CSV tracking) to handle high-frequency grid reads and lower-frequency SolarEdge/Chillicon API telemetry in real-time.
+- **Ollama Engine**: Quantized Gemma 4 (`gemma4-it-q4` at 5.1B parameters, 3.2GB GGUF) registered and cached in Ollama on Jetson #2 (`192.168.8.82`) for GPU-accelerated local inference.
+- **Lightweight Kiosk Mode**: Configured Openbox lightweight X11 WM for the Pi kiosk to preserve memory (~1.2GB system RAM savings) for concurrent model workloads.
+- **DFT & Spectral Mathematics**: Telemetry parser upgraded with Discrete Fourier Transform (DFT) harmonic calculations (24h diurnal and 12h bimodal amplitude/phase checks) and 3h curve slope estimation.
 
-### Step 2: Boot and Verify (In Progress)
+---
 - NVMe SSD flashed with JetPack 6.2 (matching `36.4.3` firmware) was inserted.
 - **NVMe Detection Issue**: The Orico J-10 SSD uses a Realtek controller. When the Linux kernel boots, it attempts to enable advanced PCIe features (like ASPM and Gen3 speed), which causes the Realtek controller to fail link training and disappear from the kernel (`lspci` and `/proc/partitions` are empty).
 - **FDT Device Tree Conflict**: The SD card image defaults to a standard Dev Kit DTB (`tegra234-p3767-0000-p3768-0000-a0.dtb`), which mismatches the "Super-Jetson" board layout, disabling the PCIe controller.
