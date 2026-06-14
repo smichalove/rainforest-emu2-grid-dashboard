@@ -9,10 +9,10 @@ A robust, 24-hour real-time grid monitoring dashboard using a Rainforest EMU-2 s
 > **Product & Compatibility Note:** The Rainforest EMU-2 is a legacy hardware product that has been discontinued. For deployments using current-generation hardware, the **Rainforest EAGLE 3** features a local API that outputs a very similar XML structure, making this dashboard framework highly compatible and adaptable for it.
 
 ## Hardware Requirements
-- **Raspberry Pi** (Pi 3 or 4 recommended)
+- **Raspberry Pi** (Pi 3, 4, or 5 recommended)
 - **Rainforest EMU-2** connected via USB (`/dev/ttyACM0`)
 - **HDMI Monitor** (The script dynamically scales to fullscreen, mimicking commercial 10" or larger solar dashboards)
-- **NVIDIA Jetson Orin Nano / Orin Nano Super Developer Kit** (Optional) - Dedicated local AI server (minimum 8GB unified memory recommended) to run decoupled local Edge AI offline via Ollama.
+- **NVIDIA Jetson Orin Nano / Orin Nano Super Developer Kit** (Optional) - Dedicated local AI server (minimum 8GB unified memory recommended) to run decoupled local Edge AI offline. For a fully optimized, lag-free setup, a **second Jetson Orin** can be added to run the Google AI Edge SDK (MediaPipe) or Ollama as a dedicated headless inference server.
 
 ## Connecting to Your Smart Meter (PSE & Others)
 Because the monitor reads data directly from the Zigbee wireless network inside your utility's smart meter, it must be paired and provisioned with the meter:
@@ -135,8 +135,8 @@ sequenceDiagram
     
     box rgb(17, 24, 39) Local Jetson Delta Pipeline (Every 15 mins)
     participant Pi as Raspberry Pi (dashboard.py)
-    participant JS as Jetson Server (stage_local_summary.py)
-    participant OL as Local Ollama (gemma4-it-q4)
+    participant JS as Jetson 1 Server (stage_local_summary.py)
+    participant J2 as Jetson 2 (Ollama / AI Edge SDK)
     end
 
     %% Cloud Batch Flow
@@ -162,9 +162,9 @@ sequenceDiagram
     JS->>JS: Adjust solar anomaly thresholds based on cloud cover %
     JS->>JS: Format comparative prompt using gemma_hybrid_prompt.txt
     
-    JS->>OL: POST /api/generate (model, system instruct, formatted prompt)
-    OL->>OL: GPU Inference (Gemma 4 5B - gemma4-it-q4)
-    OL-->>JS: Return response text
+    JS->>J2: POST /generate (payload prompt)
+    J2->>J2: GPU Inference (Gemma 2 2B / Gemma 4)
+    J2-->>JS: Return response text
     
     JS-->>Pi: HTTP Response (local delta text)
     Note over Pi: GUI Rendering

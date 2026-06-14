@@ -1,17 +1,17 @@
 # Migration Plan - Nvidia Jetson Orin Edge AI Dashboard
 
-This document outlines the architectural plan for migrating the AI-generated telemetry summaries from **Google Cloud Vertex AI** to a local **Nvidia Jetson Orin** running a local Large Language Model (LLM). This setup allows operators to choose between low-cost cloud scale (Raspberry Pi + Vertex AI) and fully self-contained edge execution (Nvidia Orin).
+This document outlines the architectural plan for migrating the AI-generated telemetry summaries from **Google Cloud Vertex AI** to a local **Nvidia Jetson Orin** ecosystem running local Large Language Models (LLMs). This setup allows operators to choose between low-cost cloud scale (Raspberry Pi + Vertex AI) and fully self-contained multi-node edge execution (Raspberry Pi + Nvidia Orin).
 
 ---
 
 ## Architectural Comparison
 
-| Feature | Cloud Architecture (Pi + Vertex AI) | Local Edge Architecture (Nvidia Orin) |
+| Feature | Cloud Architecture (Pi + Vertex AI) | Local Edge Architecture (Pi + Multi-Node Orin) |
 | :--- | :--- | :--- |
-| **Edge Hardware** | Raspberry Pi 3 / 4 / 5 | Nvidia Jetson Orin (Nano / NX / AGX) |
-| **LLM Backend** | Vertex AI (Gemini 2.5 Flash) | Local Ollama / llama.cpp / vLLM (Llama-3 / Phi-3) |
+| **Edge Hardware** | Raspberry Pi 3 / 4 / 5 | Raspberry Pi (GUI) + Nvidia Jetson Orin #1 (Stager) + Nvidia Jetson #2 (Inference) |
+| **LLM Backend** | Vertex AI (Gemini 2.5 Flash) | Local Ollama or Google AI Edge SDK / MediaPipe (Gemma 2 2B/9B, Llama-3, Phi-3) |
 | **Inference Cost** | Pay-per-token (discounted via Batch API) | $0.00 (Pure electricity) |
-| **Processing Latency** | ~10–15 mins (Platform queuing) | Variable based on local GPU queue (Orin-dependent) |
+| **Processing Latency** | ~10–15 mins (Platform queuing) | Variable based on local GPU queue (usually 10–20 seconds) |
 | **Data Privacy** | Telemetry sent to GCP | 100% On-Prem / Offline |
 
 ---
@@ -20,54 +20,66 @@ This document outlines the architectural plan for migrating the AI-generated tel
 
 ```mermaid
 flowchart TD
-    subgraph Edge Hardware: Nvidia Jetson Orin
-        UI[Main GUI Thread: dashboard.py]
-        Cache[gemini_summary.json]
-        Watchdog[active_local_job.json]
-        Script[stage_local_summary.py]
-        Ollama[Ollama Inference Daemon]
-        GPU[Orin Ampere GPU Core]
+    subgraph PiNode [Raspberry Pi Kiosk Node]
+        UI[dashboard.py / Tkinter GUI]
+        LocalCache[gemini_summary.json]
     end
 
-    CSV[(Local History CSVs)] --> Script
-    Script -->|Read Cache State| Cache
-    Script -->|Write Active Job| Watchdog
-    Script -->|Async Inference Request| Ollama
-    Ollama -->|Process Model on GPU| GPU
-    Ollama -->|Return Completed Text| Script
-    Script -->|Overwrite Cache| Cache
-    UI -->|Read Cache & Render status/text| Cache
+    subgraph Jetson1 [Jetson Orin #1 (Data & Math Node)]
+        Stager[stage_local_summary.py: port 5000]
+        DB[(grid_history.db - Synced)]
+        Watchdog[active_local_job.json]
+    end
+
+    subgraph Jetson2 [Jetson Orin #2 (Dedicated Inference Node)]
+        API[FastAPI Server: port 8000]
+        SDK[Google AI Edge SDK / MediaPipe / Ollama]
+        GPU[Ampere GPU Core]
+    end
+
+    UI -->|1. Polling: /api/analyze| Stager
+    Stager -->|2. Read Telemetry| DB
+    Stager -->|3. POST Prompt JSON| API
+    API -->|4. Query LLM Engine| SDK
+    SDK -->|5. Compute Acceleration| GPU
+    GPU -->|6. Return Tokens| SDK
+    SDK -->|7. Return Summary| API
+    API -->|8. Return Response JSON| Stager
+    Stager -->|9. Respond with Cache Data| UI
+    UI -->|10. Render Background Text| LocalCache
 ```
 
 ---
 
 ## Technical Integration Details
 
-### 1. Local Inference Daemon (Ollama / llama.cpp)
-We will leverage **Ollama** or **llama.cpp** as the local server backend running on the Nvidia Jetson Orin. 
-* **API Interface**: Ollama exposes a standard OpenAI-compatible API endpoint locally at `http://localhost:11434/api/generate`.
+### 1. Local Inference Daemon (Ollama & Google AI Edge SDK)
+We leverage **Ollama** or **Google AI Edge SDK / MediaPipe** as the local server backend running on the Nvidia Jetson Orin. 
+* **Ollama Interface**: Exposes a standard OpenAI-compatible API endpoint locally at `http://localhost:11434/api/generate`.
+* **Google AI Edge SDK Interface**: Exposes a lightweight FastAPI endpoint at `http://localhost:8000/generate` using MediaPipe LLM Inference to run quantized Gemma 2B-IT models directly on GPU.
 * **Model Choices**:
-  - `llama3:8b-instruct-q4_K_M` (for NX or AGX models with high RAM capacity).
-  - `phi3:mini-128k-instruct` (for Jetson Orin Nano with 4GB/8GB RAM limits, offering excellent performance and deep context window).
+  - `gemma2:2b` or `gemma-2b-it-gpu.bin` (optimized for fast edge inference under 2 GB VRAM footprint).
+  - `gemma2:9b` (for higher-logical reasoning on a dedicated 8GB/16GB Orin unit).
+  - `phi3:mini-128k-instruct` (excellent performance and large context window).
 
 ### 2. Standalone Local Watchdog Script (`stage_local_summary.py`)
-To align with the Pi version's staging design, the Orin version will run a separate staging script in a loop. It handles the local queue latency and protects state across reboots:
+The Orin stager runs as a background service (`jetson-grid-edge`) that processes telemetry and interacts with the LLM engines:
 
 #### A. Telemetry Collection & Prompting
-- Aggregates the local history CSVs (Grid, SolarEdge, Chillicon) into hourly compact records.
-- Loads the prompt template dynamically from `gemini_prompt.txt` (or a model-adapted local prompt file).
+- Aggregates the local history databases and CSVs (Grid, SolarEdge, Chillicon) into hourly records.
+- Loads the prompt template dynamically from `gemma_hybrid_prompt.txt` or model-adapted local prompts.
 
 #### B. Asynchronous Local Request Queue & Watchdog
-In local environments, GPU cores are often shared with video transcoding, object detection (YOLO), or home automation models. This can cause local inference requests to queue or take several minutes to run on an Orin Nano.
-- **In-flight Registry**: When sending the request to Ollama, the script writes `active_local_job.json` containing the request parameters, active prompt, and system timestamp.
-- **Polling Loop**: The script polls Ollama's task endpoint. If a reboot or process crash occurs, it reads `active_local_job.json` and resumes checking the task or re-submits it if the Ollama daemon was reset, maintaining reliable state.
+In local environments, GPU cores are often shared with video transcoding, object detection (YOLO), or home automation models. This can cause local inference requests to queue or take several minutes to run.
+- **In-flight Registry**: When sending the request to Ollama or the AI Edge API, the script writes `active_local_job.json` containing the request parameters, active prompt, and system timestamp.
+- **Polling Loop**: The script polls the task status. If a reboot or process crash occurs, it reads `active_local_job.json` and resumes checking the task or re-submits it if the engine daemon was reset, maintaining reliable state.
 - **Metadata Tagging**: Appends processing metadata to the summary:
-  `[Edge Model: Phi-3-Mini | Inference Time: 34.2s]`
+   `[Edge Model: Gemma-2B | Inference Time: 12.4s]`
 
 ### 3. File System Decoupled Cache
-The dashboard UI (`dashboard.py`) remains 100% untouched. It continues to check and read `gemini_summary.json` at startup and intervals, rendering the AI summary text directly onto the Tkinter canvas, completely unaware that the backend swapped from Google Cloud to local Orin GPU hardware.
+The dashboard UI (`dashboard.py`) running on the Raspberry Pi remains 100% untouched. It continues to poll the stager HTTP endpoint (`/api/analyze`) and updates `gemini_summary.json` locally, rendering the AI summary text directly onto the Tkinter canvas.
 
----
+-----
 
 ## Jetson Orin Provisioning & Display Optimization
 
