@@ -1,4 +1,0 @@
-The key statistics for today's energy monitoring are: Total Net Imported 68.360 kWh, Total Net Exported 105.097 kWh, SolarEdge Generated 45.756 kWh, Net Energy Credit $11.51, Peak Net Grid Demand 3.024 kW, Peak SolarEdge PV 4.197 kW, and Inferred Chillicon Contribution 53.921 kWh.
-SolarEdge performed well today with a generated output of 45.756 kWh.  We also see the presence of Flex events in which battery discharge occurred, resulting in the Chillicon contribution to energy balance. Net Energy Credit for the day is $11.51, and this will impact PSE billing going forward. The peak demand on the grid was 3.024 kW, reflecting a substantial energy draw from various home appliances and systems throughout the day. Peak SolarEdge PV output reached 4.197 kW at some point in the day.  Finally, the total home consumption recorded for the day was 60.163 kWh. Data analyzed for 2026-05-28.
-
-[Edge Model: gemma2:2b | Inference Time: 17.8s]

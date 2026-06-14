@@ -43,7 +43,7 @@ cp "${LOCAL_DIR}"/chilicon*.csv "$SYNC_TEMP/" 2>/dev/null
 
 # 3. Run incremental rsync backup of the sync directory
 echo "[INFO] Syncing data files to Jetson Orin Nano SSD..." >> "$LOG_FILE"
-if rsync -avz --delete "${SYNC_TEMP}/" "${JETSON_USER}@${JETSON_HOST}:${BACKUP_DIR}/" >> "$LOG_FILE" 2>&1; then
+if rsync -avz --delete --exclude="analysis_history.db" "${SYNC_TEMP}/" "${JETSON_USER}@${JETSON_HOST}:${BACKUP_DIR}/" >> "$LOG_FILE" 2>&1; then
     echo "[SUCCESS] Telemetry backup complete: $(date)" >> "$LOG_FILE"
     # Clean up local SQLite snapshot file
     rm -f "${SYNC_TEMP}/grid_history.db"

@@ -2,41 +2,117 @@ syntax = "proto3";
 
 package grid;
 
-// Service to coordinate telemetry ingestion and analysis streaming between 
-// the Raspberry Pi (Tier 1 Ingest Node) and NVIDIA Jetson Orin Nano (Tier 2 Gatekeeper).
-service GridTelemetryService {
-  // Streams continuous telemetry packets directly from the Pi RAM to the Jetson RAM.
-  rpc StreamTelemetry(stream TelemetryRequest) returns (TelemetryResponse);
+import "google/protobuf/timestamp.proto";
 
-  // Pulls the latest cached LLM summaries and DFT spectral explanations from the Jetson.
-  rpc GetLatestAnalysis(AnalysisRequest) returns (AnalysisResponse);
+// Service to coordinate phase-aligned telemetry ingestion and analysis streaming 
+// between the Raspberry Pi (Tier 1 Ingest Node) and NVIDIA Jetson Orin Nano (Tier 2 Gatekeeper).
+service GridTelemetryService {
+  // Phase-aligned telemetry batch handover from Tier 1 to Tier 2
+  rpc EvaluateTelemetrySlice(TelemetrySlice) returns (TelemetryResponse);
+
+  // Server-streaming call to stream Ollama/Gemma generated tokens back to Pi Kiosk
+  rpc GetTelemetryAnalysisStream(AnalysisRequest) returns (stream AnalysisStreamResponse);
 }
 
 // Telemetry packet containing real-time grid and solar sensor readings.
 message TelemetryRequest {
-  string timestamp = 1;
-  double grid_usage_kw = 2;
-  double solaredge_pv_kw = 3;
-  double solaredge_battery_kw = 4;
-  double solaredge_battery_soc = 5;
-  double chilicon_pv_kw = 6;
+  google.protobuf.Timestamp timestamp = 1; // Efficient binary 64-bit/32-bit timestamp
+  double grid_usage_kw = 2;         // Matches grid_history (SQLite/CSV)
+  double solaredge_pv_kw = 3;       // Matches solaredge_history (CSV)
+  double solaredge_battery_kw = 4;  // Matches solaredge_battery_history battery_power_kw
+  double solaredge_battery_soc = 5; // Matches solaredge_battery_history battery_soc_percent
+  double solaredge_load_kw = 6;     // Matches solaredge_flow_history load_power_kw (index 2)
+  double solaredge_import_kw = 7;   // Matches solaredge_flow_history grid_import_kw (index 3)
+  double solaredge_export_kw = 8;   // Matches solaredge_flow_history grid_export_kw (index 4)
+  double chilicon_pv_kw = 9;        // Matches chilicon_history power_kw
+  double chilicon_lifetime_wh = 10; // Matches chilicon_history lifetime_wh
 }
 
-// Simple acknowledgment returned by the server upon successful packet ingest.
-message TelemetryResponse {
-  bool success = 1;
-  string message = 2;
+// TelemetrySlice to support Project Antigravity's phase-aligned batching.
+message TelemetrySlice {
+  string slice_id = 1;
+  google.protobuf.Timestamp start_timestamp = 2;
+  google.protobuf.Timestamp end_timestamp = 3;
+  double dft_period_hours = 4;            // Dynamic period calculated by Tier 1 FFT
+  repeated TelemetryRequest readings = 5;  // Chronological batch of telemetry
+  SpectralMetrics spectral_metrics = 6;   // Spectral metrics calculated on edge Tier 1
 }
 
-// Identification request for retrieving cached server summaries.
+// SpectralMetrics representing calculated FFT, DTF, and SNR values.
+message SpectralMetrics {
+  double solar_24h_amp = 1;
+  double solar_24h_peak_hour = 2;
+  double grid_24h_amp = 3;
+  double grid_12h_amp = 4;
+  double grid_12h_peak_hour = 5;
+  double grid_bimodal_ratio = 6;
+  
+  // Rhythm SNR (Signal-to-Noise Ratio) in dB
+  double grid_24h_snr_db = 7;
+  double grid_12h_snr_db = 8;
+  double solar_24h_snr_db = 9;
+  double consumption_24h_snr_db = 10;
+  double consumption_12h_snr_db = 11;
+  
+  // Time-domain slopes (rate of change)
+  double solar_slope = 12;
+  double grid_slope = 13;
+  
+  // Raw spectral coefficients for Matplotlib layout rendering
+  repeated double freqs = 14;
+  repeated double grid_amp_spec = 15;
+  repeated double solar_amp_spec = 16;
+  repeated double consumption_amp_spec = 17;
+  repeated double expected_solar_amp_spec = 18;
+}
+
+// Identification request for retrieving cached server summaries and passing prompt variables.
 message AnalysisRequest {
-  string client_id = 1;
+  google.protobuf.Timestamp baseline_timestamp = 1; // Baseline timestamp context
+  string baseline_text = 2;                         // Current baseline summary text
+  int32 batch_interval_hours = 3;                   // Evaluation window size in hours (default: 4)
 }
 
 // Unified payload containing baseline analysis, local delta analysis, and DFT reports.
 message AnalysisResponse {
-  string timestamp = 1;
-  string baseline_text = 2;
-  string live_delta_text = 3;
-  string dft_explanation = 4;
+  google.protobuf.Timestamp timestamp = 1;
+  string baseline_text = 2;                         // Baseline summary text (fresh or updated)
+  google.protobuf.Timestamp baseline_timestamp = 3; // Baseline timestamp (fresh or updated)
+  string summary_text = 4;                          // Completed LLM live delta summary text
+  string dft_explanation = 5;                       // Completed LLM DFT explanation text
+  
+  // Computed quantitative metrics
+  double delta_import = 6;
+  double delta_export = 7;
+  double delta_peak = 8;
+  double delta_solar = 9;
+  double delta_se_solar = 10;
+  double delta_ch_solar = 11;
+  double delta_bat_charge = 12;
+  double delta_bat_discharge = 13;
+  double delta_se_load = 14;
+  
+  // Weather metrics
+  double expected_temp_max = 15;
+  double expected_cloud_cover = 16;
+  
+  // Spectral and frequency-domain structure
+  SpectralMetrics spectral_metrics = 17;
+}
+
+// AnalysisStreamResponse supporting real-time token streaming from local Ollama/Gemma.
+message AnalysisStreamResponse {
+  // The first message in the stream contains metadata and computed analysis numbers
+  optional AnalysisResponse initial_analysis = 1;
+
+  // Subsequent messages contain token chunks of the generated summaries as they stream in
+  // Note: Tokens are buffered server-side (3-5 tokens or word boundaries) to reduce packet overhead
+  string summary_token_chunk = 2;
+  string dft_token_chunk = 3;
+}
+
+// Ingest confirmation payload.
+message TelemetryResponse {
+  bool success = 1;
+  string message = 2;
 }

@@ -7,7 +7,7 @@ import sqlite3
 import os
 import logging
 import datetime
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
 
 
 def init_db(db_path: str) -> None:
@@ -237,3 +237,47 @@ def migrate_csv(db_path: str, csv_path: str) -> int:
     
     logging.info(f"Successfully migrated {migrated_count} records from {csv_path} to {db_path}")
     return migrated_count
+
+
+def insert_analysis_history(db_path: str, record: Dict[str, Any]) -> bool:
+    """Inserts a completed AI analysis record into the analysis_history database.
+
+    Args:
+        db_path: The absolute filesystem path to the analysis SQLite database file.
+        record: A dictionary containing all the database column key-values.
+
+    Returns:
+        A boolean indicating True if insertion was successful, False otherwise.
+
+    Raises:
+        sqlite3.Error: If the SQL query fails (logged and caught internally).
+    """
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        
+        # We use INSERT OR REPLACE to update if the same timestamp is evaluated again
+        cursor.execute("""
+            INSERT OR REPLACE INTO analysis_history (
+                timestamp, baseline_timestamp, baseline_text, summary_text, dft_explanation,
+                delta_import, delta_export, delta_peak, delta_solar, delta_se_solar,
+                delta_ch_solar, delta_bat_charge, delta_bat_discharge, delta_se_load,
+                se_load_min, se_load_max, se_load_avg, expected_temp_max, expected_cloud_cover,
+                spectral_metrics_json, escalation_status, escalation_timestamp
+            ) VALUES (
+                :timestamp, :baseline_timestamp, :baseline_text, :summary_text, :dft_explanation,
+                :delta_import, :delta_export, :delta_peak, :delta_solar, :delta_se_solar,
+                :delta_ch_solar, :delta_bat_charge, :delta_bat_discharge, :delta_se_load,
+                :se_load_min, :se_load_max, :se_load_avg, :expected_temp_max, :expected_cloud_cover,
+                :spectral_metrics_json, :escalation_status, :escalation_timestamp
+            )
+        """, record)
+        
+        conn.commit()
+        success = cursor.rowcount > 0
+        conn.close()
+        return success
+    except sqlite3.Error as e:
+        logging.error(f"Failed to insert analysis history record: {e}")
+        return False
+

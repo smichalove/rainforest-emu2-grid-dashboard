@@ -5,6 +5,7 @@ Uses the shared dashboard_modules configuration and computations.
 """
 
 import datetime
+import logging
 import os
 import sys
 import threading
