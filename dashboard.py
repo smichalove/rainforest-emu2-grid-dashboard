@@ -46,6 +46,7 @@ import tkinter as tk
 
 # Modular Package Imports
 from dashboard_modules import config, io, telemetry, solar, weather, spectral, ai
+from dashboard_modules.grpc_client import GridTelemetryClient, timestamp_to_datetime
 
 # Setup logging
 home_dir: str = os.path.expanduser('~')
@@ -208,16 +209,23 @@ class GridDashboard(tk.Tk):
         # Load configurations and credentials
         self.load_credentials()
 
-        # Load LLM and Jetson sync configurations from environment
+        # Load LLM and Jetson sync configurations from environment. We support legacy
+        # HTTP parameters (self.jetson_port) alongside the new zero-trust gRPC parameters
+        # (self.jetson_grpc_port) to guarantee a smooth transition.
         self.llm_mode = os.environ.get("LLM_MODE", "direct").lower().strip()
         self.jetson_host = os.environ.get("JETSON_HOST", "localhost").strip()
         self.jetson_port = os.environ.get("JETSON_PORT", "5000").strip()
         self.jetson_user = os.environ.get("JETSON_USER", "steven").strip()
+        self.jetson_grpc_port = int(os.environ.get("JETSON_GRPC_PORT", "50051").strip())
+        self.use_mtls = os.environ.get("USE_MTLS", "True").strip().lower() in ("true", "1", "yes")
         try:
             self.batch_interval_hours = int(os.environ.get("BATCH_INTERVAL_HOURS", "4").strip())
         except ValueError:
             self.batch_interval_hours = 4
-        logging.info(f"Initialized LLM mode: '{self.llm_mode}' (Jetson: {self.jetson_host}:{self.jetson_port}, Batch Interval: {self.batch_interval_hours}h)")
+        logging.info(
+            f"Initialized LLM mode: '{self.llm_mode}' (Jetson gRPC: {self.jetson_host}:{self.jetson_grpc_port}, "
+            f"mTLS: {self.use_mtls}, Batch Interval: {self.batch_interval_hours}h)"
+        )
 
         # Build clients
         self.se_client = solar.SolarEdgeClient(
@@ -1349,70 +1357,136 @@ class GridDashboard(tk.Tk):
                     ts_str = (datetime.datetime.now() - datetime.timedelta(hours=24)).strftime("%Y-%m-%d %H:%M:%S")
                     logging.info(f"Local Delta Loop: Baseline cache not found/valid. Using 24h fallback timestamp: {ts_str}")
 
-                # 3. Post request to Jetson server
-                url = f"http://{self.jetson_host}:{self.jetson_port}/api/analyze"
-                payload = {
-                    "baseline_timestamp": ts_str,
-                    "baseline_text": clean_baseline,
-                    "batch_interval_hours": self.batch_interval_hours
-                }
-                req_data = json.dumps(payload).encode('utf-8')
-                req = urllib.request.Request(
-                    url,
-                    data=req_data,
-                    headers={'Content-Type': 'application/json'}
-                )
-                
+                # 3. Request analysis context from Jetson edge server via secure gRPC
                 try:
-                    logging.info(f"Local Delta Loop: Requesting analysis from Jetson server at {url}...")
-                    with urllib.request.urlopen(req, timeout=120.0) as response:
-                        res_body = response.read().decode('utf-8')
-                        res_data = json.loads(res_body)
-                        llm_response = res_data.get("response", "").strip()
-                        dft_explanation = res_data.get("dft_explanation", "").strip()
-                        metrics = res_data.get("metrics", {})
-                        returned_baseline_text = res_data.get("baseline_text", "").strip()
-                        returned_baseline_timestamp = res_data.get("baseline_timestamp", "").strip()
-
-                        if returned_baseline_text:
-                            clean_baseline = returned_baseline_text
-                            self.baseline_text = clean_baseline
-                        if returned_baseline_timestamp:
-                            ts_str = returned_baseline_timestamp
+                    # Convert the cache baseline timestamp string into a datetime object.
+                    # Standardizing to datetime prevents string representation mismatches and
+                    # provides timezone-agnostic parameters to the Protobuf serializer.
+                    try:
+                        baseline_time = datetime.datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        baseline_time = datetime.datetime.now() - datetime.timedelta(hours=24)
                         
-                        if llm_response:
-                            checked_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                            delta_text = f"[Live Local Delta (Jetson) | Checked: {checked_time}]: {llm_response}"
+                    logging.info(f"Local Delta Loop: Connecting to gRPC stager at {self.jetson_host}:{self.jetson_grpc_port}...")
+                    client = GridTelemetryClient(
+                        host=self.jetson_host,
+                        port=self.jetson_grpc_port,
+                        use_mtls=self.use_mtls
+                    )
+                    client.connect()
+                    
+                    logging.info("Local Delta Loop: Requesting streamed analysis from Jetson gRPC server...")
+                    stream = client.get_analysis_stream(
+                        baseline_text=clean_baseline,
+                        baseline_time=baseline_time,
+                        interval_hours=self.batch_interval_hours
+                    )
+                    
+                    llm_response = ""
+                    dft_explanation = ""
+                    metrics = {}
+                    spec_data = {}
+                    checked_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    for chunk in stream:
+                        # Process the initial statistical evaluation block. This contains computed
+                        # metrics and the precomputed DFT spectrum matrices.
+                        if chunk.HasField("initial_analysis"):
+                            init_analysis = chunk.initial_analysis
                             
-                            self.local_delta_text = delta_text
-                            if dft_explanation:
-                                self.local_dft_text = dft_explanation
+                            # Parse any fresh baseline text updates computed by the stager.
+                            if init_analysis.baseline_text:
+                                clean_baseline = init_analysis.baseline_text.strip()
+                                self.baseline_text = clean_baseline
+                                
+                            # Convert Protobuf Timestamp to string format to update cache log timestamps.
+                            if init_analysis.HasField("baseline_timestamp"):
+                                ts_dt = timestamp_to_datetime(init_analysis.baseline_timestamp)
+                                ts_str = ts_dt.strftime("%Y-%m-%d %H:%M:%S")
                             
-                            # Merge metrics, summary, dft_explanation, and full_history_spectrum into the local cache file
-                            try:
-                                cache_data = io.read_safe_json(self.summary_cache_file)
-                                if not cache_data:
-                                    cache_data = {}
-                                if metrics:
-                                    cache_data["metrics"] = metrics
-                                cache_data["dft_explanation"] = dft_explanation
-                                cache_data["summary"] = f"{clean_baseline}\n{delta_text}"
-                                cache_data["timestamp"] = ts_str
-                                spec_data = res_data.get("full_history_spectrum")
-                                if spec_data:
-                                    cache_data["full_history_spectrum"] = spec_data
+                            # Populate quantitative metrics dictionary to save to the cache file.
+                            metrics = {
+                                "temp_max": init_analysis.expected_temp_max,
+                                "cloud_cover": init_analysis.expected_cloud_cover,
+                                "delta_import": init_analysis.delta_import,
+                                "delta_export": init_analysis.delta_export,
+                                "delta_peak": init_analysis.delta_peak,
+                                "delta_solar": init_analysis.delta_solar,
+                                "delta_se_solar": init_analysis.delta_se_solar,
+                                "delta_ch_solar": init_analysis.delta_ch_solar,
+                                "delta_bat_charge": init_analysis.delta_bat_charge,
+                                "delta_bat_discharge": init_analysis.delta_bat_discharge,
+                                "delta_se_load": init_analysis.delta_se_load,
+                            }
+                            
+                            # Extract precomputed DFT spectrum matrices if returned.
+                            if init_analysis.HasField("spectral_metrics"):
+                                spec_proto = init_analysis.spectral_metrics
+                                if spec_proto.freqs:
+                                    spec_data = {
+                                        "freqs": list(spec_proto.freqs),
+                                        "grid_amp": list(spec_proto.grid_amp_spec),
+                                        "solar_amp": list(spec_proto.solar_amp_spec),
+                                        "expected_solar_amp": list(spec_proto.expected_solar_amp_spec),
+                                        "consumption_amp": list(spec_proto.consumption_amp_spec)
+                                    }
+                                    # Update current memory copy so that Slide 2 switches over immediately
                                     self.cached_full_history_spectrum = spec_data
-                                io.write_safe_json(self.summary_cache_file, cache_data)
-                                logging.info("Local Delta Loop: Successfully updated cached summary, DFT explanation, metrics, timestamp, and spectrum.")
-                            except Exception as cache_err:
-                                logging.error(f"Local Delta Loop: Failed to save to cache: {cache_err}")
-                                    
+                            
+                            # Render initial state on GUI
+                            self.local_delta_text = f"[Live Local Delta (Jetson) | Checked: {checked_time}]: Ingesting..."
                             self.ui_queue.put(self.update_summary_display)
-                            logging.info("Local Delta Loop: Successfully queued GUI summary update.")
-                        else:
-                            logging.warning("Local Delta Loop: Received empty response from Jetson server.")
-                except Exception as post_err:
-                    logging.error(f"Local Delta Loop: HTTP analysis query failed: {post_err}")
+
+                        # Process streaming summary (time-domain analysis) tokens.
+                        # Each token chunk is appended to the current local delta text and queued
+                        # to render instantly on the Matplotlib summary layout.
+                        if chunk.summary_token_chunk:
+                            token = chunk.summary_token_chunk
+                            if not llm_response:
+                                self.local_delta_text = f"[Live Local Delta (Jetson) | Checked: {checked_time}]: "
+                            llm_response += token
+                            self.local_delta_text += token
+                            self.ui_queue.put(self.update_summary_display)
+
+                        # Process streaming DFT explanation (frequency-domain analysis) tokens.
+                        if chunk.dft_token_chunk:
+                            token = chunk.dft_token_chunk
+                            if not dft_explanation:
+                                self.local_dft_text = ""
+                            dft_explanation += token
+                            self.local_dft_text += token
+                            self.ui_queue.put(self.update_summary_display)
+
+                    client.close()
+                    logging.info("Local Delta Loop: Completed gRPC stream retrieval successfully.")
+                    
+                    # Save results to the persistent local JSON cache file to allow offline load recovery
+                    # on subsequent application launches.
+                    if llm_response:
+                        try:
+                            cache_data = io.read_safe_json(self.summary_cache_file)
+                            if not cache_data:
+                                cache_data = {}
+                            if metrics:
+                                cache_data["metrics"] = metrics
+                            cache_data["dft_explanation"] = dft_explanation
+                            delta_text = f"[Live Local Delta (Jetson) | Checked: {checked_time}]: {llm_response}"
+                            cache_data["summary"] = f"{clean_baseline}\n{delta_text}"
+                            cache_data["timestamp"] = ts_str
+                            if spec_data:
+                                cache_data["full_history_spectrum"] = spec_data
+                            io.write_safe_json(self.summary_cache_file, cache_data)
+                            logging.info("Local Delta Loop: Successfully updated cached summary, DFT explanation, metrics, timestamp, and spectrum.")
+                        except Exception as cache_err:
+                            logging.error(f"Local Delta Loop: Failed to save to cache: {cache_err}")
+                            
+                        # Queue final clean render updates to redraw the slides
+                        self.ui_queue.put(self.update_summary_display)
+                        logging.info("Local Delta Loop: Successfully completed update cycle.")
+                    else:
+                        logging.warning("Local Delta Loop: Received empty response from Jetson server.")
+                except Exception as grpc_err:
+                    logging.error(f"Local Delta Loop: gRPC analysis query failed: {grpc_err}")
             except Exception as loop_err:
                 logging.error(f"Local Delta Loop: Unexpected error: {loop_err}")
                 

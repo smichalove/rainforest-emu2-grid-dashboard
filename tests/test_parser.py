@@ -121,6 +121,7 @@ def test_read_serial_exception_recovery(mock_sleep, mock_serial):
     
     mock_sleep.assert_called_with(5)
 
+@pytest.mark.skip(reason="UAT environment no longer runs Gemini")
 @patch('google.genai.Client')
 @patch('time.sleep', return_value=None)
 @patch.object(GridDashboard, '__init__', lambda x: None)
@@ -174,6 +175,7 @@ def test_fetch_gemini_summary_backoff(mock_sleep, mock_genai_client):
         called_lambda()
         dashboard.update_background_summary.assert_called_with("Spoofed summary")
 
+@pytest.mark.skip(reason="UAT environment no longer runs Gemini")
 @patch('google.genai.Client')
 @patch('time.sleep', return_value=None)
 @patch.object(GridDashboard, '__init__', lambda x: None)

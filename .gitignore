@@ -8,6 +8,8 @@ agent.md
 .agents/
 Auth/
 auth/
+certs/
+Auth/certs/
 grid_history.csv
 *.csv
 gemini_summary.json

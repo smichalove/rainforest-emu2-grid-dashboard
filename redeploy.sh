@@ -5,20 +5,40 @@
 set -e
 
 echo "=== Running local unit tests ==="
+./venv/bin/python3 -m unittest tests/emulation/test_grpc_contract.py
 pytest tests/
 
-echo "=== Copying dashboard.py, dashboard_modules, README.md, run_dashboard_system.sh, backup_to_jetson.sh, and logos to the Pi ==="
-ssh steven@rainforestpi "mkdir -p ~/rainforest-emu2-grid-dashboard/scratch"
+echo "=== Compiling Protobuf contract locally ==="
+./venv/bin/python3 -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. protos/grid_telemetry.proto
+
+echo "=== Copying dashboard.py, dashboard_modules, stubs, and logos to the Pi ==="
+ssh steven@rainforestpi "mkdir -p ~/rainforest-emu2-grid-dashboard/scratch ~/rainforest-emu2-grid-dashboard/protos"
 scp scratch/combined_logos_small.png steven@rainforestpi:~/rainforest-emu2-grid-dashboard/scratch/
 scp -r dashboard_modules steven@rainforestpi:~/rainforest-emu2-grid-dashboard/
+scp protos/grid_telemetry_pb2*.py steven@rainforestpi:~/rainforest-emu2-grid-dashboard/protos/
 scp dashboard.py stage_batch_summary.py snr_analysis.py *prompt.txt README.md run_dashboard_system.sh backup_to_jetson.sh .env steven@rainforestpi:~/rainforest-emu2-grid-dashboard/
 ssh steven@rainforestpi "chmod +x ~/rainforest-emu2-grid-dashboard/backup_to_jetson.sh"
 
-echo "=== Copying AI staging code and prompt to the Jetson Orin Nano ==="
-scp -r dashboard_modules stage_local_summary.py stage_batch_summary.py snr_analysis.py gemma_prompt.txt gemma_hybrid_prompt.txt gemma_dft_prompt.txt steven@192.168.8.68:~/rainforest-emu2-grid-dashboard/
-ssh steven@192.168.8.68 "sudo cp -r ~/rainforest-emu2-grid-dashboard/dashboard_modules /home/grid_backup/ && sudo cp ~/rainforest-emu2-grid-dashboard/stage_local_summary.py /home/grid_backup/ && sudo cp ~/rainforest-emu2-grid-dashboard/snr_analysis.py /home/grid_backup/ && sudo cp ~/rainforest-emu2-grid-dashboard/gemma_prompt.txt /home/grid_backup/ && sudo cp ~/rainforest-emu2-grid-dashboard/gemma_hybrid_prompt.txt /home/grid_backup/ && sudo cp ~/rainforest-emu2-grid-dashboard/gemma_dft_prompt.txt /home/grid_backup/ && sudo chown -R grid_backup:grid_backup /home/grid_backup/dashboard_modules && sudo chown grid_backup:grid_backup /home/grid_backup/stage_local_summary.py /home/grid_backup/snr_analysis.py /home/grid_backup/gemma_prompt.txt /home/grid_backup/gemma_hybrid_prompt.txt /home/grid_backup/gemma_dft_prompt.txt && sudo mkdir -p /etc/systemd/system/jetson-grid-edge.service.d && echo -e '[Service]\nEnvironment=\"JETSON_BACKUP_PATH=/home/grid_backup/backups\"' | sudo tee /etc/systemd/system/jetson-grid-edge.service.d/override.conf > /dev/null && sudo systemctl daemon-reload && sudo systemctl restart jetson-grid-edge"
+echo "=== Copying AI staging code, stubs, and .env to the Jetson Orin Nano ==="
+ssh steven@192.168.8.68 "mkdir -p ~/rainforest-emu2-grid-dashboard/protos"
+scp protos/grid_telemetry_pb2*.py steven@192.168.8.68:~/rainforest-emu2-grid-dashboard/protos/
+scp -r dashboard_modules stage_local_summary.py stage_batch_summary.py snr_analysis.py gemma_prompt.txt gemma_hybrid_prompt.txt gemma_dft_prompt.txt .env steven@192.168.8.68:~/rainforest-emu2-grid-dashboard/
 
-
+ssh steven@192.168.8.68 "
+  sudo cp -r ~/rainforest-emu2-grid-dashboard/dashboard_modules /home/grid_backup/ && \
+  sudo cp -r ~/rainforest-emu2-grid-dashboard/protos /home/grid_backup/ && \
+  sudo cp ~/rainforest-emu2-grid-dashboard/stage_local_summary.py /home/grid_backup/ && \
+  sudo cp ~/rainforest-emu2-grid-dashboard/snr_analysis.py /home/grid_backup/ && \
+  sudo cp ~/rainforest-emu2-grid-dashboard/gemma_prompt.txt /home/grid_backup/ && \
+  sudo cp ~/rainforest-emu2-grid-dashboard/gemma_hybrid_prompt.txt /home/grid_backup/ && \
+  sudo cp ~/rainforest-emu2-grid-dashboard/gemma_dft_prompt.txt /home/grid_backup/ && \
+  sudo cp ~/rainforest-emu2-grid-dashboard/.env /home/grid_backup/ && \
+  sudo chown -R grid_backup:grid_backup /home/grid_backup/dashboard_modules /home/grid_backup/protos /home/grid_backup/.env /home/grid_backup/stage_local_summary.py /home/grid_backup/snr_analysis.py /home/grid_backup/gemma_prompt.txt /home/grid_backup/gemma_hybrid_prompt.txt /home/grid_backup/gemma_dft_prompt.txt && \
+  sudo mkdir -p /etc/systemd/system/jetson-grid-edge.service.d && \
+  echo -e '[Service]\nEnvironment=\"JETSON_BACKUP_PATH=/home/grid_backup/backups\"' | sudo tee /etc/systemd/system/jetson-grid-edge.service.d/override.conf > /dev/null && \
+  sudo systemctl daemon-reload && \
+  sudo systemctl restart jetson-grid-edge
+"
 
 echo "=== Restarting the dashboard process on the Pi ==="
 ssh steven@rainforestpi "killall python || true"

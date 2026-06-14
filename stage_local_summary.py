@@ -43,7 +43,7 @@ import socketserver
 import math
 import logging
 from collections import defaultdict
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Generator
 import threading
 from dashboard_modules.ai import generate_hourly_summaries
 from dashboard_modules import db
@@ -1241,10 +1241,10 @@ def run_analysis_workflow(
         analysis_lock.release()
 
 
-def _run_analysis_workflow_inner(
+def calculate_analysis_metrics_and_prompts(
     baseline_ts_str: str, baseline_text: str, batch_interval_hours: int = 4
 ) -> Dict[str, Any]:
-    """Internal implementation of quantitative modeling and summary generation."""
+    """Internal implementation of quantitative modeling and prompt generation."""
     baseline_dt = parse_timestamp(baseline_ts_str)
     if not baseline_dt:
         raise ValueError(f"Could not parse baseline timestamp: {baseline_ts_str}")
@@ -1510,12 +1510,6 @@ Output:
         batch_interval_hours=batch_interval_hours,
         remaining_lines=remaining_lines
     )
-        
-    # 9. Query Ollama for Time-Domain Analysis
-    model_name: str = DEFAULT_MODEL
-    logging.info(f"Submitting query to Ollama model {model_name}...")
-    llm_response: str = query_local_ollama(formatted_prompt, model_name)
-    
     # 10. Load and format DFT prompt template
     dft_prompt_template: Optional[str] = None
     dft_prompt_path: str = os.path.join(SCRIPT_DIR, "gemma_dft_prompt.txt")
@@ -1558,39 +1552,138 @@ Explanation:
         solar_24h_snr_db=snrs["solar_24h_snr_db"]
     )
     
+    return {
+        "formatted_prompt": formatted_prompt,
+        "formatted_dft_prompt": formatted_dft_prompt,
+        "temp_max": temp_max,
+        "cloud_cover": cloud_cover,
+        "solar_weather_modulation": solar_weather_modulation,
+        "z_score_peak": z_score_peak,
+        "battery_rte": battery_rte,
+        "solar_correlation": solar_corr,
+        "daylight_duration": daylight_duration,
+        "solar_24h_amp": solar_24h_amp,
+        "solar_24h_peak_hour": solar_24h_peak_hour,
+        "se_24h_peak_hour": se_24h_peak_hour,
+        "ch_24h_peak_hour": ch_24h_peak_hour,
+        "grid_bimodal_ratio": grid_bimodal_ratio,
+        "solar_slope": solar_slope,
+        "grid_slope": grid_slope,
+        "grid_24h_snr_db": snrs["grid_24h_snr_db"],
+        "grid_12h_snr_db": snrs["grid_12h_snr_db"],
+        "solar_24h_snr_db": snrs["solar_24h_snr_db"],
+        "consumption_24h_snr_db": snrs["consumption_24h_snr_db"],
+        "consumption_12h_snr_db": snrs["consumption_12h_snr_db"],
+        "delta_import": deltas["delta_import"],
+        "delta_export": deltas["delta_export"],
+        "delta_peak": deltas["delta_peak"],
+        "delta_solar": deltas["delta_solar"],
+        "delta_se_solar": deltas["delta_se_solar"],
+        "delta_ch_solar": deltas["delta_ch_solar"],
+        "delta_bat_charge": deltas["delta_bat_charge"],
+        "delta_bat_discharge": deltas["delta_bat_discharge"],
+        "delta_se_load": deltas["delta_se_load"],
+    }
+
+
+def _run_analysis_workflow_inner(
+    baseline_ts_str: str, baseline_text: str, batch_interval_hours: int = 4
+) -> Dict[str, Any]:
+    """Internal implementation of quantitative modeling and summary generation."""
+    analysis_data = calculate_analysis_metrics_and_prompts(
+        baseline_ts_str, baseline_text, batch_interval_hours
+    )
+    model_name: str = DEFAULT_MODEL
+    logging.info(f"Submitting query to Ollama model {model_name}...")
+    llm_response: str = query_local_ollama(analysis_data["formatted_prompt"], model_name)
     logging.info("Submitting query for DFT explanation to Ollama...")
-    dft_response: str = query_local_ollama(formatted_dft_prompt, model_name)
-    
+    dft_response: str = query_local_ollama(analysis_data["formatted_dft_prompt"], model_name)
     return {
         "response": llm_response,
         "dft_explanation": dft_response,
         "metrics": {
-            "temp_max": temp_max,
-            "cloud_cover": cloud_cover,
-            "solar_weather_modulation": solar_weather_modulation,
-            "z_score_peak": z_score_peak,
-            "battery_rte": battery_rte,
-            "solar_correlation": solar_corr,
-            "daylight_duration": daylight_duration,
-            "solar_24h_amp": solar_24h_amp,
-            "solar_24h_peak_hour": solar_24h_peak_hour,
-            "se_24h_peak_hour": se_24h_peak_hour,
-            "ch_24h_peak_hour": ch_24h_peak_hour,
-            "grid_bimodal_ratio": grid_bimodal_ratio,
-            "solar_slope": solar_slope,
-            "grid_slope": grid_slope,
-            "grid_24h_snr_db": snrs["grid_24h_snr_db"],
-            "grid_12h_snr_db": snrs["grid_12h_snr_db"],
-            "solar_24h_snr_db": snrs["solar_24h_snr_db"],
-            "consumption_24h_snr_db": snrs["consumption_24h_snr_db"],
-            "consumption_12h_snr_db": snrs["consumption_12h_snr_db"]
+            "temp_max": analysis_data["temp_max"],
+            "cloud_cover": analysis_data["cloud_cover"],
+            "solar_weather_modulation": analysis_data["solar_weather_modulation"],
+            "z_score_peak": analysis_data["z_score_peak"],
+            "battery_rte": analysis_data["battery_rte"],
+            "solar_correlation": analysis_data["solar_correlation"],
+            "daylight_duration": analysis_data["daylight_duration"],
+            "solar_24h_amp": analysis_data["solar_24h_amp"],
+            "solar_24h_peak_hour": analysis_data["solar_24h_peak_hour"],
+            "se_24h_peak_hour": analysis_data["se_24h_peak_hour"],
+            "ch_24h_peak_hour": analysis_data["ch_24h_peak_hour"],
+            "grid_bimodal_ratio": analysis_data["grid_bimodal_ratio"],
+            "solar_slope": analysis_data["solar_slope"],
+            "grid_slope": analysis_data["grid_slope"],
+            "grid_24h_snr_db": analysis_data["grid_24h_snr_db"],
+            "grid_12h_snr_db": analysis_data["grid_12h_snr_db"],
+            "solar_24h_snr_db": analysis_data["solar_24h_snr_db"],
+            "consumption_24h_snr_db": analysis_data["consumption_24h_snr_db"],
+            "consumption_12h_snr_db": analysis_data["consumption_12h_snr_db"]
         }
     }
+
+
+def query_local_ollama_stream(prompt: str, model: str) -> Generator[str, None, None]:
+    """Queries local Ollama generation API with streaming enabled.
+
+    Args:
+        prompt: Formatted user instructions to analyze microgrid telemetry.
+        model: Target model name loaded in local Ollama service.
+
+    Yields:
+        String token chunks as they arrive.
+    """
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "system": "You are a precise, low-overhead edge AI energy assistant.",
+        "stream": True,
+        "options": {
+            "num_predict": 2048,
+            "num_ctx": 8192,
+            "temperature": 0.1
+        }
+    }
+    data = json.dumps(payload).encode('utf-8')
+    req = urllib.request.Request(
+        OLLAMA_ENDPOINT,
+        data=data,
+        headers={'Content-Type': 'application/json'}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=300) as response:
+            for line in response:
+                if line:
+                    chunk = json.loads(line.decode('utf-8'))
+                    token = chunk.get("response", "")
+                    if token:
+                        yield token
+    except Exception as e:
+        logging.error(f"Ollama streaming API error: {e}")
+        raise
 
 
 # Global variables for background full-history DFT calculation caching
 cached_full_history_data: Dict[str, Any] = {}
 cached_data_lock = threading.Lock()
+
+
+def get_cached_spectrum() -> Dict[str, Any]:
+    """Thread-safe accessor for the precomputed full-history DFT spectrum.
+
+    This callback is invoked by the gRPC servicer to construct the initial
+    frame in the analysis stream. Returning the precomputed spectrum here
+    saves the Raspberry Pi Kiosk display node from performing heavy mathematical
+    DFT calculations on 89,000+ database records.
+
+    Returns:
+        A dictionary containing the precomputed spectrum coefficients: freqs,
+        grid_amp, solar_amp, expected_solar_amp, consumption_amp.
+    """
+    with cached_data_lock:
+        return cached_full_history_data
 
 
 def run_full_history_math() -> None:
@@ -1729,6 +1822,31 @@ def main() -> None:
     math_thread.start()
     logging.info("Started background full-history DFT math thread.")
     
+    # Start the local gRPC server wrapper side-by-side on port 50051.
+    # The HTTP server runs on port 5000 for backward compatibility, while the gRPC service
+    # runs on port 50051 to handle phase-aligned telemetry slices and streaming LLM summaries.
+    try:
+        from dashboard_modules.grpc_server import start_grpc_server
+        analysis_db_path = os.path.join(BACKUP_DIR, "analysis_history.db")
+        grpc_thread = threading.Thread(
+            target=start_grpc_server,
+            args=(
+                GRID_DB,
+                analysis_db_path,
+                calculate_analysis_metrics_and_prompts,
+                query_local_ollama_stream,
+                get_cached_spectrum
+            ),
+            kwargs={"port": 50051, "use_mtls": True},
+            daemon=True
+        )
+        grpc_thread.start()
+        logging.info("Started local gRPC server on port 50051 with mTLS enabled.")
+    except Exception as grpc_err:
+        # Log the failure but do not crash the daemon process. This ensures that HTTP
+        # services can still recover and execute if gRPC binding fails (e.g. port conflict).
+        logging.error(f"Failed to start gRPC server: {grpc_err}")
+
     with socketserver.TCPServer(("", port), handler) as httpd:
         logging.info(f"Jetson Edge HTTP Server started on port {port}. Model: {DEFAULT_MODEL}")
         try:
