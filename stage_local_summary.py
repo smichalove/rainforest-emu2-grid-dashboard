@@ -51,6 +51,9 @@ from dashboard_modules import db
 # Global thread synchronization lock to prevent concurrent CPU/GPU resource contention
 analysis_lock: threading.Lock = threading.Lock()
 
+# Global reference to hold the running gRPC server and prevent garbage collection
+grpc_server: Optional[Any] = None
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -1828,19 +1831,16 @@ def main() -> None:
     try:
         from dashboard_modules.grpc_server import start_grpc_server
         analysis_db_path = os.path.join(BACKUP_DIR, "analysis_history.db")
-        grpc_thread = threading.Thread(
-            target=start_grpc_server,
-            args=(
-                GRID_DB,
-                analysis_db_path,
-                calculate_analysis_metrics_and_prompts,
-                query_local_ollama_stream,
-                get_cached_spectrum
-            ),
-            kwargs={"port": 50051, "use_mtls": True},
-            daemon=True
+        global grpc_server
+        grpc_server = start_grpc_server(
+            GRID_DB,
+            analysis_db_path,
+            calculate_analysis_metrics_and_prompts,
+            query_local_ollama_stream,
+            get_cached_spectrum,
+            port=50051,
+            use_mtls=True
         )
-        grpc_thread.start()
         logging.info("Started local gRPC server on port 50051 with mTLS enabled.")
     except Exception as grpc_err:
         # Log the failure but do not crash the daemon process. This ensures that HTTP

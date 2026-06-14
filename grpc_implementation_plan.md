@@ -7,7 +7,7 @@ This document outlines the design and implementation plan for replacing the HTTP
 ## Current Execution Status & Checklist (Do-a-Thing, Write-a-Thing)
 
 - `[x]` **Task 1: Protobuf Contract Specification** -> Refactored [grid_telemetry.proto](file:///protos/grid_telemetry.proto) with Google Timestamp and structured spectral/LLM metrics. (Completed)
-- `[x]` **Task 2: Database Setup & Migration** -> Created [migrate_local_db.py](file:///migrate_local_db.py) to migrate legacy telemetry logs to SQLite `backups/grid_history.db` and initialize `backups/analysis_history.db`. (Completed)
+- `[x]` **Task 2: Database Setup & Migration** -> Created and executed [migrate_local_db.py](file:///migrate_local_db.py) to migrate legacy telemetry logs to SQLite `backups/grid_history.db` and initialize `backups/analysis_history.db`. Successfully deployed and executed on the Jetson Orin Nano edge server to initialize the schema and verify 115,798 telemetry records. (Completed)
 - `[x]` **Task 3: Security Directory Setup** -> Configured `Auth/certs` for credentials storage and added paths to `.gitignore`. (Completed)
 - `[x]` **Task 4: Cryptographic Key Generation** -> Created [generate_certs.py](file:///tests/emulation/generate_certs.py) and generated CA, server, and client certs. (Completed)
 - `[x]` **Task 5: Modular Client Architecture** -> Created client module [grpc_client.py](file:///dashboard_modules/grpc_client.py) to decouple gRPC client operations from UI code. (Completed)
@@ -334,22 +334,25 @@ To enforce zero-trust security between Tier 1 (Pi) and Tier 2 (Jetson) local net
 
 ---
 
-### Component B: Local Emulation Sandbox (`[NEW] tests/emulation/`)
+### Component B: Local Emulation Sandbox & Security Tooling (`[NEW] tests/emulation/`)
 A completely isolated local testing environment to validate the gRPC communication under real-world constraints.
 
 #### [NEW] [mock_database.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/tests/emulation/mock_database.py)
 Generates mock SQLite databases matching your PSE microgrid database schema to simulate live serial logging inputs.
 
 #### [NEW] [emulate_grpc_pipeline.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/tests/emulation/emulate_grpc_pipeline.py)
-Spins up the local stager gRPC service locally on port 50051. It runs the emulation sequence:
-1. Feeds mock data into the database.
-2. Simulates the Pi client making a gRPC query to the stager service.
-3. Asserts that binary serialization, math calculations (DFT), and streaming text chunks (forwarded from local Ollama) are returned successfully without syntax or logic errors.
+Spins up the local stager gRPC service locally on port 50051. It runs the emulation sequence of feeding mock data, querying via the gRPC client, and asserting correctness.
+
+#### [NEW] [generate_certs.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/tests/emulation/generate_certs.py)
+Generates CA, server, and client TLS/SSL certificates to enable secure mutual TLS (mTLS) authentication between the client and server.
+
+#### [NEW] [test_grpc_contract.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/tests/emulation/test_grpc_contract.py)
+Implements in-memory unit tests using `grpc_testing` to validate Protobuf message serialization and API contract constraints.
 
 ---
 
 ### Component C: Codebase Migration (`[MODIFY]`)
-*No source files in this section will be modified until the emulation phase is complete and approved.*
+Source files and modules migrated to decoupled gRPC client-server telemetry streaming:
 
 #### [MODIFY] [requirements.txt](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/requirements.txt)
 Pin gRPC requirements:
@@ -368,11 +371,20 @@ Pin gRPC requirements:
 > pip install grpcio==1.81.1 grpcio-tools==1.81.1
 > ```
 
+#### [NEW] [migrate_local_db.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/migrate_local_db.py)
+Initializes database tables and migrates legacy CSV grid telemetry records into SQLite `grid_history.db` and `analysis_history.db`.
+
+#### [NEW] [grpc_client.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard_modules/grpc_client.py)
+Implements the thread-safe gRPC client context manager to handle secure channels and parse response streams.
+
+#### [NEW] [grpc_server.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard_modules/grpc_server.py)
+Implements the gRPC service servicer to run parallel FFT/DFT analytics and stream local Gemma/Ollama response token chunks.
+
 #### [MODIFY] [stage_local_summary.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/stage_local_summary.py)
-Expose the gRPC `TelemetryStagerService` alongside (or replacing) the FastAPI endpoints.
+Exposes the gRPC `TelemetryStagerService` alongside the FastAPI endpoints.
 
 #### [MODIFY] [dashboard.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard.py)
-Update the local delta update loop to query the stager via gRPC instead of HTTP REST.
+Updates the local delta loop in Tkinter to call the secure gRPC client.
 
 ---
 
