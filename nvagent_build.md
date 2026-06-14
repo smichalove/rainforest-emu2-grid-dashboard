@@ -20,11 +20,11 @@ This file tracks the setup, configuration steps, and troubleshooting history for
 
 - `[ ]` **Task 1: Complete System Clone**
   - Current state: In progress (cloning `/dev/nvme0n1` to `/dev/sda` via `dd` on the active Jetson).
-  - Copy rate: ~46.2 MB/s. Estimated completion time: ~5.5 hours.
+  - Copy rate: ~42.8 MB/s. Progress: ~209 GB of 953.9 GB copied (approx. 4.5 hours remaining).
 - `[ ]` **Task 2: Physical Installation**
   - Shut down old Jetson, eject target SSD from USB enclosure, and mount it in the M.2 slot of the new Jetson.
-- `[ ]` **Task 3: First Boot and Hostname Configuration**
-  - Boot new Jetson, log in as `steven`, and rename host to `nvagent` using `hostnamectl` and `/etc/hosts` modifications.
+- `[ ]` **Task 3: Hostname Modification via Local Mount (Option B)**
+  - Once the clone completes, mount `/dev/sda1` on `/mnt` of the old Jetson and update `/etc/hostname` and `/etc/hosts` to `nvagent` before swapping the SSD.
 - `[ ]` **Task 4: Service De-confliction**
   - Disable the background stager systemd service (`jetson-grid-edge.service`) so port `50051` and database staging loops do not conflict on the network.
 - `[ ]` **Task 5: Verification & Connectivity**
