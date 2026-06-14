@@ -119,6 +119,14 @@ All Python code must strictly follow the Google Python Style Guide and readabili
   > When proposing a design change, optimization, or architectural decision (such as altering a polling interval or adding a background loop), you must explain your advice/proposals and wait for the user's explicit consent or approval *before* implementing or executing the changes.
   - Never modify files or run deployment commands based on a proposal you just introduced without first letting the user review and confirm they want to proceed with that approach.
 
+- **Present Multiple Options (High vs. Low Performance/Risk):**
+  > [!IMPORTANT]
+  > When proposing technical implementations, system configurations, coding designs, database queries/operations, or deployment paths, you must never unilaterally present a single solution, command, or implementation. You MUST present at least two options:
+  > 1. An **Optimized / High-Performance Option** (detailing performance benefits, prerequisites, setup/compilation speed, and algorithmic efficiency).
+  > 2. A **Simple / Low-Performance fallback Option** (detailing trade-offs, timelines, resource constraints, and ease of implementation).
+  - Explicitly call out estimated execution times, risk of data loss, system overhead, and network/hardware bottlenecks for each option so the user can make an informed decision.
+  - Use the choice between a slow live `dd` copy vs. a fast offline Mac clone as a standard baseline example of trade-offs in execution time and risk.
+
 ---
 
 ## 9. Log Inspection Guidelines
@@ -159,3 +167,13 @@ All Python code must strictly follow the Google Python Style Guide and readabili
   > 2. Presenting the detailed code differences to the user.
   > 3. Obtaining their explicit **"LGTM"** or **"Approve deployment"** confirmation.
   - This ensures that unreviewed, experimental, or unapproved code changes in the workspace are never accidentally pushed to production.
+
+---
+
+## 14. High-Risk & Destructive Operations Guardrails
+
+- **Mandatory Caution Warnings for Destructive Commands:**
+  > [!CAUTION]
+  > Before executing or proposing any command or script that performs destructive operations on disks, filesystems, or critical directories (such as `dd`, `mkfs`, `fdisk`, or recursive deletions), you MUST explicitly warn the user.
+  - The warning must use a prominent `> [!CAUTION]` block detailing the exact target device or folder path, the risk of permanent data loss, and a prompt for verification.
+  - Never execute or present a destructive command box without first providing this explicit warning.
