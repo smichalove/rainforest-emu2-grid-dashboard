@@ -15,10 +15,11 @@ This document outlines the design and implementation plan for replacing the HTTP
 - `[x]` **Task 7: Modular Server Architecture** -> Created server module [grpc_server.py](file:///dashboard_modules/grpc_server.py) to decouple gRPC server operations from API server code. (Completed)
 - `[x]` **Task 8: Protobuf Compilation** -> Compiled `.proto` into Python stub files using local `protoc` compiler. (Completed)
 - `[x]` **Task 9: Pipeline Emulation Testing** -> Ran loopback tests and full local edge pipeline emulation successfully. (Completed)
-- `[/]` **Task 10: Codebase Migration** -> Refactoring [stage_local_summary.py](file:///stage_local_summary.py) to extract math/prompts, starting the gRPC server wrapper, and updating [dashboard.py](file:///dashboard.py) update loop. (In progress)
+- `[x]` **Task 10: Codebase Migration** -> Refactoring [stage_local_summary.py](file:///stage_local_summary.py) to extract math/prompts, starting the gRPC server wrapper, and updating [dashboard.py](file:///dashboard.py) update loop. (Completed)
 - `[x]` **Task 11: Deployment automation** -> Refactored [redeploy.sh](file:///redeploy.sh) to automate local gRPC stub builds, certificate replication, and `.env` pathing. (Completed)
-- `[ ]` **Task 12: Visual & Drawing Validation** -> Execute `./plot_and_open.sh` and verify Matplotlib layout drawings locally prior to kiosk push. (Pending)
-- `[ ]` **Task 13: Final Code Review & LGTM** -> Present a detailed diff to the user for explicit deployment approval. (Pending)
+- `[x]` **Task 12: Visual & Drawing Validation** -> Execute `./plot_and_open.sh` and verify Matplotlib layout drawings locally prior to kiosk push. (Completed)
+- `[x]` **Task 13: Final Code Review & LGTM** -> Present a detailed diff to the user for explicit deployment approval. (Completed)
+
 
 ---
 
