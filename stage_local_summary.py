@@ -69,6 +69,7 @@ os.makedirs(BACKUP_DIR, exist_ok=True)
 
 # Local Telemetry CSV History Paths (read from SCP backup directory)
 GRID_DB: str = os.path.join(BACKUP_DIR, "grid_history.db")
+ANALYSIS_DB: str = os.path.join(BACKUP_DIR, "analysis_history.db")
 SE_HISTORY: str = os.path.join(BACKUP_DIR, "solaredge_history.csv")
 SE_BATTERY_HISTORY: str = os.path.join(BACKUP_DIR, "solaredge_battery_history.csv")
 SE_FLOW_HISTORY: str = os.path.join(BACKUP_DIR, "solaredge_flow_history.csv")
@@ -1247,7 +1248,20 @@ def run_analysis_workflow(
 def calculate_analysis_metrics_and_prompts(
     baseline_ts_str: str, baseline_text: str, batch_interval_hours: int = 4
 ) -> Dict[str, Any]:
-    """Internal implementation of quantitative modeling and prompt generation."""
+    """Internal implementation of quantitative modeling and prompt generation.
+
+    Args:
+        baseline_ts_str: The timestamp of the baseline (e.g. '2026-06-14 12:00:00').
+        baseline_text: The baseline summary text generated previously.
+        batch_interval_hours: The interval duration in hours for the delta window.
+
+    Returns:
+        A dictionary containing computed metrics, formatted prompt strings, weather
+        predictions, DFT spectral coefficients, and recent telemetry deltas.
+
+    Raises:
+        ValueError: If baseline_ts_str cannot be parsed as a valid datetime.
+    """
     baseline_dt = parse_timestamp(baseline_ts_str)
     if not baseline_dt:
         raise ValueError(f"Could not parse baseline timestamp: {baseline_ts_str}")
@@ -1586,13 +1600,29 @@ Explanation:
         "delta_bat_charge": deltas["delta_bat_charge"],
         "delta_bat_discharge": deltas["delta_bat_discharge"],
         "delta_se_load": deltas["delta_se_load"],
+        "se_load_min": flow_stats["load_min"],
+        "se_load_max": flow_stats["load_max"],
+        "se_load_avg": flow_stats["load_avg"],
     }
 
 
 def _run_analysis_workflow_inner(
     baseline_ts_str: str, baseline_text: str, batch_interval_hours: int = 4
 ) -> Dict[str, Any]:
-    """Internal implementation of quantitative modeling and summary generation."""
+    """Internal implementation of quantitative modeling and summary generation.
+
+    Args:
+        baseline_ts_str: The timestamp of the baseline (e.g. '2026-06-14 12:00:00').
+        baseline_text: The baseline summary text generated previously.
+        batch_interval_hours: The interval duration in hours for the delta window.
+
+    Returns:
+        A dictionary containing the generated text response, the generated DFT
+        explanation, and a dictionary of computed metrics.
+
+    Raises:
+        ValueError: If baseline_ts_str cannot be parsed as a valid datetime.
+    """
     analysis_data = calculate_analysis_metrics_and_prompts(
         baseline_ts_str, baseline_text, batch_interval_hours
     )
@@ -1601,6 +1631,56 @@ def _run_analysis_workflow_inner(
     llm_response: str = query_local_ollama(analysis_data["formatted_prompt"], model_name)
     logging.info("Submitting query for DFT explanation to Ollama...")
     dft_response: str = query_local_ollama(analysis_data["formatted_dft_prompt"], model_name)
+
+    # Construct and insert history record
+    record: Dict[str, Any] = {
+        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "baseline_timestamp": baseline_ts_str,
+        "baseline_text": baseline_text,
+        "summary_text": llm_response,
+        "dft_explanation": dft_response,
+        "delta_import": analysis_data["delta_import"],
+        "delta_export": analysis_data["delta_export"],
+        "delta_peak": analysis_data["delta_peak"],
+        "delta_solar": analysis_data["delta_solar"],
+        "delta_se_solar": analysis_data["delta_se_solar"],
+        "delta_ch_solar": analysis_data["delta_ch_solar"],
+        "delta_bat_charge": analysis_data["delta_bat_charge"],
+        "delta_bat_discharge": analysis_data["delta_bat_discharge"],
+        "delta_se_load": analysis_data["delta_se_load"],
+        "se_load_min": analysis_data["se_load_min"],
+        "se_load_max": analysis_data["se_load_max"],
+        "se_load_avg": analysis_data["se_load_avg"],
+        "expected_temp_max": analysis_data["temp_max"],
+        "expected_cloud_cover": analysis_data["cloud_cover"],
+        "spectral_metrics_json": json.dumps({
+            "solar_24h_amp": analysis_data["solar_24h_amp"],
+            "solar_24h_peak_hour": analysis_data["solar_24h_peak_hour"],
+            "se_24h_peak_hour": analysis_data["se_24h_peak_hour"],
+            "ch_24h_peak_hour": analysis_data["ch_24h_peak_hour"],
+            "grid_bimodal_ratio": analysis_data["grid_bimodal_ratio"],
+            "solar_slope": analysis_data["solar_slope"],
+            "grid_slope": analysis_data["grid_slope"],
+            "grid_24h_snr_db": analysis_data["grid_24h_snr_db"],
+            "grid_12h_snr_db": analysis_data["grid_12h_snr_db"],
+            "solar_24h_snr_db": analysis_data["solar_24h_snr_db"],
+            "consumption_24h_snr_db": analysis_data["consumption_24h_snr_db"],
+            "consumption_12h_snr_db": analysis_data["consumption_12h_snr_db"],
+            "z_score_peak": analysis_data["z_score_peak"],
+            "battery_rte": analysis_data["battery_rte"],
+            "solar_correlation": analysis_data["solar_correlation"],
+            "daylight_duration": analysis_data["daylight_duration"]
+        }),
+        "escalation_status": 0,
+        "escalation_timestamp": None
+    }
+    
+    success: bool = db.insert_analysis_history(ANALYSIS_DB, record)
+    if success:
+        logging.info("Successfully logged HTTP analysis history to SQLite.")
+    else:
+        logging.error("Failed to log HTTP analysis history to SQLite.")
+
     return {
         "response": llm_response,
         "dft_explanation": dft_response,

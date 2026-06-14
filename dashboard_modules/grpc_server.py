@@ -31,7 +31,7 @@ except ImportError:
     pb2 = None  # type: ignore
     pb2_grpc = None  # type: ignore
 
-from dashboard_modules.db import insert_reading
+from dashboard_modules.db import insert_reading, insert_analysis_history
 
 # Global configuration variables
 DEFAULT_SERVER_PORT: int = 50051
@@ -229,12 +229,16 @@ class GridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if pb2_grpc els
 
         # 4. Stream summary tokens from local Ollama Gemma
         model_name: str = os.environ.get("EDGE_MODEL", "gemma4-it-q4")
+        summary_text_accum = []
+        dft_explanation_accum = []
+
         if self.query_ollama_stream_fn:
             logging.info("Streaming time-domain analysis tokens...")
             try:
                 for token in self.query_ollama_stream_fn(
                     analysis_data["formatted_prompt"], model_name
                 ):
+                    summary_text_accum.append(token)
                     yield pb2.AnalysisStreamResponse(summary_token_chunk=token)
             except Exception as e:
                 logging.error(f"Error streaming time-domain summary: {e}")
@@ -244,6 +248,7 @@ class GridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if pb2_grpc els
                 for token in self.query_ollama_stream_fn(
                     analysis_data["formatted_dft_prompt"], model_name
                 ):
+                    dft_explanation_accum.append(token)
                     yield pb2.AnalysisStreamResponse(dft_token_chunk=token)
             except Exception as e:
                 logging.error(f"Error streaming DFT explanation: {e}")
@@ -259,7 +264,65 @@ class GridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if pb2_grpc els
             ]
             for token in mock_tokens:
                 time.sleep(0.1)
+                summary_text_accum.append(token)
                 yield pb2.AnalysisStreamResponse(summary_token_chunk=token)
+
+        # 5. Insert completed analysis record into the SQLite database
+        import json
+        summary_text: str = "".join(summary_text_accum)
+        dft_explanation: str = "".join(dft_explanation_accum)
+
+        record = {
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "baseline_timestamp": analysis_data.get("baseline_timestamp", baseline_ts_str),
+            "baseline_text": analysis_data.get("baseline_text", request.baseline_text),
+            "summary_text": summary_text,
+            "dft_explanation": dft_explanation,
+            "delta_import": analysis_data.get("delta_import", 0.0),
+            "delta_export": analysis_data.get("delta_export", 0.0),
+            "delta_peak": analysis_data.get("delta_peak", 0.0),
+            "delta_solar": analysis_data.get("delta_solar", 0.0),
+            "delta_se_solar": analysis_data.get("delta_se_solar", 0.0),
+            "delta_ch_solar": analysis_data.get("delta_ch_solar", 0.0),
+            "delta_bat_charge": analysis_data.get("delta_bat_charge", 0.0),
+            "delta_bat_discharge": analysis_data.get("delta_bat_discharge", 0.0),
+            "delta_se_load": analysis_data.get("delta_se_load", 0.0),
+            "se_load_min": analysis_data.get("se_load_min", 0.0),
+            "se_load_max": analysis_data.get("se_load_max", 0.0),
+            "se_load_avg": analysis_data.get("se_load_avg", 0.0),
+            "expected_temp_max": analysis_data.get("temp_max", 0.0),
+            "expected_cloud_cover": analysis_data.get("cloud_cover", 0.0),
+            "spectral_metrics_json": json.dumps({
+                "solar_24h_amp": analysis_data.get("solar_24h_amp", 0.0),
+                "solar_24h_peak_hour": analysis_data.get("solar_24h_peak_hour", 0.0),
+                "se_24h_peak_hour": analysis_data.get("se_24h_peak_hour", 0.0),
+                "ch_24h_peak_hour": analysis_data.get("ch_24h_peak_hour", 0.0),
+                "grid_bimodal_ratio": analysis_data.get("grid_bimodal_ratio", 0.0),
+                "solar_slope": analysis_data.get("solar_slope", 0.0),
+                "grid_slope": analysis_data.get("grid_slope", 0.0),
+                "grid_24h_snr_db": analysis_data.get("grid_24h_snr_db", 0.0),
+                "grid_12h_snr_db": analysis_data.get("grid_12h_snr_db", 0.0),
+                "solar_24h_snr_db": analysis_data.get("solar_24h_snr_db", 0.0),
+                "consumption_24h_snr_db": analysis_data.get("consumption_24h_snr_db", 0.0),
+                "consumption_12h_snr_db": analysis_data.get("consumption_12h_snr_db", 0.0),
+                "z_score_peak": analysis_data.get("z_score_peak", 0.0),
+                "battery_rte": analysis_data.get("battery_rte", 0.0),
+                "solar_correlation": analysis_data.get("solar_correlation", 0.0),
+                "daylight_duration": analysis_data.get("daylight_duration", 0.0)
+            }),
+            "escalation_status": 0,
+            "escalation_timestamp": None
+        }
+
+        if self.analysis_db_path:
+            try:
+                success = insert_analysis_history(self.analysis_db_path, record)
+                if success:
+                    logging.info(f"Successfully logged gRPC streaming analysis to SQLite database at {self.analysis_db_path}")
+                else:
+                    logging.error(f"Failed to log gRPC streaming analysis to SQLite database at {self.analysis_db_path}")
+            except Exception as db_err:
+                logging.error(f"Error logging gRPC streaming analysis to database: {db_err}")
 
 
 def start_grpc_server(
