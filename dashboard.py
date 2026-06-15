@@ -1462,7 +1462,7 @@ class GridDashboard(tk.Tk):
                     
                     # Save results to the persistent local JSON cache file to allow offline load recovery
                     # on subsequent application launches.
-                    if llm_response and len(llm_response) >= 80:
+                    if llm_response and len(llm_response) >= 15:
                         try:
                             cache_data = io.read_safe_json(self.summary_cache_file)
                             if not cache_data:
