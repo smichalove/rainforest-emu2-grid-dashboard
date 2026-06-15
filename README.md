@@ -118,10 +118,12 @@ flowchart TD
         GUI[dashboard.py / Tkinter GUI]
         Client[grpc_client.py]
     end
-    subgraph Jetson [Nvidia Jetson Orin]
+    subgraph Jetson1 [Jetson #1: nvjetson (Data & Math)]
         Server[grpc_server.py: port 50051]
-        Ollama[Ollama / Local LLM Engine]
         DB[(backups/grid_history.db)]
+    end
+    subgraph Jetson2 [Jetson #2: nvagent (GPU AI Server)]
+        Ollama[Ollama / Local LLM Engine]
     end
 
     GUI -->|1. Request telemetry update| Client
