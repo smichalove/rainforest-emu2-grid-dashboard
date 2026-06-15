@@ -1263,9 +1263,36 @@ def calculate_analysis_metrics_and_prompts(
         ValueError: If baseline_ts_str cannot be parsed as a valid datetime.
     """
     baseline_dt = parse_timestamp(baseline_ts_str)
+    
+    # Check if baseline is expired (>24 hours) or empty/placeholder
+    is_expired = False
     if not baseline_dt:
-        raise ValueError(f"Could not parse baseline timestamp: {baseline_ts_str}")
-        
+        is_expired = True
+    else:
+        age = (datetime.datetime.now() - baseline_dt).total_seconds()
+        if age > 86400:  # 24 hours in seconds
+            is_expired = True
+
+    is_placeholder = (
+        not baseline_text
+        or baseline_text.strip() == ""
+        or "Awaiting AI Analysis..." in baseline_text
+    )
+
+    if is_expired or is_placeholder:
+        logging.info("Baseline is expired or placeholder. Generating fresh baseline locally...")
+        new_baseline_dt = datetime.datetime.now()
+        try:
+            baseline_text = generate_local_baseline(new_baseline_dt)
+            baseline_dt = new_baseline_dt
+            baseline_ts_str = new_baseline_dt.strftime("%Y-%m-%d %H:%M:%S")
+            logging.info(f"Fresh baseline generated successfully. Timestamp: {baseline_ts_str}")
+        except Exception as e:
+            logging.error(f"Failed to generate local baseline: {e}")
+            if not baseline_dt:
+                baseline_dt = datetime.datetime.now()
+                baseline_ts_str = baseline_dt.strftime("%Y-%m-%d %H:%M:%S")
+
     # 1. Fetch weather forecast (with sunrise/sunset)
     temp_max, cloud_cover, sunrise, sunset = fetch_weather()
     
@@ -1603,6 +1630,8 @@ Explanation:
         "se_load_min": flow_stats["load_min"],
         "se_load_max": flow_stats["load_max"],
         "se_load_avg": flow_stats["load_avg"],
+        "baseline_text": baseline_text,
+        "baseline_timestamp": baseline_ts_str,
     }
 
 

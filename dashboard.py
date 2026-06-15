@@ -1359,6 +1359,7 @@ class GridDashboard(tk.Tk):
 
                 # 3. Request analysis context from Jetson edge server via secure gRPC
                 try:
+                    checked_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     # Convert the cache baseline timestamp string into a datetime object.
                     # Standardizing to datetime prevents string representation mismatches and
                     # provides timezone-agnostic parameters to the Protobuf serializer.
@@ -1386,7 +1387,6 @@ class GridDashboard(tk.Tk):
                     dft_explanation = ""
                     metrics = {}
                     spec_data = {}
-                    checked_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     
                     for chunk in stream:
                         # Process the initial statistical evaluation block. This contains computed
@@ -1462,7 +1462,7 @@ class GridDashboard(tk.Tk):
                     
                     # Save results to the persistent local JSON cache file to allow offline load recovery
                     # on subsequent application launches.
-                    if llm_response:
+                    if llm_response and len(llm_response) >= 80:
                         try:
                             cache_data = io.read_safe_json(self.summary_cache_file)
                             if not cache_data:
@@ -1484,9 +1484,14 @@ class GridDashboard(tk.Tk):
                         self.ui_queue.put(self.update_summary_display)
                         logging.info("Local Delta Loop: Successfully completed update cycle.")
                     else:
-                        logging.warning("Local Delta Loop: Received empty response from Jetson server.")
+                        msg = "empty response" if not llm_response else f"response too short ({len(llm_response)} chars)"
+                        logging.warning(f"Local Delta Loop: Received {msg} from Jetson server.")
+                        self.local_delta_text = f"[Live Local Delta (Jetson) | Checked: {checked_time}]: Stager error (Ollama Offline/OOM)"
+                        self.ui_queue.put(self.update_summary_display)
                 except Exception as grpc_err:
                     logging.error(f"Local Delta Loop: gRPC analysis query failed: {grpc_err}")
+                    self.local_delta_text = f"[Live Local Delta (Jetson) | Checked: {checked_time}]: Connection failed (Stager Offline)"
+                    self.ui_queue.put(self.update_summary_display)
             except Exception as loop_err:
                 logging.error(f"Local Delta Loop: Unexpected error: {loop_err}")
                 
