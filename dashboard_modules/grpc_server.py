@@ -287,11 +287,13 @@ class GridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if pb2_grpc els
 
             # Construct analysis_history database record
             peak_kw: float = max(r.grid_usage_kw for r in request.readings) if request.readings else 0.0
+            # Prepend a clear audit header so the kiosk dashboard displays when the agent ran
+            agent_header = f"[Edge Agent analyzed anomaly at {now_str}]:\n"
             record = {
                 "timestamp": now_str,
                 "baseline_timestamp": now_str,
                 "baseline_text": f"Anomaly Triggered: {anomaly_type}",
-                "summary_text": summary_text,
+                "summary_text": agent_header + summary_text,
                 "dft_explanation": dft_explanation,
                 "delta_import": 0.0,
                 "delta_export": 0.0,
