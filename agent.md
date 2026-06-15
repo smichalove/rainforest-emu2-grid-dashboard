@@ -102,6 +102,10 @@ All Python code must strictly follow the Google Python Style Guide and readabili
   > Never execute multiple modifying or deployment commands (such as copying files, installing packages, restarting processes, or running git operations) back-to-back in a single turn.
   - Break tasks into individual steps, check in with the user after key actions, and let them verify or provide feedback rather than forcing them to review and approve a large chain of commands all at once.
 
+- **Manual Public Updates Only:**
+  > [!IMPORTANT]
+  > Never run `build_staging.py` or `./build_public_staging.sh` to update the public repository. Wiping the public directory dynamically is dangerous and risks losing public-only custom configurations, certs, or templates (such as `example_auth/`). Instead, always copy changed files individually using manual `cp` commands to update the public repository.
+
 - **Version Control for Major Releases:**
   > [!IMPORTANT]
   > When delivering major feature updates or architectural shifts (such as V3), always create an annotated Git release tag (e.g., `git tag -a v3.0.0 -m "Release v3.0.0: ..."`), and push the tag to all remotes (`origin` and `backup`) to maintain clear historical records and prevent version confusion.
