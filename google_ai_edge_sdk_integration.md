@@ -30,7 +30,7 @@ Instead of using a cloud-based pipeline (e.g., uploading telemetry manifests to 
 To maintain a responsive visual experience, the workload is distributed across three physical nodes in your local network:
 1. **Raspberry Pi (`rainforestpi`):** The Kiosk Display and Data Collection node. It drives the Tkinter GUI (`dashboard.py`), queries the local stager, and caches summary text locally.
 2. **Jetson Orin #1 (`192.168.8.68`):** The Data Stager and processing server. It runs the HTTP stager service (`stage_local_summary.py`), executes DFT and signal math on synced database logs, and handles communication with the inference server.
-3. **Jetson Orin #2 (`192.168.8.82` - New Node):** The Dedicated Inference Server. It hosts the Google AI Edge SDK (MediaPipe) LLM/VLM engine, offloading all GPU processing and avoiding memory exhaustion on the stager.
+3. **Jetson Orin #2 (`192.168.8.45` - New Node):** The Dedicated Inference Server. It hosts the Google AI Edge SDK (MediaPipe) LLM/VLM engine, offloading all GPU processing and avoiding memory exhaustion on the stager.
 
 ```mermaid
 flowchart TD
@@ -245,7 +245,7 @@ if __name__ == "__main__":
 ---
 
 ## 6. Integrating with the Dashboard Stager
-Once the server is running on your network (e.g. at `http://192.168.8.82:8000`), the dashboard stager script can direct its requests to this endpoint instead of Ollama.
+Once the server is running on your network (e.g. at `http://192.168.8.45:8000`), the dashboard stager script can direct its requests to this endpoint instead of Ollama.
 
 Here is a snippet showing how `stage_local_summary.py` can be configured to interact with the server:
 
@@ -254,7 +254,7 @@ import requests
 import json
 import logging
 
-AI_EDGE_ENDPOINT = "http://192.168.8.82:8000/generate"
+AI_EDGE_ENDPOINT = "http://192.168.8.45:8000/generate"
 
 def query_ai_edge_sdk(prompt: str) -> str:
     """Submits the formatted telemetry prompt to the Google AI Edge SDK Server.

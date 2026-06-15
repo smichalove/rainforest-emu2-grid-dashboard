@@ -45,7 +45,7 @@ from dashboard_modules.grpc_server import start_grpc_server
 from dashboard_modules.grpc_client import GridTelemetryClient
 
 # Ensure OLLAMA_HOST environment variable targets nvagent for the test run
-os.environ["OLLAMA_HOST"] = os.environ.get("OLLAMA_HOST", "http://192.168.8.45:11434")
+os.environ["OLLAMA_HOST"] = os.environ.get("OLLAMA_HOST", "http://nvagent:11434")
 os.environ["EDGE_MODEL"] = "gemma4-it-q4:latest"
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -181,6 +181,7 @@ class TestEscalationFlow(unittest.TestCase):
             r["grid_usage_kw"] = 1.25  # Force stable normal load
             r["solaredge_battery_kw"] = 0.0  # Idle battery, no RTE calculation triggered
             r["solaredge_battery_soc"] = 80.0
+            r["solaredge_load_kw"] = 1.25  # Force stable normal house load
 
         packed = self._convert_readings(clean_readings)
         
@@ -264,6 +265,7 @@ class TestEscalationFlow(unittest.TestCase):
             else:
                 r["solaredge_battery_kw"] = 0.5   # Minimal discharge
             r["solaredge_battery_soc"] = 45.0
+            r["solaredge_load_kw"] = 1.25  # Force stable normal house load
 
         packed = self._convert_readings(anomalous_readings)
 
@@ -290,6 +292,43 @@ class TestEscalationFlow(unittest.TestCase):
 
             self.assertIsNotNone(row)
             print(f"Battery Analysis Summary: {row[1]}")
+        finally:
+            client.close()
+
+    def test_04_peak_house_load_flow(self) -> None:
+        """Pushes a high peak house load spike telemetry slice to trigger escalation."""
+        anomalous_readings = [dict(r) for r in self.fixture["readings"]]
+        # Inject peak house load spike
+        for r in anomalous_readings:
+            r["grid_usage_kw"] = 1.25  # Normal grid load
+        anomalous_readings[len(anomalous_readings) // 2]["solaredge_load_kw"] = 7.50
+
+        packed = self._convert_readings(anomalous_readings)
+
+        client = GridTelemetryClient(host="localhost", port=self.server_port, use_mtls=False)
+        client.connect()
+        try:
+            success, message = client.evaluate_slice(
+                slice_id="test_house_load_slice",
+                start_time=datetime.datetime.fromisoformat(self.fixture["start_timestamp"]),
+                end_time=datetime.datetime.fromisoformat(self.fixture["end_timestamp"]),
+                dft_period=1.0,
+                readings=packed,
+                spectral_metrics={"grid_bimodal_ratio": 0.5}
+            )
+            self.assertTrue(success)
+            self.assertIn("ANOMALY DETECTED: Peak House Load Spike", message)
+            self.assertIn("Escalated to Tier 3", message)
+
+            # Check database for escalation status
+            conn = sqlite3.connect(self.test_analysis_db)
+            cursor = conn.cursor()
+            cursor.execute("SELECT escalation_status, summary_text FROM analysis_history WHERE escalation_status = 1")
+            row = cursor.fetchone()
+            conn.close()
+
+            self.assertIsNotNone(row)
+            print(f"House Load Spike Summary: {row[1]}")
         finally:
             client.close()
 

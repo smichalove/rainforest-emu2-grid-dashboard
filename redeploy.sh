@@ -20,11 +20,11 @@ scp dashboard.py stage_batch_summary.py snr_analysis.py *prompt.txt README.md ru
 ssh steven@rainforestpi "chmod +x ~/rainforest-emu2-grid-dashboard/backup_to_jetson.sh"
 
 echo "=== Copying AI staging code, stubs, and .env to the Jetson Orin Nano ==="
-ssh steven@192.168.8.68 "mkdir -p ~/rainforest-emu2-grid-dashboard/protos"
-scp protos/grid_telemetry_pb2*.py steven@192.168.8.68:~/rainforest-emu2-grid-dashboard/protos/
-scp -r dashboard_modules stage_local_summary.py stage_batch_summary.py snr_analysis.py gemma_prompt.txt gemma_hybrid_prompt.txt gemma_dft_prompt.txt .env requirements.txt steven@192.168.8.68:~/rainforest-emu2-grid-dashboard/
+ssh steven@nvjetson "mkdir -p ~/rainforest-emu2-grid-dashboard/protos"
+scp protos/grid_telemetry_pb2*.py steven@nvjetson:~/rainforest-emu2-grid-dashboard/protos/
+scp -r dashboard_modules stage_local_summary.py stage_batch_summary.py snr_analysis.py gemma_prompt.txt gemma_hybrid_prompt.txt gemma_dft_prompt.txt .env requirements.txt steven@nvjetson:~/rainforest-emu2-grid-dashboard/
 
-ssh steven@192.168.8.68 "
+ssh steven@nvjetson "
   sudo cp -r ~/rainforest-emu2-grid-dashboard/dashboard_modules /home/grid_backup/ && \
   sudo cp -r ~/rainforest-emu2-grid-dashboard/protos /home/grid_backup/ && \
   sudo cp ~/rainforest-emu2-grid-dashboard/stage_local_summary.py /home/grid_backup/ && \

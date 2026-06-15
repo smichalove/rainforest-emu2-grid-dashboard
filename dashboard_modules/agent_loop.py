@@ -14,7 +14,8 @@ import urllib.request
 from typing import Any, Dict, List, Tuple, Union
 
 # Configuration
-OLLAMA_ENDPOINT: str = os.environ.get("OLLAMA_HOST", "http://nvagent:11434") + "/api/generate"
+_ollama_host_env: str = os.environ.get("OLLAMA_HOST", "http://nvagent:11434")
+OLLAMA_ENDPOINT: str = _ollama_host_env if _ollama_host_env.endswith("/api/generate") else _ollama_host_env.rstrip("/") + "/api/generate"
 DEFAULT_MODEL: str = "gemma4-it-q4:latest"
 
 SYSTEM_PROMPT: str = """You are a precise, edge-based AI microgrid analysis agent.
@@ -119,8 +120,13 @@ def run_agentic_sql_loop(
     db_path: str,
     anomaly_type: str,
     peak_kw: float,
+    peak_load: float,
     bimodal_ratio: float,
     rte: float,
+    grid_mean: float = 0.0,
+    grid_std: float = 1.0,
+    house_mean: float = 0.0,
+    house_std: float = 1.0,
     model: str = DEFAULT_MODEL,
     max_iterations: int = 3
 ) -> str:
@@ -130,8 +136,13 @@ def run_agentic_sql_loop(
         db_path: Path to the SQLite microgrid telemetry database.
         anomaly_type: Description of the detected anomaly.
         peak_kw: Peak demand in kilowatts during the anomalous window.
+        peak_load: Peak house load in kilowatts during the anomalous window.
         bimodal_ratio: Spectral bimodal ratio metric.
         rte: Battery round-trip efficiency percentage.
+        grid_mean: The historical average grid demand.
+        grid_std: The historical standard deviation of the grid demand (noise floor).
+        house_mean: The historical average house load.
+        house_std: The historical standard deviation of the house load.
         model: Model name to use in Ollama.
         max_iterations: Maximum number of tool query loop iterations.
 
@@ -142,8 +153,13 @@ def run_agentic_sql_loop(
         f"An anomaly has been detected on the microgrid:\n"
         f"- Anomaly Type: {anomaly_type}\n"
         f"- Peak Grid Demand: {peak_kw:.3f} kW\n"
+        f"- Peak House Load: {peak_load:.3f} kW\n"
         f"- Battery RTE: {rte:.1f}%\n"
-        f"- Grid Bimodal Ratio: {bimodal_ratio:.3f}\n\n"
+        f"- Grid Bimodal Ratio: {bimodal_ratio:.3f}\n"
+        f"- Historical Grid Mean: {grid_mean:.3f} kW\n"
+        f"- Historical Grid Std Dev (Noise Floor): {grid_std:.3f} kW\n"
+        f"- Historical House Load Mean: {house_mean:.3f} kW\n"
+        f"- Historical House Load Std Dev: {house_std:.3f} kW\n\n"
         f"Please run a database query using the query_db tool to inspect the historical context "
         f"surrounding this window (e.g. check the timestamps around the peak load or check SolarEdge "
         f"battery SoC levels), analyze the findings, and generate a final deep diagnostic summary."

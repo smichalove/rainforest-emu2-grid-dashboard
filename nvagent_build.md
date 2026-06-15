@@ -1,13 +1,13 @@
 # nvagent Build & Provisioning Log
 
-This file tracks the setup, configuration steps, and troubleshooting history for provisioning the new GPU Inference Node (`nvagent` / `192.168.8.82`). It also serves as a record of failures and course corrections.
+This file tracks the setup, configuration steps, and troubleshooting history for provisioning the new GPU Inference Node (`nvagent` / `192.168.8.45`). It also serves as a record of failures and course corrections.
 
 ---
 
 ## 1. Node Profile & Architecture Role
 
 *   **Hostname**: `nvagent`
-*   **Target IP**: `192.168.8.82` (DHCP reserved or static)
+*   **Target IP**: `192.168.8.45` (DHCP reserved or static)
 *   **Hardware**: Nvidia Jetson Orin Nano (8GB Unified Memory)
 *   **Storage**: 1TB PCIe M.2 NVMe SSD (cloned from `nvjetson`)
 *   **OS/Firmware**: JetPack 6.2 (L4T 36.4.3) - UEFI Bootloader `36.4.3-gcid-38968081`

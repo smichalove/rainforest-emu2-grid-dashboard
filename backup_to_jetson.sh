@@ -5,7 +5,7 @@
 set -u
 
 # Read environment variables if available, with fallbacks
-JETSON_HOST="${JETSON_HOST:-192.168.8.68}"
+JETSON_HOST="${JETSON_HOST:-nvjetson}"
 JETSON_USER="${JETSON_USER:-grid_backup}"
 if [ -z "${JETSON_BACKUP_PATH:-}" ]; then
     BACKUP_DIR="."

@@ -139,6 +139,42 @@ class GridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if pb2_grpc els
             logging.error(f"Error calculating grid stats on server: {e}")
             return 0.0, 1.0
 
+    def _calculate_house_load_stats(self) -> Tuple[float, float]:
+        """Calculates historical mean and standard deviation of house load using SQL.
+
+        Returns:
+            A tuple of (mean, standard_deviation) representing the historical
+            average house load and the load standard deviation (noise floor).
+        """
+        import sqlite3
+        import math
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT AVG(load_power_kw), COUNT(*) FROM solaredge_flow_history")
+            row = cursor.fetchone()
+            if not row or not row[1]:
+                conn.close()
+                return 0.0, 1.0
+            avg_load, count = float(row[0]), int(row[1])
+            if count <= 1:
+                conn.close()
+                return avg_load, 1.0
+            # Calculate variance using SQL to avoid pulling all records
+            cursor.execute("SELECT SUM((load_power_kw - ?) * (load_power_kw - ?)) FROM solaredge_flow_history", (avg_load, avg_load))
+            sum_sq_diff_row = cursor.fetchone()
+            conn.close()
+            
+            if sum_sq_diff_row and sum_sq_diff_row[0] is not None:
+                var_val = float(sum_sq_diff_row[0]) / (count - 1)
+                std_val = math.sqrt(var_val)
+            else:
+                std_val = 1.0
+            return avg_load, std_val
+        except Exception as e:
+            logging.error(f"Error calculating house load stats on server: {e}")
+            return 0.0, 1.0
+
     def _evaluate_anomalies(
         self, request: "pb2.TelemetrySlice"
     ) -> Tuple[bool, str, dict]:
@@ -146,6 +182,7 @@ class GridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if pb2_grpc els
 
         Rules:
         - Grid Peak Demand Anomaly: z_score_peak > 3.0.
+        - Peak House Load Spike Check: z_score_load > 3.0.
         - Battery Inefficiency: RTE < 65% during charge/discharge.
         - Spectral Rhythm Disruption: Bimodality ratio falling outside [0.3, 0.7].
 
@@ -168,6 +205,16 @@ class GridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if pb2_grpc els
 
         if z_score_peak > 3.0:
             return True, "Peak Demand Spike", {"peak_kw": peak_kw, "z_score_peak": z_score_peak}
+
+        # 1b. Peak House Load Spike Check
+        peak_load: float = max(r.solaredge_load_kw for r in readings) if readings else 0.0
+        load_mean, load_std = self._calculate_house_load_stats()
+        z_score_load: float = 0.0
+        if load_std > 0:
+            z_score_load = (peak_load - load_mean) / load_std
+
+        if z_score_load > 3.0:
+            return True, "Peak House Load Spike", {"peak_load": peak_load, "z_score_load": z_score_load}
 
         # 2. Battery Inefficiency Check
         delta_bat_charge: float = 0.0
@@ -251,17 +298,25 @@ class GridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if pb2_grpc els
             agent_diagnostic_summary = ""
             try:
                 from dashboard_modules.agent_loop import run_agentic_sql_loop
-                peak_kw_val = trigger_metrics.get("peak_kw", 0.0)
-                bimodal_val = trigger_metrics.get("grid_bimodal_ratio", 0.0)
+                peak_kw_val = max(r.grid_usage_kw for r in request.readings) if request.readings else 0.0
+                peak_load_val = max(r.solaredge_load_kw for r in request.readings) if request.readings else 0.0
+                bimodal_val = request.spectral_metrics.grid_bimodal_ratio if request.HasField("spectral_metrics") else 0.0
                 rte_val = trigger_metrics.get("battery_rte", 0.0)
+                grid_mean_val, grid_std_val = self._calculate_grid_stats()
+                house_mean_val, house_std_val = self._calculate_house_load_stats()
                 
                 logging.info("[Server] Launching local edge Agentic SQL tool execution loop...")
                 agent_diagnostic_summary = run_agentic_sql_loop(
                     db_path=self.db_path,
                     anomaly_type=anomaly_type,
                     peak_kw=peak_kw_val,
+                    peak_load=peak_load_val,
                     bimodal_ratio=bimodal_val,
                     rte=rte_val,
+                    grid_mean=grid_mean_val,
+                    grid_std=grid_std_val,
+                    house_mean=house_mean_val,
+                    house_std=house_std_val,
                     model=os.environ.get("EDGE_MODEL", "gemma4-it-q4:latest")
                 )
                 logging.info(f"[Server] Agentic SQL loop completed. Summary:\n{agent_diagnostic_summary}")

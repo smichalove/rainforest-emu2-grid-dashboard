@@ -141,7 +141,8 @@ All Python code must strictly follow the Google Python Style Guide and readabili
 
 ## 10. Network Topology & Hostnames
 
-- **Jetson Orin Nano (GPU AI Server)**: `steven@192.168.8.68` (or `nvjetson`)
+- **Jetson Orin Nano (Data & Math Node)**: `steven@nvjetson` (or `192.168.8.68`)
+- **Jetson Orin Nano (Dedicated GPU AI Server)**: `steven@nvagent` (or `192.168.8.45`)
 - **Raspberry Pi (Kiosk Display)**: `steven@rainforestpi` (or `192.168.8.70`)
 
 ## 11. Avoid hardcoding values

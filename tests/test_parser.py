@@ -462,6 +462,7 @@ def test_run_analysis_workflow(mock_weather, mock_corr, mock_tod, mock_grid, moc
         mock_urlopen.return_value.__enter__.return_value = mock_resp
         
         result = run_analysis_workflow("2026-05-30 10:00:00", "Baseline Summary Text")
+        print(f"DEBUG: result = {result}")
         assert result is not None
         assert "response" in result
         assert "System operating within baseline limits" in result["response"]

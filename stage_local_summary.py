@@ -946,6 +946,8 @@ def calculate_remaining_lines(baseline_text: str, max_allowed: int = 30) -> int:
     Raises:
         None
     """
+    if not baseline_text:
+        baseline_text = ""
     import textwrap
     wrapped_lines: int = 0
     for line in baseline_text.split('\n'):

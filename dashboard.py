@@ -1434,7 +1434,7 @@ class GridDashboard(tk.Tk):
                                     self.cached_full_history_spectrum = spec_data
                             
                             # Render initial state on GUI
-                            self.local_delta_text = f"[Live Local Delta (Jetson) | Checked: {checked_time}]: Ingesting..."
+                            self.local_delta_text = f"[Live Local Delta (Jetson) | agent ran at {checked_time}]: Ingesting..."
                             self.ui_queue.put(self.update_summary_display)
 
                         # Process streaming summary (time-domain analysis) tokens.
@@ -1443,7 +1443,7 @@ class GridDashboard(tk.Tk):
                         if chunk.summary_token_chunk:
                             token = chunk.summary_token_chunk
                             if not llm_response:
-                                self.local_delta_text = f"[Live Local Delta (Jetson) | Checked: {checked_time}]: "
+                                self.local_delta_text = f"[Live Local Delta (Jetson) | agent ran at {checked_time}]: "
                             llm_response += token
                             self.local_delta_text += token
                             self.ui_queue.put(self.update_summary_display)
@@ -1470,7 +1470,7 @@ class GridDashboard(tk.Tk):
                             if metrics:
                                 cache_data["metrics"] = metrics
                             cache_data["dft_explanation"] = dft_explanation
-                            delta_text = f"[Live Local Delta (Jetson) | Checked: {checked_time}]: {llm_response}"
+                            delta_text = f"[Live Local Delta (Jetson) | agent ran at {checked_time}]: {llm_response}"
                             cache_data["summary"] = f"{clean_baseline}\n{delta_text}"
                             cache_data["timestamp"] = ts_str
                             if spec_data:
@@ -1486,11 +1486,11 @@ class GridDashboard(tk.Tk):
                     else:
                         msg = "empty response" if not llm_response else f"response too short ({len(llm_response)} chars)"
                         logging.warning(f"Local Delta Loop: Received {msg} from Jetson server.")
-                        self.local_delta_text = f"[Live Local Delta (Jetson) | Checked: {checked_time}]: Stager error (Ollama Offline/OOM)"
+                        self.local_delta_text = f"[Live Local Delta (Jetson) | agent ran at {checked_time}]: Stager error (Ollama Offline/OOM)"
                         self.ui_queue.put(self.update_summary_display)
                 except Exception as grpc_err:
                     logging.error(f"Local Delta Loop: gRPC analysis query failed: {grpc_err}")
-                    self.local_delta_text = f"[Live Local Delta (Jetson) | Checked: {checked_time}]: Connection failed (Stager Offline)"
+                    self.local_delta_text = f"[Live Local Delta (Jetson) | agent ran at {checked_time}]: Connection failed (Stager Offline)"
                     self.ui_queue.put(self.update_summary_display)
             except Exception as loop_err:
                 logging.error(f"Local Delta Loop: Unexpected error: {loop_err}")

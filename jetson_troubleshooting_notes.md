@@ -16,7 +16,7 @@ This file documents the troubleshooting history and hardware state of the Nvidia
 ### 2. Edge AI & Telemetry Staging State (Resolved)
 - **mTLS gRPC Infrastructure**: Migrated telemetry streaming and delta LLM prompts to gRPC on port `50051`. Zero-trust client/server authentication is enforced via mutual TLS (mTLS) certificates signed by a custom Local CA.
 - **Relational Databases**: Created SQLite databases `backups/grid_history.db` and `analysis_history.db` (replacing flat CSV tracking) to handle high-frequency grid reads and lower-frequency SolarEdge/Chillicon API telemetry in real-time.
-- **Ollama Engine**: Quantized Gemma 4 (`gemma4-it-q4` at 5.1B parameters, 3.2GB GGUF) registered and cached in Ollama on Jetson #2 (`192.168.8.82`) for GPU-accelerated local inference.
+- **Ollama Engine**: Quantized Gemma 4 (`gemma4-it-q4` at 5.1B parameters, 3.2GB GGUF) registered and cached in Ollama on Jetson #2 (`192.168.8.45`) for GPU-accelerated local inference.
 - **Lightweight Kiosk Mode**: Configured Openbox lightweight X11 WM for the Pi kiosk to preserve memory (~1.2GB system RAM savings) for concurrent model workloads.
 - **DFT & Spectral Mathematics**: Telemetry parser upgraded with Discrete Fourier Transform (DFT) harmonic calculations (24h diurnal and 12h bimodal amplitude/phase checks) and 3h curve slope estimation.
 
