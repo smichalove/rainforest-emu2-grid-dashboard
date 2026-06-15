@@ -104,10 +104,116 @@ class GridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if pb2_grpc els
         # between the HTTP/gRPC server wrappers and the background stager daemon logic.
         self.get_cached_spectrum_fn: Optional[Callable] = get_cached_spectrum_fn
 
+    def _calculate_grid_stats(self) -> Tuple[float, float]:
+        """Calculates historical mean and standard deviation of grid demand using SQL.
+
+        Returns:
+            A tuple of (mean, standard_deviation).
+        """
+        import sqlite3
+        import math
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT AVG(kw), COUNT(*) FROM grid_history")
+            row = cursor.fetchone()
+            if not row or not row[1]:
+                conn.close()
+                return 0.0, 1.0
+            avg_kw, count = float(row[0]), int(row[1])
+            if count <= 1:
+                conn.close()
+                return avg_kw, 1.0
+            # Calculate variance using SQL to avoid pulling all records
+            cursor.execute("SELECT SUM((kw - ?) * (kw - ?)) FROM grid_history", (avg_kw, avg_kw))
+            sum_sq_diff_row = cursor.fetchone()
+            conn.close()
+            
+            if sum_sq_diff_row and sum_sq_diff_row[0] is not None:
+                var_val = float(sum_sq_diff_row[0]) / (count - 1)
+                std_val = math.sqrt(var_val)
+            else:
+                std_val = 1.0
+            return avg_kw, std_val
+        except Exception as e:
+            logging.error(f"Error calculating grid stats on server: {e}")
+            return 0.0, 1.0
+
+    def _evaluate_anomalies(
+        self, request: "pb2.TelemetrySlice"
+    ) -> Tuple[bool, str, dict]:
+        """Evaluates the incoming slice for anomalies using predefined threshold rules.
+
+        Rules:
+        - Grid Peak Demand Anomaly: z_score_peak > 3.0.
+        - Battery Inefficiency: RTE < 65% during charge/discharge.
+        - Spectral Rhythm Disruption: Bimodality ratio falling outside [0.3, 0.7].
+
+        Args:
+            request: The incoming TelemetrySlice.
+
+        Returns:
+            A tuple of (is_anomalous, anomaly_type_string, trigger_metrics_dict).
+        """
+        readings = request.readings
+        if not readings:
+            return False, "", {}
+
+        # 1. Peak Demand Spike Check
+        peak_kw: float = max(r.grid_usage_kw for r in readings)
+        grid_mean, grid_std = self._calculate_grid_stats()
+        z_score_peak: float = 0.0
+        if grid_std > 0:
+            z_score_peak = (peak_kw - grid_mean) / grid_std
+
+        if z_score_peak > 3.0:
+            return True, "Peak Demand Spike", {"peak_kw": peak_kw, "z_score_peak": z_score_peak}
+
+        # 2. Battery Inefficiency Check
+        delta_bat_charge: float = 0.0
+        delta_bat_discharge: float = 0.0
+        
+        # Calculate battery deltas from slice readings
+        for i in range(len(readings) - 1):
+            r_curr = readings[i]
+            r_next = readings[i+1]
+            t_curr = timestamp_to_datetime(r_curr.timestamp)
+            t_next = timestamp_to_datetime(r_next.timestamp)
+            dt_hours: float = (t_next - t_curr).total_seconds() / 3600.0
+            
+            # Avoid long gaps distorting metrics
+            if 0 < dt_hours <= 1.0:
+                p_val: float = r_curr.solaredge_battery_kw
+                if p_val > 0:
+                    delta_bat_discharge += p_val * dt_hours
+                elif p_val < 0:
+                    delta_bat_charge += abs(p_val) * dt_hours
+
+        # Calculate RTE if there was active charging
+        if delta_bat_charge > 0.05:  # Require minimum charge accumulation to avoid noise
+            battery_rte: float = (delta_bat_discharge / delta_bat_charge) * 100.0  # Percentage
+            if battery_rte < 65.0:
+                return True, "Battery Inefficiency", {
+                    "battery_rte": battery_rte,
+                    "delta_bat_charge": delta_bat_charge,
+                    "delta_bat_discharge": delta_bat_discharge,
+                }
+
+        # 3. Spectral Rhythm Disruption Check
+        if request.HasField("spectral_metrics"):
+            bimodal: float = request.spectral_metrics.grid_bimodal_ratio
+            if bimodal > 0 and (bimodal < 0.3 or bimodal > 0.7):
+                return True, "Spectral Rhythm Disruption", {"grid_bimodal_ratio": bimodal}
+
+        return False, "", {}
+
     def EvaluateTelemetrySlice(
         self, request: "pb2.TelemetrySlice", context: grpc.ServicerContext
     ) -> "pb2.TelemetryResponse":
         """Receives a phase-aligned batch of readings and inserts them into SQLite.
+
+        Also runs threshold anomaly detection checks. If anomalies are flagged,
+        records them in analysis_history.db and escalates to Tier 3 cloud support.
 
         Args:
             request: The incoming phase-aligned TelemetrySlice.
@@ -129,9 +235,98 @@ class GridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if pb2_grpc els
             if success:
                 inserted_count += 1
 
-        msg: str = f"Successfully inserted {inserted_count}/{len(request.readings)} records from slice {request.slice_id}."
-        logging.info(msg)
-        return pb2.TelemetryResponse(success=True, message=msg)
+        base_msg: str = f"Successfully inserted {inserted_count}/{len(request.readings)} records from slice {request.slice_id}."
+        logging.info(base_msg)
+
+        # Run anomaly detection rules
+        is_anomalous, anomaly_type, trigger_metrics = self._evaluate_anomalies(request)
+        if is_anomalous:
+            logging.warning(
+                f"[Server] MICROGRID ANOMALY DETECTED: {anomaly_type}. Initiating Tier 3 escalation..."
+            )
+            import json
+            now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Run the Agentic SQL Tool Loop to generate a detailed local diagnostic summary first!
+            agent_diagnostic_summary = ""
+            try:
+                from dashboard_modules.agent_loop import run_agentic_sql_loop
+                peak_kw_val = trigger_metrics.get("peak_kw", 0.0)
+                bimodal_val = trigger_metrics.get("grid_bimodal_ratio", 0.0)
+                rte_val = trigger_metrics.get("battery_rte", 0.0)
+                
+                logging.info("[Server] Launching local edge Agentic SQL tool execution loop...")
+                agent_diagnostic_summary = run_agentic_sql_loop(
+                    db_path=self.db_path,
+                    anomaly_type=anomaly_type,
+                    peak_kw=peak_kw_val,
+                    bimodal_ratio=bimodal_val,
+                    rte=rte_val,
+                    model=os.environ.get("EDGE_MODEL", "gemma4-it-q4:latest")
+                )
+                logging.info(f"[Server] Agentic SQL loop completed. Summary:\n{agent_diagnostic_summary}")
+            except Exception as loop_err:
+                logging.error(f"[Server] Agentic SQL loop encountered an error: {loop_err}")
+                agent_diagnostic_summary = f"Local Edge Agentic SQL Loop failed: {loop_err}"
+
+            # Invoke the Cloud Mock Responder
+            try:
+                from tests.emulation.mock_tier3_cloud import MockTier3CloudResponder
+                cloud_responder = MockTier3CloudResponder()
+                cloud_resp = cloud_responder.process_escalation(
+                    request.slice_id,
+                    anomaly_type,
+                    {**trigger_metrics, "agent_summary": agent_diagnostic_summary}
+                )
+                summary_text = agent_diagnostic_summary if agent_diagnostic_summary else cloud_resp.get("cloud_diagnostic_summary", "Cloud diagnosis failed.")
+                dft_explanation = cloud_resp.get("action_recommendation", "")
+            except Exception as e:
+                logging.error(f"Error invoking cloud mock responder: {e}")
+                summary_text = f"Failed to invoke cloud responder. Error: {e}"
+                dft_explanation = ""
+
+            # Construct analysis_history database record
+            peak_kw: float = max(r.grid_usage_kw for r in request.readings) if request.readings else 0.0
+            record = {
+                "timestamp": now_str,
+                "baseline_timestamp": now_str,
+                "baseline_text": f"Anomaly Triggered: {anomaly_type}",
+                "summary_text": summary_text,
+                "dft_explanation": dft_explanation,
+                "delta_import": 0.0,
+                "delta_export": 0.0,
+                "delta_peak": peak_kw,
+                "delta_solar": 0.0,
+                "delta_se_solar": 0.0,
+                "delta_ch_solar": 0.0,
+                "delta_bat_charge": trigger_metrics.get("delta_bat_charge", 0.0),
+                "delta_bat_discharge": trigger_metrics.get("delta_bat_discharge", 0.0),
+                "delta_se_load": 0.0,
+                "se_load_min": 0.0,
+                "se_load_max": 0.0,
+                "se_load_avg": 0.0,
+                "expected_temp_max": 0.0,
+                "expected_cloud_cover": 0.0,
+                "spectral_metrics_json": json.dumps(trigger_metrics),
+                "escalation_status": 1,
+                "escalation_timestamp": now_str,
+            }
+            
+            db_logged = False
+            if self.analysis_db_path:
+                try:
+                    db_logged = insert_analysis_history(self.analysis_db_path, record)
+                except Exception as db_err:
+                    logging.error(f"Error inserting escalation record to analysis db: {db_err}")
+
+            escalation_msg = (
+                f"{base_msg} ANOMALY DETECTED: {anomaly_type}. "
+                f"Escalated to Tier 3 cloud diagnostics. Logged to DB: {db_logged}."
+            )
+            logging.info(f"[Server] {escalation_msg}")
+            return pb2.TelemetryResponse(success=True, message=escalation_msg)
+
+        return pb2.TelemetryResponse(success=True, message=base_msg)
 
     def GetTelemetryAnalysisStream(
         self, request: "pb2.AnalysisRequest", context: grpc.ServicerContext
