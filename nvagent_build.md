@@ -18,16 +18,15 @@ This file tracks the setup, configuration steps, and troubleshooting history for
 
 ## 2. Provisioning Checklist
 
-- `[ ]` **Task 1: Complete System Clone**
-  - Current state: In progress (cloning `/dev/nvme0n1` to `/dev/sda` via `dd` on the active Jetson).
-  - Copy rate: ~42.8 MB/s. Progress: ~209 GB of 953.9 GB copied (approx. 4.5 hours remaining).
-- `[ ]` **Task 2: Physical Installation**
-  - Shut down old Jetson, eject target SSD from USB enclosure, and mount it in the M.2 slot of the new Jetson.
-- `[ ]` **Task 3: Hostname Modification via Local Mount (Option B)**
-  - Once the clone completes, mount `/dev/sda1` on `/mnt` of the old Jetson and update `/etc/hostname` and `/etc/hosts` to `nvagent` before swapping the SSD.
-- `[ ]` **Task 4: Service De-confliction**
-  - Disable the background stager systemd service (`jetson-grid-edge.service`) so port `50051` and database staging loops do not conflict on the network.
-- `[ ]` **Task 5: Verification & Connectivity**
+- [x] **Task 1: Complete System Clone**
+  - Completed: Cloned exactly 1,024,209,543,168 bytes (1.0 TB) block-by-block.
+- [x] **Task 2: Physical Installation**
+  - Completed: Cloned SSD installed in the M.2 slot of the new Jetson, booted, and network-connected.
+- [x] **Task 3: Hostname & SSH Configuration**
+  - Completed: Hostname set to `nvagent`. SSH host keys successfully regenerated locally on the device (`ssh-keygen -A`) to avoid duplicate key conflicts on the network.
+- [x] **Task 4: Service De-confliction**
+  - Completed: Stopped and disabled the background stager systemd service (`jetson-grid-edge.service`) to prevent network port and DB staging conflicts.
+- [ ] **Task 5: Verification & Connectivity**
   - Confirm the new `nvagent` node can receive gRPC prompts from `nvjetson` or `rainforestpi` and stream back Ollama tokens.
 
 ---
