@@ -106,19 +106,27 @@ class EmulatedGridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if pb2_
         yield pb2.AnalysisStreamResponse(initial_analysis=initial_analysis)
 
         # 2. Simulate streaming tokens from Ollama (buffered server-side)
-        tokens: List[str] = [
+        mock_tokens: List[str] = [
             "Grid imports ",
             "remained elevated ",
             "due to cloud cover ",
-            "modulating solar production. ",
+            "modulating solar production.\n",
+            "[DFT_START]",
             "Battery discharge ",
             "covered the peak load ",
             "successfully.",
         ]
 
-        for token in tokens:
+        has_switched: bool = False
+        for token in mock_tokens:
             time.sleep(0.2)  # Simulate small network/Ollama buffer delay
-            yield pb2.AnalysisStreamResponse(summary_token_chunk=token)
+            if token == "[DFT_START]":
+                has_switched = True
+                continue
+            if not has_switched:
+                yield pb2.AnalysisStreamResponse(summary_token_chunk=token)
+            else:
+                yield pb2.AnalysisStreamResponse(dft_token_chunk=token)
 
         logging.info("[Server] GetTelemetryAnalysisStream complete.")
 
@@ -211,7 +219,11 @@ def execute_client_queries(port: int) -> None:
                 )
             if resp.summary_token_chunk:
                 logging.info(
-                    f"[Client] [Stream {idx}] Received token chunk: '{resp.summary_token_chunk}'"
+                    f"[Client] [Stream {idx}] Received summary token chunk: '{resp.summary_token_chunk}'"
+                )
+            if resp.dft_token_chunk:
+                logging.info(
+                    f"[Client] [Stream {idx}] Received DFT token chunk: '{resp.dft_token_chunk}'"
                 )
 
 

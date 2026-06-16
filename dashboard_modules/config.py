@@ -38,7 +38,12 @@ CONSUMPTION_COLOR: str = 'white'     # White for household consumption / applian
 
 # Slide Rotation Interval Settings (in milliseconds)
 SLIDE_1_DURATION_MS: int = 90000       # 1.5 minutes
-SLIDE_2_DURATION_MS: int = 15000       # 15 seconds
+SLIDE_2_DURATION_MS: int = 90000       # 1.5 minutes (Zoom / Full History)
+SLIDE_3_DURATION_MS: int = 15000       # 15 seconds (DFT Spectrum)
+
+# Historical window settings
+HISTORY_HOURS: int = 336               # 14 days of telemetry
+
 
 
 def load_env_credentials() -> Tuple[Dict[str, Optional[str]], Dict[str, Optional[str]]]:

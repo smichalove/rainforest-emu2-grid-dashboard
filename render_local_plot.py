@@ -30,6 +30,11 @@ class OfflineViewer(tk.Tk):
     """Offline GUI window that emulates physical kiosk rendering using historical CSV files."""
 
     def __init__(self) -> None:
+        """Initializes the OfflineViewer window, loads telemetry data, and prepares subplots.
+
+        Raises:
+            Exception: Logs fallback errors internally if file parsing fails.
+        """
         super().__init__()
         self.title("Grid Monitor Preview")
         self.configure(bg='black')
@@ -56,16 +61,28 @@ class OfflineViewer(tk.Tk):
         self.chilicon_timestamps: List[datetime.datetime] = []
         self.chilicon_energy: List[float] = []
 
-        # File paths
-        self.history_file = os.path.join(SCRIPT_DIR, 'grid_history.db')
-        self.se_history_file = os.path.join(SCRIPT_DIR, 'solaredge_history.csv')
-        self.se_battery_history_file = os.path.join(SCRIPT_DIR, 'solaredge_battery_history.csv')
-        self.se_flow_history_file = os.path.join(SCRIPT_DIR, 'solaredge_flow_history.csv')
-        self.chilicon_history_file = os.path.join(SCRIPT_DIR, 'chilicon_history.csv')
-        self.summary_cache_file = os.path.join(SCRIPT_DIR, 'gemini_summary.json')
+        # File paths (default to backups folder if present, otherwise root directory)
+        backup_dir: str = os.path.join(SCRIPT_DIR, 'backups')
+        
+        db_path: str = os.path.join(backup_dir, 'grid_history.db')
+        self.history_file: str = db_path if os.path.exists(db_path) else os.path.join(SCRIPT_DIR, 'grid_history.db')
+        
+        se_path: str = os.path.join(backup_dir, 'solaredge_history.csv')
+        self.se_history_file: str = se_path if os.path.exists(se_path) else os.path.join(SCRIPT_DIR, 'solaredge_history.csv')
+        
+        se_bat_path: str = os.path.join(backup_dir, 'solaredge_battery_history.csv')
+        self.se_battery_history_file: str = se_bat_path if os.path.exists(se_bat_path) else os.path.join(SCRIPT_DIR, 'solaredge_battery_history.csv')
+        
+        se_flow_path: str = os.path.join(backup_dir, 'solaredge_flow_history.csv')
+        self.se_flow_history_file: str = se_flow_path if os.path.exists(se_flow_path) else os.path.join(SCRIPT_DIR, 'solaredge_flow_history.csv')
+        
+        ch_path: str = os.path.join(backup_dir, 'chilicon_history.csv')
+        self.chilicon_history_file: str = ch_path if os.path.exists(ch_path) else os.path.join(SCRIPT_DIR, 'chilicon_history.csv')
+        
+        self.summary_cache_file: str = os.path.join(SCRIPT_DIR, 'gemini_summary.json')
 
-        # Check command line for full history
-        self.cutoff_hours = 24
+        # Check command line for full history, defaulting to standard 14 days of telemetry
+        self.cutoff_hours: int = config.HISTORY_HOURS
         for arg in sys.argv:
             if arg.startswith("--history-hours="):
                 try:
@@ -77,6 +94,7 @@ class OfflineViewer(tk.Tk):
 
         # Load historical data
         self.load_history_files(self.cutoff_hours)
+
 
         # Small banner hardware logos banner
         self.logo_image_tk: Optional[ImageTk.PhotoImage] = None
@@ -212,6 +230,12 @@ class OfflineViewer(tk.Tk):
             self.logo_label = tk.Label(self, image=self.logo_image_tk, bg='black')
             self.logo_label.pack(side=tk.TOP, anchor='center', pady=(5, 5))
 
+        # Dynamic header subtitle indicating current slide time window
+        self.slide_title_label = tk.Label(
+            self, text="24-Hour Period", font=('Helvetica', 18, 'bold'), bg='black', fg='deepskyblue'
+        )
+        self.slide_title_label.pack(side=tk.TOP, anchor='center', pady=(2, 5))
+
         self.summary_label = tk.Label(
             self, text="Awaiting AI Analysis...", font=('Courier', 11, 'bold'),
             bg='black', fg=config.SUMMARY_COLOR, justify='left', anchor='nw', wraplength=980
@@ -303,8 +327,8 @@ class OfflineViewer(tk.Tk):
             self.update_summary_display()
 
     def update_summary_display(self) -> None:
-        """Refreshes subplot text watermarks."""
-        if self.current_slide == 1:
+        """Refreshes subplot text watermarks depending on slide."""
+        if self.current_slide in (1, 2):
             text = self.baseline_text
             if self.local_delta_text:
                 text += "\n" + self.local_delta_text
@@ -317,22 +341,40 @@ class OfflineViewer(tk.Tk):
             self.canvas.draw_idle()
 
     def rotate_slides(self) -> None:
-        """Slide transition scheduler loop."""
-        self.current_slide = 2 if self.current_slide == 1 else 1
+        """Slide transition scheduler loop across 3 slides in the user-specified order."""
+        if self.current_slide == 1:
+            self.current_slide = 2
+            delay: int = config.SLIDE_2_DURATION_MS
+        elif self.current_slide == 2:
+            self.current_slide = 3
+            delay = config.SLIDE_3_DURATION_MS
+        else:
+            self.current_slide = 1
+            delay = config.SLIDE_1_DURATION_MS
+            
         self.update_slide_visibility()
-        delay = config.SLIDE_2_DURATION_MS if self.current_slide == 2 else config.SLIDE_1_DURATION_MS
         self.after(delay, self.rotate_slides)
 
     def update_slide_visibility(self) -> None:
-        """Swaps visibility of axes elements."""
+        """Swaps visibility of axes elements and updates titles."""
         if self.current_slide == 1:
             self.ax.set_visible(True)
             self.ax_bar.set_visible(True)
             self.ax_freq.set_visible(False)
+            if hasattr(self, 'slide_title_label') and self.slide_title_label is not None:
+                self.slide_title_label.config(text="24-Hour Period", fg='deepskyblue')
+        elif self.current_slide == 2:
+            self.ax.set_visible(True)
+            self.ax_bar.set_visible(True)
+            self.ax_freq.set_visible(False)
+            if hasattr(self, 'slide_title_label') and self.slide_title_label is not None:
+                self.slide_title_label.config(text="Zoom - 14-Day History", fg='orange')
         else:
             self.ax.set_visible(False)
             self.ax_bar.set_visible(False)
             self.ax_freq.set_visible(True)
+            if hasattr(self, 'slide_title_label') and self.slide_title_label is not None:
+                self.slide_title_label.config(text="DFT Frequency Spectrum", fg='violet')
             
         self.update_summary_display()
         self.update_chart()
@@ -417,22 +459,22 @@ class OfflineViewer(tk.Tk):
 
     def update_chart(self) -> None:
         """Refreshes Matplotlib canvas plots."""
-        if self.current_slide == 1:
+        if self.current_slide in (1, 2):
             with self.data_lock:
-                usage_copy = list(self.usage)
-                timestamps_copy = list(self.timestamps)
-                se_timestamps_copy = list(self.se_timestamps)
-                se_power_copy = list(self.se_power)
-                chilicon_timestamps_copy = list(self.chilicon_timestamps)
-                chilicon_power_copy = list(self.chilicon_power)
-                se_load_power_timestamps_copy = list(self.se_load_power_timestamps)
-                se_load_power_copy = list(self.se_load_power)
+                usage_copy: List[float] = list(self.usage)
+                timestamps_copy: List[datetime.datetime] = list(self.timestamps)
+                se_timestamps_copy: List[datetime.datetime] = list(self.se_timestamps)
+                se_power_copy: List[float] = list(self.se_power)
+                chilicon_timestamps_copy: List[datetime.datetime] = list(self.chilicon_timestamps)
+                chilicon_power_copy: List[float] = list(self.chilicon_power)
+                se_load_power_timestamps_copy: List[datetime.datetime] = list(self.se_load_power_timestamps)
+                se_load_power_copy: List[float] = list(self.se_load_power)
 
             if len(usage_copy) > 1:
                 x_nums = mdates.date2num(timestamps_copy)
-                segments = []
-                colors = []
-                widths = []
+                segments: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
+                colors: List[str] = []
+                widths: List[float] = []
                 for i in range(len(usage_copy) - 1):
                     t1, t2 = timestamps_copy[i], timestamps_copy[i+1]
                     if (t2 - t1).total_seconds() > 600:
@@ -454,16 +496,20 @@ class OfflineViewer(tk.Tk):
                 self.load_line.set_data([], [])
 
             # Range limit ending at most recent reading
-            end_time = timestamps_copy[-1] if timestamps_copy else datetime.datetime.now()
-            start_time = end_time - datetime.timedelta(hours=24)
+            end_time: datetime.datetime = timestamps_copy[-1] if timestamps_copy else datetime.datetime.now()
+            if self.current_slide == 1:
+                start_time: datetime.datetime = end_time - datetime.timedelta(hours=24)
+            else:
+                start_time = end_time - datetime.timedelta(hours=config.HISTORY_HOURS)
             self.ax.set_xlim(start_time, end_time)
 
             if usage_copy:
-                y_min, y_max = min(usage_copy), max(usage_copy)
-                y_range = max(y_max - y_min, 1.0)
+                y_min: float = min(usage_copy)
+                y_max: float = max(usage_copy)
+                y_range: float = max(y_max - y_min, 1.0)
                 self.ax.set_ylim(min(0.0, y_min - 0.15 * y_range), max(0.0, y_max + 0.85 * y_range))
 
-            # Stacked bars
+            # Solar edge bar charts
             self.ax_bar.clear()
             self.ax_bar.tick_params(colors='#fbbf24')
             self.ax_bar.yaxis.set_label_position('right')
@@ -473,39 +519,48 @@ class OfflineViewer(tk.Tk):
             self.ax_bar.spines['bottom'].set_color('none')
             self.ax_bar.set_ylabel('Total Solar PV (kW)', color='#fbbf24', rotation=270, labelpad=15)
             
-            bar_times = []
-            se_heights = []
-            ch_heights = []
-            grid_start = start_time.replace(minute=(start_time.minute // 10) * 10, second=0, microsecond=0)
-            current_slot = grid_start
+            # Pre-group solar data to rounded slots for O(1) alignment checks
+            from collections import defaultdict
+            se_lookup: Dict[datetime.datetime, List[Tuple[datetime.datetime, float]]] = defaultdict(list)
+            for ts, p in zip(se_timestamps_copy, se_power_copy):
+                rounded_key = ts.replace(minute=(ts.minute // 10) * 10, second=0, microsecond=0)
+                se_lookup[rounded_key].append((ts, p))
+
+            ch_lookup: Dict[datetime.datetime, List[Tuple[datetime.datetime, float]]] = defaultdict(list)
+            for ts, p in zip(chilicon_timestamps_copy, chilicon_power_copy):
+                rounded_key = ts.replace(minute=(ts.minute // 10) * 10, second=0, microsecond=0)
+                ch_lookup[rounded_key].append((ts, p))
+
+            def get_closest_val(slot: datetime.datetime, lookup_dict: Dict[datetime.datetime, List[Tuple[datetime.datetime, float]]]) -> float:
+                best_val: float = 0.0
+                min_diff: datetime.timedelta = datetime.timedelta(minutes=15)
+                for offset_mins in (-10, 0, 10):
+                    key = slot + datetime.timedelta(minutes=offset_mins)
+                    if key in lookup_dict:
+                        for ts, p in lookup_dict[key]:
+                            diff = abs(ts - slot)
+                            if diff < min_diff:
+                                min_diff = diff
+                                best_val = p
+                return best_val
+
+            bar_times: List[datetime.datetime] = []
+            se_heights: List[float] = []
+            ch_heights: List[float] = []
+            
+            # Slide 1 uses 10-minute bars, Slide 2 aggregates to hourly slots to prevent GUI lag
+            step_mins: int = 10 if self.current_slide == 1 else 60
+            grid_start: datetime.datetime = start_time.replace(minute=(start_time.minute // step_mins) * step_mins, second=0, microsecond=0)
+            current_slot: datetime.datetime = grid_start
 
             while current_slot <= end_time:
                 bar_times.append(current_slot)
-                
-                # Find closest SolarEdge reading within ±15 minutes
-                se_val = 0.0
-                min_diff_se = datetime.timedelta(minutes=15)
-                for ts, p in zip(se_timestamps_copy, se_power_copy):
-                    diff = abs(ts - current_slot)
-                    if diff < min_diff_se:
-                        min_diff_se = diff
-                        se_val = p
-                se_heights.append(se_val)
-                
-                # Find closest Chillicon reading within ±15 minutes
-                ch_val = 0.0
-                if not self.chilicon_off:
-                    min_diff_ch = datetime.timedelta(minutes=15)
-                    for ts, p in zip(chilicon_timestamps_copy, chilicon_power_copy):
-                        diff = abs(ts - current_slot)
-                        if diff < min_diff_ch:
-                            min_diff_ch = diff
-                            ch_val = p
-                ch_heights.append(ch_val)
-                current_slot += datetime.timedelta(minutes=10)
+                se_heights.append(get_closest_val(current_slot, se_lookup))
+                ch_heights.append(get_closest_val(current_slot, ch_lookup))
+                current_slot += datetime.timedelta(minutes=step_mins)
 
             if bar_times:
-                width_in_days = 10.0 / (24.0 * 60.0)
+                width_in_days: float = float(step_mins) / (24.0 * 60.0)
                 self.ax_bar.bar(bar_times, se_heights, width=width_in_days, color='#fbbf24', alpha=0.1, zorder=1, edgecolor='none')
                 self.ax_bar.bar(bar_times, ch_heights, bottom=se_heights, width=width_in_days, color='#ffff00', alpha=0.15, zorder=1.5, edgecolor='none')
                 max_power = max([s + c for s, c in zip(se_heights, ch_heights)]) if bar_times else 1.0
@@ -515,7 +570,7 @@ class OfflineViewer(tk.Tk):
 
             self.canvas.draw()
 
-        elif self.current_slide == 2:
+        elif self.current_slide == 3:
             self.ax_freq.clear()
             self.ax_freq.set_facecolor('black')
             self.ax_freq.tick_params(colors='white')
@@ -685,6 +740,14 @@ class OfflineViewer(tk.Tk):
         self.update()
         time.sleep(0.5)
         ImageGrab.grab(bbox).convert('RGB').save(os.path.join(SCRIPT_DIR, f"dashboard_preview_slide2{suffix}.jpeg"), quality=95)
+
+        # Save Slide 3
+        self.current_slide = 3
+        self.update_slide_visibility()
+        self.update_idletasks()
+        self.update()
+        time.sleep(0.5)
+        ImageGrab.grab(bbox).convert('RGB').save(os.path.join(SCRIPT_DIR, f"dashboard_preview_slide3{suffix}.jpeg"), quality=95)
 
 
 if __name__ == "__main__":

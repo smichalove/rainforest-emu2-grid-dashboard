@@ -109,10 +109,10 @@ class MockGridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if GRPC_STU
         )
         yield pb2.AnalysisStreamResponse(initial_analysis=resp)
 
-        # 2. Yield mock summary tokens to simulate server-side Ollama buffering
+        # 2. Yield mock summary and DFT tokens to simulate server-side Ollama buffering
         yield pb2.AnalysisStreamResponse(summary_token_chunk="This is ")
         yield pb2.AnalysisStreamResponse(summary_token_chunk="a simulated ")
-        yield pb2.AnalysisStreamResponse(summary_token_chunk="streaming response.")
+        yield pb2.AnalysisStreamResponse(dft_token_chunk="streaming response.")
 
 
 @unittest.skipIf(not GRPC_STUBS_AVAILABLE, "Generated gRPC Python stubs are not compiled yet")
@@ -211,7 +211,8 @@ class TestGridTelemetryContract(unittest.TestCase):
 
             # Assert subsequent messages are token strings
             self.assertEqual(stream_list[1].summary_token_chunk, "This is ")
-            self.assertEqual(stream_list[3].summary_token_chunk, "streaming response.")
+            self.assertEqual(stream_list[2].summary_token_chunk, "a simulated ")
+            self.assertEqual(stream_list[3].dft_token_chunk, "streaming response.")
 
             channel.close()
         finally:

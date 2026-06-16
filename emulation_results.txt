@@ -3,26 +3,23 @@
 Test Date: 2026-05-28
 
 --- Pre-Calculated Stats (Python) ---
-Total Net Imported:  6.656 kWh
+Total Net Imported:  15.681 kWh
 Total Net Exported:  33.882 kWh
 SolarEdge Generated: 19.009 kWh
-Peak Net Grid Demand: 1.866 kW
+Peak Net Grid Demand: 4.740 kW
 Peak SolarEdge PV:   2.710 kW
 Inferred Chillicon:  10.156 kWh
-Net Energy Credit:   $7.46
-Home Consumption:    19.839 kWh
+Net Energy Credit:   $5.74
+Home Consumption:    27.894 kWh
 
 --- Gemma 2B Output summary ---
-Here are the key statistics from today's telemetry logs:
-
-Total Net Imported: 6.656 kWh
+Key Statistics:
+Total Net Imported: 15.681 kWh
 Total Net Exported: 33.882 kWh
 SolarEdge Generated: 19.009 kWh
-Net Energy Credit: $7.46 
-Peak Net Grid Demand: 1.866 kW
+Net Energy Credit: $5.74
+Peak Net Grid Demand: 4.740 kW
 Peak SolarEdge PV: 2.710 kW
 Inferred Chillicon Contribution: 10.156 kWh
 
-Overall, the energy system today demonstrates a strong performance with significant solar generation from SolarEdge. The contribution from the Chillicon is also notable.  We experienced Flex events which resulted in battery discharges, indicating an active use of stored power.  The net Energy Credit of $7.46 reflects the overall cost/credit balance for the day. This analysis provides a snapshot of the home's energy consumption and generation dynamics on May 28th, 2026.
-
-Data analyzed for 2026-05-28.
+The solar system performed well today, generating more power than consumed, with SolarEdge delivering 19.009 kWh of electricity.  A Flex event saw battery discharge to support the grid, indicating a possible energy storage strategy is in place. Chillicon's contribution was significant at 10.156 kWh. The net billing credit amount of $5.74 reflects the energy efficiency of our usage and power generation. Our peak demand during the day reached 4.740 kW, with SolarEdge producing up to 2.710 kW of power.  A total of 27.894 kWh was consumed throughout the day. Data analyzed for 2026-05-28.

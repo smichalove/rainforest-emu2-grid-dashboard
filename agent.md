@@ -62,6 +62,11 @@ All Python code must strictly follow the Google Python Style Guide and readabili
   - The application must load and refresh the prompt template from the file on disk dynamically at runtime (e.g., right before invoking the model).
   - This allows developers or operators to tweak system instructions and prompt context in real-time without restarting or modifying the core dashboard source code.
 
+- **Show Prompt Returns:**
+  > [!IMPORTANT]
+  > Whenever the agent or application runs a prompt (either through emulation, test scripts, or local executions), the agent must explicitly print and show the raw prompt return/response text to the user.
+  - This ensures full human-in-the-loop auditability and visibility of LLM behavior, allowing real-time assessment of output quality.
+
 ---
 
 ## 4. Command Execution Guidelines

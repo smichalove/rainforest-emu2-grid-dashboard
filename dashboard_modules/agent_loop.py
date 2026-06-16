@@ -87,10 +87,22 @@ def query_ollama(prompt: str, model: str = DEFAULT_MODEL) -> str:
     Raises:
         IOError: If communication with Ollama fails.
     """
+    system_prompt = SYSTEM_PROMPT
+    prompt_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "gemma_agent_prompt.txt"
+    )
+    if os.path.exists(prompt_path):
+        try:
+            with open(prompt_path, "r", encoding="utf-8") as pf:
+                system_prompt = pf.read()
+        except Exception as pe:
+            logging.error(f"Error reading gemma_agent_prompt.txt: {pe}")
+
     payload: Dict[str, Any] = {
         "model": model,
         "prompt": prompt,
-        "system": SYSTEM_PROMPT,
+        "system": system_prompt,
         "stream": False,
         "options": {
             "temperature": 0.1,

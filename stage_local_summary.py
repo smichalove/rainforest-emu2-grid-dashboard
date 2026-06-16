@@ -1448,18 +1448,18 @@ def calculate_analysis_metrics_and_prompts(
     # Calculate available line budget for local edge model
     remaining_lines: int = calculate_remaining_lines(baseline_text)
         
-    # 8. Load and format prompt template
+    # 8. Load and format summary prompt template
     prompt_template = None
-    prompt_path = os.path.join(SCRIPT_DIR, "gemma_hybrid_prompt.txt")
+    prompt_path = os.path.join(SCRIPT_DIR, "gemma_summary_prompt.txt")
     if os.path.exists(prompt_path):
         try:
             with open(prompt_path, 'r', encoding='utf-8') as f:
                 prompt_template = f.read()
         except Exception as e:
-            logging.error(f"Failed to read prompt template: {e}")
+            logging.error(f"Failed to read summary prompt template: {e}")
             
     if not prompt_template:
-        # Fallback template matching the schema of gemma_hybrid_prompt.txt
+        # Fallback template matching the schema of gemma_summary_prompt.txt
         prompt_template = """Baseline Summary (Generated at {baseline_time}):
 {baseline_text}
 
@@ -1468,42 +1468,51 @@ Live Telemetry since baseline ({baseline_time} to {current_time}):
 - Net Grid Import: {delta_import:.2f} kWh
 - Net Grid Export: {delta_export:.2f} kWh
 - Peak Grid Demand: {delta_peak:.2f} kW
-- Solar PV Generation: {delta_solar:.2f} kWh
+- Solar PV Generation (Combined): {delta_solar:.2f} kWh
+- SolarEdge PV Generation (NW Array): {delta_se_solar:.2f} kWh
+- Chillicon PV Generation (SW Array): {delta_ch_solar:.2f} kWh
 - Battery Energy Charged: {delta_bat_charge:.2f} kWh
 - Battery Energy Discharged: {delta_bat_discharge:.2f} kWh
 - SolarEdge Appliance Load (Approx) Energy: {delta_se_load:.2f} kWh
 - SolarEdge Appliance Load (Approx) Power: Min {se_load_min:.2f} kW | Max {se_load_max:.2f} kW | Avg {se_load_avg:.2f} kW
 
-=== ENVIRONMENTAL & SEASONAL PREDICTORS ===
-- Current Month: {month_name}
-- Day Type: {day_type}
-- Daylight Duration: {daylight_duration:.1f} hours
-- Expected Max Temperature: {expected_temp_max:.1f}°C
-- Expected Cloud Cover: {expected_cloud_cover:.0f}%
+Output:
+"""
 
-=== FREQUENCY DOMAIN (DFT) METRICS ===
+    # 9. Load and format DFT prompt template
+    dft_prompt_template = None
+    dft_prompt_path = os.path.join(SCRIPT_DIR, "gemma_dft_prompt.txt")
+    if os.path.exists(dft_prompt_path):
+        try:
+            with open(dft_prompt_path, 'r', encoding='utf-8') as f:
+                dft_prompt_template = f.read()
+        except Exception as e:
+            logging.error(f"Failed to read DFT prompt template: {e}")
+            
+    if not dft_prompt_template:
+        dft_prompt_template = """=== SUNSET/SUNRISE INFO ===
+- Sunrise: {sunrise_time}
+- Sunset: {sunset_time}
+
+=== DFT METRICS ===
 - Solar Diurnal (24h) Amplitude: {solar_24h_amp:.2f} kW
 - Solar Diurnal Peak Hour: {solar_24h_peak_hour}
+- Solar Weather Modulation Factor: {solar_weather_modulation:.2f}
 - Grid Diurnal (24h) Amplitude: {grid_24h_amp:.2f} kW
 - Grid Semi-Diurnal (12h) Amplitude: {grid_12h_amp:.2f} kW
 - Grid Bimodal peak hour (12h): {grid_12h_peak_hour}
-- Grid Bimodal Ratio (12h/24h): {grid_bimodal_ratio:.2f}
+- Grid Bimodality Ratio (12h/24h): {grid_bimodal_ratio:.2f}
 
 === RHYTHM SNR (SIGNAL-TO-NOISE RATIO) METRICS ===
 - Grid Diurnal (24h) SNR: {grid_24h_snr_db:.1f} dB
 - Grid Semi-Diurnal (12h) SNR: {grid_12h_snr_db:.1f} dB
 - Solar Diurnal (24h) SNR: {solar_24h_snr_db:.1f} dB
-- Household Consumption Diurnal (24h) SNR: {consumption_24h_snr_db:.1f} dB
-- Household Consumption Semi-Diurnal (12h) SNR: {consumption_12h_snr_db:.1f} dB
 
-=== TIME-DOMAIN SLOPE (RATE OF CHANGE) METRICS ===
-- Recent Solar Power Slope (dS/dt): {solar_slope:.2f} kW/hr
-- Recent Net Grid Demand Slope (dG/dt): {grid_slope:.2f} kW/hr
+=== SHADING & CORRELATION ===
+- Solar Edge/Chillicon Phase Separation: {phase_diff:.1f} hours
+- Solar Edge & Chillicon Correlation: {solar_corr:.2f}
 
-=== OUTPUT SPACE CONSTRAINT ===
-Your output MUST fit within exactly {remaining_lines} lines of text (with 100 characters max per line). Ensure the entire response is under {remaining_lines} lines.
-
-Output:
+Explanation:
 """
 
     now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1512,6 +1521,9 @@ Output:
     weather_temp = temp_max if temp_max is not None else 0.0
     weather_clouds = cloud_cover if cloud_cover is not None else 0.0
     solar_weather_modulation = (100.0 - weather_clouds) / 100.0
+    
+    phase_diff: float = (se_24h_peak_hour - ch_24h_peak_hour) % 24
+    day_date: str = datetime.datetime.now().strftime("%Y-%m-%d")
     
     formatted_prompt = prompt_template.format(
         baseline_time=baseline_ts_str,
@@ -1537,51 +1549,16 @@ Output:
         sunrise_time=sunrise_time,
         sunset_time=sunset_time,
         daylight_duration=daylight_duration,
-        solar_24h_amp=solar_24h_amp,
-        solar_24h_peak_hour=format_decimal_hour(solar_24h_peak_hour),
-        se_24h_peak_hour=format_decimal_hour(se_24h_peak_hour),
-        ch_24h_peak_hour=format_decimal_hour(ch_24h_peak_hour),
-        grid_24h_amp=grid_24h_amp,
-        grid_12h_amp=grid_12h_amp,
-        grid_12h_peak_hour=format_decimal_hour(grid_12h_peak_hour),
-        grid_bimodal_ratio=grid_bimodal_ratio,
         solar_slope=solar_slope,
         grid_slope=grid_slope,
-        grid_24h_snr_db=snrs["grid_24h_snr_db"],
-        grid_12h_snr_db=snrs["grid_12h_snr_db"],
-        solar_24h_snr_db=snrs["solar_24h_snr_db"],
-        consumption_24h_snr_db=snrs["consumption_24h_snr_db"],
-        consumption_12h_snr_db=snrs["consumption_12h_snr_db"],
         warning_context=f"\nStatistical Anomaly Warnings (Keep these in mind for your analysis):\n{warning_context}" if warning_context else "",
-        batch_interval_hours=batch_interval_hours,
-        remaining_lines=remaining_lines
+        remaining_lines=remaining_lines,
+        day_date=day_date
     )
-    # 10. Load and format DFT prompt template
-    dft_prompt_template: Optional[str] = None
-    dft_prompt_path: str = os.path.join(SCRIPT_DIR, "gemma_dft_prompt.txt")
-    if os.path.exists(dft_prompt_path):
-        try:
-            with open(dft_prompt_path, 'r', encoding='utf-8') as f:
-                dft_prompt_template = f.read()
-        except Exception as e:
-            logging.error(f"Failed to read DFT prompt template: {e}")
-    if not dft_prompt_template:
-        dft_prompt_template = """You are a precise edge AI energy analyst. Write a 2-sentence explanation of these frequency metrics.
-- Solar Diurnal (24h) Amplitude: {solar_24h_amp:.2f} kW
-- Solar Diurnal Peak Hour: {solar_24h_peak_hour}
-- Solar Weather Modulation Factor: {solar_weather_modulation:.2f}
-- Grid Bimodality Ratio (12h/24h): {grid_bimodal_ratio:.2f}
-- Solar Edge & Chillicon Correlation: {solar_corr:.2f}
-- Phase Separation: {phase_diff:.1f} hours
-- Grid Diurnal (24h) SNR: {grid_24h_snr_db:.1f} dB
-- Grid Semi-Diurnal (12h) SNR: {grid_12h_snr_db:.1f} dB
-- Solar Diurnal (24h) SNR: {solar_24h_snr_db:.1f} dB
-
-Explanation:
-"""
-
-    phase_diff: float = (se_24h_peak_hour - ch_24h_peak_hour) % 24
-    formatted_dft_prompt: str = dft_prompt_template.format(
+    
+    formatted_dft_prompt = dft_prompt_template.format(
+        sunrise_time=sunrise_time,
+        sunset_time=sunset_time,
         solar_24h_amp=solar_24h_amp,
         solar_24h_peak_hour=format_decimal_hour(solar_24h_peak_hour),
         solar_weather_modulation=solar_weather_modulation,
@@ -1589,13 +1566,11 @@ Explanation:
         grid_12h_amp=grid_12h_amp,
         grid_12h_peak_hour=format_decimal_hour(grid_12h_peak_hour),
         grid_bimodal_ratio=grid_bimodal_ratio,
-        phase_diff=phase_diff,
-        solar_corr=solar_corr,
-        sunrise_time=sunrise_time,
-        sunset_time=sunset_time,
         grid_24h_snr_db=snrs["grid_24h_snr_db"],
         grid_12h_snr_db=snrs["grid_12h_snr_db"],
-        solar_24h_snr_db=snrs["solar_24h_snr_db"]
+        solar_24h_snr_db=snrs["solar_24h_snr_db"],
+        phase_diff=phase_diff,
+        solar_corr=solar_corr
     )
     
     return {
@@ -1658,9 +1633,10 @@ def _run_analysis_workflow_inner(
         baseline_ts_str, baseline_text, batch_interval_hours
     )
     model_name: str = DEFAULT_MODEL
-    logging.info(f"Submitting query to Ollama model {model_name}...")
+    logging.info(f"Submitting Slide 1 summary query to Ollama model {model_name}...")
     llm_response: str = query_local_ollama(analysis_data["formatted_prompt"], model_name)
-    logging.info("Submitting query for DFT explanation to Ollama...")
+    
+    logging.info(f"Submitting Slide 3 DFT explanation query to Ollama model {model_name}...")
     dft_response: str = query_local_ollama(analysis_data["formatted_dft_prompt"], model_name)
 
     # Construct and insert history record

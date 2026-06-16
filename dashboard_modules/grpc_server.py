@@ -12,6 +12,7 @@ import datetime
 import logging
 import os
 import sys
+import time
 from typing import Callable, Generator, List, Optional, Tuple
 
 # Inject repository paths to allow protobuf imports to resolve correctly
@@ -479,13 +480,13 @@ class GridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if pb2_grpc els
         )
         yield pb2.AnalysisStreamResponse(initial_analysis=initial_analysis)
 
-        # 4. Stream summary tokens from local Ollama Gemma
+        # 4. Stream Slide 1 summary followed by Slide 3 DFT explanation
         model_name: str = os.environ.get("EDGE_MODEL", "gemma4-it-q4")
         summary_text_accum = []
         dft_explanation_accum = []
 
         if self.query_ollama_stream_fn:
-            logging.info("Streaming time-domain analysis tokens...")
+            logging.info("Streaming Slide 1 summary tokens...")
             try:
                 for token in self.query_ollama_stream_fn(
                     analysis_data["formatted_prompt"], model_name
@@ -493,9 +494,9 @@ class GridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if pb2_grpc els
                     summary_text_accum.append(token)
                     yield pb2.AnalysisStreamResponse(summary_token_chunk=token)
             except Exception as e:
-                logging.error(f"Error streaming time-domain summary: {e}")
+                logging.error(f"Error streaming Slide 1 summary: {e}")
 
-            logging.info("Streaming frequency-domain analysis tokens...")
+            logging.info("Streaming Slide 3 DFT explanation tokens...")
             try:
                 for token in self.query_ollama_stream_fn(
                     analysis_data["formatted_dft_prompt"], model_name
@@ -503,21 +504,23 @@ class GridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if pb2_grpc els
                     dft_explanation_accum.append(token)
                     yield pb2.AnalysisStreamResponse(dft_token_chunk=token)
             except Exception as e:
-                logging.error(f"Error streaming DFT explanation: {e}")
+                logging.error(f"Error streaming Slide 3 DFT explanation: {e}")
         else:
-            # Fallback mock token stream if callback is missing
-            mock_tokens: List[str] = [
-                "This ",
-                "is ",
-                "a ",
-                "fallback ",
-                "streaming ",
-                "response.",
+            # Fallback mock token stream matching the sequential structure
+            mock_summary_tokens: List[str] = [
+                "This ", "is ", "a ", "fallback ", "streaming ", "time-domain ", "summary."
             ]
-            for token in mock_tokens:
-                time.sleep(0.1)
+            mock_dft_tokens: List[str] = [
+                "This ", "is ", "a ", "fallback ", "layman ", "DFT ", "explanation."
+            ]
+            for token in mock_summary_tokens:
+                time.sleep(0.05)
                 summary_text_accum.append(token)
                 yield pb2.AnalysisStreamResponse(summary_token_chunk=token)
+            for token in mock_dft_tokens:
+                time.sleep(0.05)
+                dft_explanation_accum.append(token)
+                yield pb2.AnalysisStreamResponse(dft_token_chunk=token)
 
         # 5. Insert completed analysis record into the SQLite database
         import json

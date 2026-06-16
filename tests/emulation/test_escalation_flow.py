@@ -57,7 +57,10 @@ class TestEscalationFlow(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         """Sets up temporary database paths and starts the local gRPC server."""
-        cls.test_backup_dir: str = os.path.join(SCRIPT_DIR, "test_backups")
+        # Use isolated database directories for each parallel pytest worker thread to
+        # prevent file-lock contention and database busy exceptions.
+        worker_id = os.environ.get("PYTEST_XDIST_WORKER", "master")
+        cls.test_backup_dir: str = os.path.join(SCRIPT_DIR, f"test_backups_{worker_id}")
         os.makedirs(cls.test_backup_dir, exist_ok=True)
 
         cls.test_grid_db: str = os.path.join(cls.test_backup_dir, "grid_history.db")
@@ -114,6 +117,32 @@ class TestEscalationFlow(unittest.TestCase):
         """)
         conn.close()
 
+        # Mock the Ollama HTTP call module to avoid making network requests to nvagent:11434
+        # during test execution. This prevents 120-second network socket timeouts and
+        # ensures the integration test runs entirely offline and deterministically.
+        import dashboard_modules.agent_loop
+        cls.original_query_ollama = dashboard_modules.agent_loop.query_ollama
+
+        def mock_query_ollama(prompt: str, model: str = "gemma4-it-q4:latest") -> str:
+            """Mocks the LLM ReAct agent reasoning response.
+            
+            Simulates the tool-use handshake by returning a query_db tool call on the first
+            turn, and a final synthesized diagnosis summary after receiving database observations.
+            """
+            prompt_str = prompt.lower()
+            if "observation from query_db" in prompt_str:
+                # Simulate the agent synthesizing observations into a final diagnostic summary
+                return (
+                    "Based on historical SQL context, a transient power anomaly is confirmed. "
+                    "Final Diagnostic Summary: Detected battery charge/discharge inefficiency or peak appliance spike."
+                )
+            else:
+                # Simulate the agent issuing a tool call to inspect database records
+                return '<tool_call>{"tool": "query_db", "sql": "SELECT timestamp, kw FROM grid_history ORDER BY kw DESC LIMIT 5"}</tool_call>'
+
+        # Apply the monkeypatch to the agent loop module
+        dashboard_modules.agent_loop.query_ollama = mock_query_ollama
+
         # Point the cloud responder to our test JSON file
         from tests.emulation.mock_tier3_cloud import MockTier3CloudResponder
         cls.orig_init = MockTier3CloudResponder.__init__
@@ -123,8 +152,14 @@ class TestEscalationFlow(unittest.TestCase):
             
         MockTier3CloudResponder.__init__ = patched_init
 
-        # Start insecure gRPC server on port 50055
-        cls.server_port: int = 50055
+        # Start insecure gRPC server on a worker-specific port to prevent binding collisions
+        base_port = 50055
+        if worker_id.startswith("gw"):
+            worker_num = int(worker_id.replace("gw", ""))
+            cls.server_port = base_port + worker_num
+        else:
+            cls.server_port = base_port
+
         cls.server = start_grpc_server(
             db_path=cls.test_grid_db,
             analysis_db_path=cls.test_analysis_db,
@@ -144,6 +179,10 @@ class TestEscalationFlow(unittest.TestCase):
         cls.server.stop(grace=None)
         print("Test gRPC server stopped.")
         
+        # Restore the original query_ollama function to prevent test pollution
+        import dashboard_modules.agent_loop
+        dashboard_modules.agent_loop.query_ollama = cls.original_query_ollama
+
         # Restore original init method of MockTier3CloudResponder
         from tests.emulation.mock_tier3_cloud import MockTier3CloudResponder
         MockTier3CloudResponder.__init__ = cls.orig_init
