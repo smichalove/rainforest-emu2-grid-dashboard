@@ -22,7 +22,7 @@ ssh steven@rainforestpi "chmod +x ~/rainforest-emu2-grid-dashboard/backup_to_jet
 echo "=== Copying AI staging code, stubs, and .env to the Jetson Orin Nano ==="
 ssh steven@nvjetson "mkdir -p ~/rainforest-emu2-grid-dashboard/protos"
 scp protos/grid_telemetry_pb2*.py steven@nvjetson:~/rainforest-emu2-grid-dashboard/protos/
-scp -r dashboard_modules stage_local_summary.py stage_batch_summary.py snr_analysis.py gemma_prompt.txt gemma_hybrid_prompt.txt gemma_dft_prompt.txt .env requirements.txt steven@nvjetson:~/rainforest-emu2-grid-dashboard/
+scp -r dashboard_modules stage_local_summary.py stage_batch_summary.py snr_analysis.py gemma_prompt.txt gemma_hybrid_prompt.txt gemma_dft_prompt.txt gemma_summary_prompt.txt gemma_agent_prompt.txt .env requirements.txt steven@nvjetson:~/rainforest-emu2-grid-dashboard/
 
 ssh steven@nvjetson "
   sudo cp -r ~/rainforest-emu2-grid-dashboard/dashboard_modules /home/grid_backup/ && \
@@ -32,9 +32,11 @@ ssh steven@nvjetson "
   sudo cp ~/rainforest-emu2-grid-dashboard/gemma_prompt.txt /home/grid_backup/ && \
   sudo cp ~/rainforest-emu2-grid-dashboard/gemma_hybrid_prompt.txt /home/grid_backup/ && \
   sudo cp ~/rainforest-emu2-grid-dashboard/gemma_dft_prompt.txt /home/grid_backup/ && \
+  sudo cp ~/rainforest-emu2-grid-dashboard/gemma_summary_prompt.txt /home/grid_backup/ && \
+  sudo cp ~/rainforest-emu2-grid-dashboard/gemma_agent_prompt.txt /home/grid_backup/ && \
   sudo cp ~/rainforest-emu2-grid-dashboard/.env /home/grid_backup/ && \
   sudo cp ~/rainforest-emu2-grid-dashboard/requirements.txt /home/grid_backup/ && \
-  sudo chown -R grid_backup:grid_backup /home/grid_backup/dashboard_modules /home/grid_backup/protos /home/grid_backup/.env /home/grid_backup/requirements.txt /home/grid_backup/stage_local_summary.py /home/grid_backup/snr_analysis.py /home/grid_backup/gemma_prompt.txt /home/grid_backup/gemma_hybrid_prompt.txt /home/grid_backup/gemma_dft_prompt.txt && \
+  sudo chown -R grid_backup:grid_backup /home/grid_backup/dashboard_modules /home/grid_backup/protos /home/grid_backup/.env /home/grid_backup/requirements.txt /home/grid_backup/stage_local_summary.py /home/grid_backup/snr_analysis.py /home/grid_backup/gemma_prompt.txt /home/grid_backup/gemma_hybrid_prompt.txt /home/grid_backup/gemma_dft_prompt.txt /home/grid_backup/gemma_summary_prompt.txt /home/grid_backup/gemma_agent_prompt.txt && \
   sudo mkdir -p /etc/systemd/system/jetson-grid-edge.service.d && \
   echo -e '[Service]\nExecStart=\nExecStart=/home/grid_backup/venv/bin/python3 /home/grid_backup/stage_local_summary.py --port 5000\nEnvironment=\"JETSON_BACKUP_PATH=/home/grid_backup/backups\"' | sudo tee /etc/systemd/system/jetson-grid-edge.service.d/override.conf > /dev/null && \
   sudo systemctl daemon-reload && \
