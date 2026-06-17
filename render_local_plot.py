@@ -115,6 +115,7 @@ class OfflineViewer(tk.Tk):
         # Initial state variables
         self.current_slide: int = 1
         self.local_time_text: str = "Awaiting AI Analysis..."
+        self.local_history_text: str = "Awaiting 14-day history summary..."
         self.local_dft_text: str = "Awaiting Frequency Domain Analysis..."
         self.baseline_text: str = ""
         self.local_delta_text: str = ""
@@ -308,6 +309,7 @@ class OfflineViewer(tk.Tk):
                 
         summary = data.get("summary", "")
         dft_explanation = data.get("dft_explanation", "")
+        history_explanation = data.get("history_explanation", "")
         self.cached_full_history_spectrum = data.get("full_history_spectrum", {})
         
         if summary:
@@ -324,15 +326,22 @@ class OfflineViewer(tk.Tk):
             else:
                 self.local_dft_text = "Awaiting Frequency Domain Analysis..."
                 
+            if history_explanation:
+                self.local_history_text = history_explanation.strip()
+            else:
+                self.local_history_text = "Awaiting 14-day history summary..."
+                
             self.update_summary_display()
 
     def update_summary_display(self) -> None:
         """Refreshes subplot text watermarks depending on slide."""
-        if self.current_slide in (1, 2):
+        if self.current_slide == 1:
             text = self.baseline_text
             if self.local_delta_text:
                 text += "\n" + self.local_delta_text
             self.summary_text_obj.set_text(self.wrap_text(text).replace('$', '\\$'))
+        elif self.current_slide == 2:
+            self.summary_text_obj.set_text(self.wrap_text(self.local_history_text).replace('$', '\\$'))
         else:
             self.summary_text_obj_freq.set_text(self.wrap_text(self.local_dft_text).replace('$', '\\$'))
             

@@ -95,6 +95,7 @@ class MockGridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if GRPC_STU
             baseline_timestamp=request.baseline_timestamp,
             summary_text="Mocked Summary...",
             dft_explanation="Mocked DFT...",
+            history_explanation="Mocked History...",
             delta_import=1.5,
             delta_export=0.5,
             delta_peak=2.0,
@@ -112,6 +113,7 @@ class MockGridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if GRPC_STU
         # 2. Yield mock summary and DFT tokens to simulate server-side Ollama buffering
         yield pb2.AnalysisStreamResponse(summary_token_chunk="This is ")
         yield pb2.AnalysisStreamResponse(summary_token_chunk="a simulated ")
+        yield pb2.AnalysisStreamResponse(history_token_chunk="history ")
         yield pb2.AnalysisStreamResponse(dft_token_chunk="streaming response.")
 
 
@@ -204,15 +206,17 @@ class TestGridTelemetryContract(unittest.TestCase):
             stream_list = list(stream_iter)
 
             # Assert first message is initial analysis dict
-            self.assertEqual(len(stream_list), 4)
+            self.assertEqual(len(stream_list), 5)
             self.assertTrue(stream_list[0].HasField("initial_analysis"))
             self.assertEqual(stream_list[0].initial_analysis.baseline_text, "Starting baseline")
             self.assertEqual(stream_list[0].initial_analysis.delta_import, 1.5)
+            self.assertEqual(stream_list[0].initial_analysis.history_explanation, "Mocked History...")
 
             # Assert subsequent messages are token strings
             self.assertEqual(stream_list[1].summary_token_chunk, "This is ")
             self.assertEqual(stream_list[2].summary_token_chunk, "a simulated ")
-            self.assertEqual(stream_list[3].dft_token_chunk, "streaming response.")
+            self.assertEqual(stream_list[3].history_token_chunk, "history ")
+            self.assertEqual(stream_list[4].dft_token_chunk, "streaming response.")
 
             channel.close()
         finally:

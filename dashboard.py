@@ -193,6 +193,7 @@ class GridDashboard(tk.Tk):
         self.solar_bars_dirty = True
         self.current_slide = 1
         self.local_time_text = "Awaiting AI Analysis..."
+        self.local_history_text = "Awaiting 14-day history summary..."
         self.local_dft_text = "Awaiting Frequency Domain Analysis..."
         self.baseline_text = ""
         self.local_delta_text = ""
@@ -381,6 +382,7 @@ class GridDashboard(tk.Tk):
                 ts_str = data.get("timestamp")
                 summary = data.get("summary", "")
                 dft_explanation = data.get("dft_explanation", "")
+                history_explanation = data.get("history_explanation", "")
                 self.cached_full_history_spectrum = data.get("full_history_spectrum", {})
                 
                 if ts_str and summary:
@@ -401,6 +403,11 @@ class GridDashboard(tk.Tk):
                         self.local_dft_text = dft_explanation.strip()
                     else:
                         self.local_dft_text = "Awaiting Frequency Domain Analysis..."
+
+                    if history_explanation:
+                        self.local_history_text = history_explanation.strip()
+                    else:
+                        self.local_history_text = "Awaiting 14-day history summary..."
         except Exception as e:
             logging.error(f"Failed to load cached summary: {e}")
             
@@ -1321,12 +1328,15 @@ class GridDashboard(tk.Tk):
 
     def update_summary_display(self) -> None:
         """Refreshes the watermark elements inside the subplots depending on active slide."""
-        if self.current_slide in (1, 2):
+        if self.current_slide == 1:
             full_text: str = self.baseline_text
             if self.local_delta_text:
                 full_text += "\n" + self.local_delta_text
             if self.summary_text_obj is not None:
                 self.summary_text_obj.set_text(self.wrap_text(full_text).replace('$', '\\$'))
+        elif self.current_slide == 2:
+            if self.summary_text_obj is not None:
+                self.summary_text_obj.set_text(self.wrap_text(self.local_history_text).replace('$', '\\$'))
         else:
             if self.summary_text_obj_freq is not None:
                 self.summary_text_obj_freq.set_text(self.wrap_text(self.local_dft_text).replace('$', '\\$'))
@@ -1427,6 +1437,7 @@ class GridDashboard(tk.Tk):
                     )
                     
                     llm_response = ""
+                    history_explanation = ""
                     dft_explanation = ""
                     metrics = {}
                     spec_data = {}
@@ -1478,6 +1489,7 @@ class GridDashboard(tk.Tk):
                             
                             # Render initial state on GUI
                             self.local_delta_text = f"[Live Local Delta (Jetson) | agent ran at {checked_time}]: Ingesting..."
+                            self.local_history_text = "Ingesting..."
                             self.ui_queue.put(self.update_summary_display)
 
                         # Process streaming summary (time-domain analysis) tokens.
@@ -1489,6 +1501,15 @@ class GridDashboard(tk.Tk):
                                 self.local_delta_text = f"[Live Local Delta (Jetson) | agent ran at {checked_time}]: "
                             llm_response += token
                             self.local_delta_text += token
+                            self.ui_queue.put(self.update_summary_display)
+
+                        # Process streaming history summary tokens.
+                        if chunk.history_token_chunk:
+                            token = chunk.history_token_chunk
+                            if not history_explanation:
+                                self.local_history_text = ""
+                            history_explanation += token
+                            self.local_history_text += token
                             self.ui_queue.put(self.update_summary_display)
 
                         # Process streaming DFT explanation (frequency-domain analysis) tokens.
@@ -1513,6 +1534,7 @@ class GridDashboard(tk.Tk):
                             if metrics:
                                 cache_data["metrics"] = metrics
                             cache_data["dft_explanation"] = dft_explanation
+                            cache_data["history_explanation"] = history_explanation
                             delta_text = f"[Live Local Delta (Jetson) | agent ran at {checked_time}]: {llm_response}"
                             cache_data["summary"] = f"{clean_baseline}\n{delta_text}"
                             cache_data["timestamp"] = ts_str

@@ -98,6 +98,7 @@ message AnalysisResponse {
   
   // Spectral and frequency-domain structure
   SpectralMetrics spectral_metrics = 17;
+  string history_explanation = 18; // Completed 14-day history AI summary text
 }
 
 // AnalysisStreamResponse supporting real-time token streaming from local Ollama/Gemma.
@@ -109,6 +110,7 @@ message AnalysisStreamResponse {
   // Note: Tokens are buffered server-side (3-5 tokens or word boundaries) to reduce packet overhead
   string summary_token_chunk = 2;
   string dft_token_chunk = 3;
+  string history_token_chunk = 4;
 }
 
 // Ingest confirmation payload.

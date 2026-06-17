@@ -480,26 +480,91 @@ class GridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if pb2_grpc els
         )
         yield pb2.AnalysisStreamResponse(initial_analysis=initial_analysis)
 
-        # 4. Stream Slide 1 summary followed by Slide 3 DFT explanation
+        # 4. Stream Slide 1 summary, Slide 2 history summary, followed by Slide 3 DFT explanation
         model_name: str = os.environ.get("EDGE_MODEL", "gemma4-it-q4")
         summary_text_accum = []
+        history_text_accum = []
         dft_explanation_accum = []
+
+        local_proposer_active = False
+        proposer_summary = ""
+        proposer_history = ""
+        proposer_dft = ""
+
+        try:
+            from stage_local_summary import query_local_ollama, format_verify_prompts, LOCAL_OLLAMA_ENDPOINT, LOCAL_EDGE_MODEL
+            if LOCAL_OLLAMA_ENDPOINT:
+                logging.info(f"Generating proposer drafts locally using {LOCAL_EDGE_MODEL} at {LOCAL_OLLAMA_ENDPOINT}...")
+                proposer_summary = query_local_ollama(
+                    analysis_data["formatted_prompt"],
+                    LOCAL_EDGE_MODEL,
+                    endpoint=LOCAL_OLLAMA_ENDPOINT
+                )
+                proposer_history = query_local_ollama(
+                    analysis_data["formatted_history_prompt"],
+                    LOCAL_EDGE_MODEL,
+                    endpoint=LOCAL_OLLAMA_ENDPOINT
+                )
+                proposer_dft = query_local_ollama(
+                    analysis_data["formatted_dft_prompt"],
+                    LOCAL_EDGE_MODEL,
+                    endpoint=LOCAL_OLLAMA_ENDPOINT
+                )
+                local_proposer_active = True
+                logging.info("Successfully generated proposer drafts.")
+        except Exception as pe:
+            logging.warning(f"Local proposer model run failed or unreachable: {pe}. Streaming single-agent fallback summaries directly.")
+
+        # Re-calculate remaining line budget
+        from stage_local_summary import calculate_remaining_lines
+        remaining_lines = calculate_remaining_lines(analysis_data.get("baseline_text", request.baseline_text))
+        current_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Format prompts
+        verify_summary_prompt = analysis_data["formatted_prompt"]
+        verify_history_prompt = analysis_data["formatted_history_prompt"]
+        verify_dft_prompt = analysis_data["formatted_dft_prompt"]
+
+        if local_proposer_active:
+            try:
+                verify_summary_prompt, verify_dft_prompt, verify_history_prompt = format_verify_prompts(
+                    analysis_data,
+                    proposer_summary,
+                    proposer_dft,
+                    proposer_history,
+                    analysis_data.get("baseline_timestamp", baseline_ts_str),
+                    analysis_data.get("baseline_text", request.baseline_text),
+                    current_time_str,
+                    remaining_lines
+                )
+            except Exception as fe:
+                logging.error(f"Error formatting verify prompts: {fe}. Falling back to standard prompts.")
 
         if self.query_ollama_stream_fn:
             logging.info("Streaming Slide 1 summary tokens...")
             try:
                 for token in self.query_ollama_stream_fn(
-                    analysis_data["formatted_prompt"], model_name
+                    verify_summary_prompt, model_name
                 ):
                     summary_text_accum.append(token)
                     yield pb2.AnalysisStreamResponse(summary_token_chunk=token)
             except Exception as e:
                 logging.error(f"Error streaming Slide 1 summary: {e}")
 
+            logging.info("Streaming Slide 2 history summary tokens...")
+            try:
+                for token in self.query_ollama_stream_fn(
+                    verify_history_prompt, model_name
+                ):
+                    history_text_accum.append(token)
+                    yield pb2.AnalysisStreamResponse(history_token_chunk=token)
+            except Exception as e:
+                logging.error(f"Error streaming Slide 2 history summary: {e}")
+
             logging.info("Streaming Slide 3 DFT explanation tokens...")
             try:
                 for token in self.query_ollama_stream_fn(
-                    analysis_data["formatted_dft_prompt"], model_name
+                    verify_dft_prompt, model_name
                 ):
                     dft_explanation_accum.append(token)
                     yield pb2.AnalysisStreamResponse(dft_token_chunk=token)
@@ -510,6 +575,9 @@ class GridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if pb2_grpc els
             mock_summary_tokens: List[str] = [
                 "This ", "is ", "a ", "fallback ", "streaming ", "time-domain ", "summary."
             ]
+            mock_history_tokens: List[str] = [
+                "This ", "is ", "a ", "fallback ", "streaming ", "14-day ", "history ", "summary."
+            ]
             mock_dft_tokens: List[str] = [
                 "This ", "is ", "a ", "fallback ", "layman ", "DFT ", "explanation."
             ]
@@ -517,6 +585,10 @@ class GridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if pb2_grpc els
                 time.sleep(0.05)
                 summary_text_accum.append(token)
                 yield pb2.AnalysisStreamResponse(summary_token_chunk=token)
+            for token in mock_history_tokens:
+                time.sleep(0.05)
+                history_text_accum.append(token)
+                yield pb2.AnalysisStreamResponse(history_token_chunk=token)
             for token in mock_dft_tokens:
                 time.sleep(0.05)
                 dft_explanation_accum.append(token)

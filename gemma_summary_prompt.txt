@@ -74,5 +74,6 @@ Live Telemetry since baseline ({baseline_time} to {current_time}):
 5. Do NOT mention EV or EV charging.
 6. This section must fit within {remaining_lines} lines of text (100 characters max per line).
 7. Do NOT use markdown code blocks, bold text (**), asterisks, or any text formatting other than plain text.
+8. Do NOT output any conversational greetings, intros, or salutations (such as "Good morning", "Hello", "Hi", or "Here is your summary"). Start the summary directly with the telemetry or power flow details.
 
 Output:

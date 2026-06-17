@@ -79,6 +79,10 @@ CHILICON_HISTORY: str = os.path.join(BACKUP_DIR, "chilicon_history.csv")
 DEFAULT_MODEL: str = os.environ.get("EDGE_MODEL", "gemma4-it-q4")
 OLLAMA_ENDPOINT: str = os.environ.get("OLLAMA_HOST", "http://localhost:11434/api/generate")
 
+# Dual-Node Multi-Agent Feedback Loop configurations
+LOCAL_OLLAMA_ENDPOINT: str = os.environ.get("LOCAL_OLLAMA_HOST", "http://localhost:11434/api/generate")
+LOCAL_EDGE_MODEL: str = os.environ.get("LOCAL_EDGE_MODEL", "gemma:2b")
+
 # Default coordinates for weather (Seattle area)
 DEFAULT_LAT: str = os.environ.get("WEATHER_LAT", "47.6062")
 DEFAULT_LON: str = os.environ.get("WEATHER_LON", "-122.3321")
@@ -900,8 +904,120 @@ def calculate_flow_stats(baseline_dt: datetime.datetime) -> Dict[str, float]:
     }
 
 
-def query_local_ollama(prompt: str, model: str) -> str:
+def calculate_history_flex_and_credits(
+    days: int = 14
+) -> Tuple[int, float, float, float, float]:
+    """Calculates number of Flex days, total battery discharge, and credits over history.
+
+    Args:
+        days: Number of days of history to analyze.
+
+    Returns:
+        A tuple of:
+            - flex_days_count: Number of calendar days with battery discharge > 0.1 kWh.
+            - total_flex_discharge_kwh: Cumulative battery discharge during those Flex days.
+            - flex_credits_usd: Total premium credits earned ($0.50/kWh).
+            - total_standard_export_kwh: Cumulative grid export over the history period.
+            - standard_credits_usd: Total standard export credits earned ($0.19/kWh).
+
+    Raises:
+        None.
+    """
+    now_dt = datetime.datetime.now()
+    start_dt = now_dt - datetime.timedelta(days=days)
+    
+    # 1. Calculate daily battery discharge
+    daily_discharge = defaultdict(float)
+    if os.path.exists(SE_BATTERY_HISTORY):
+        rows = []
+        try:
+            with open(SE_BATTERY_HISTORY, 'r', encoding='utf-8') as f:
+                clean_lines = (line.replace('\x00', '') for line in f)
+                reader = csv.reader(clean_lines)
+                for row in reader:
+                    if len(row) >= 2:
+                        ts = parse_timestamp(row[0])
+                        if ts and ts >= start_dt:
+                            try:
+                                val = float(row[1])
+                                rows.append((ts, val))
+                            except ValueError:
+                                pass
+        except Exception as e:
+            logging.error(f"Error reading battery history for history credits: {e}")
+            
+        if rows:
+            rows.sort(key=lambda x: x[0])
+            for i in range(len(rows) - 1):
+                t_curr, p_curr = rows[i]
+                t_next, _ = rows[i+1]
+                dt_hours = (t_next - t_curr).total_seconds() / 3600.0
+                if 0.0 < dt_hours <= 1.0:
+                    if p_curr > 0.0:
+                        day_str = t_curr.strftime("%Y-%m-%d")
+                        daily_discharge[day_str] += p_curr * dt_hours
+                        
+    # 2. Count Flex event days and sum discharge
+    flex_days_count = 0
+    total_flex_discharge_kwh = 0.0
+    for day, discharge in daily_discharge.items():
+        if discharge > 0.1:
+            flex_days_count += 1
+            total_flex_discharge_kwh += discharge
+            
+    flex_credits_usd = total_flex_discharge_kwh * 0.50
+    
+    # 3. Calculate total standard grid export over the history days
+    total_standard_export_kwh = 0.0
+    if os.path.exists(GRID_DB):
+        rows = []
+        try:
+            if GRID_DB.endswith('.db'):
+                hours_back = days * 24 + 2
+                db_ts, db_vals = db.query_history(GRID_DB, hours_back)
+                for ts, val in zip(db_ts, db_vals):
+                    if ts >= start_dt:
+                        rows.append((ts, val))
+            else:
+                with open(GRID_DB, 'r', encoding='utf-8') as f:
+                    clean_lines = (line.replace('\x00', '') for line in f)
+                    reader = csv.reader(clean_lines)
+                    for row in reader:
+                        if len(row) >= 2:
+                            ts = parse_timestamp(row[0])
+                            if ts and ts >= start_dt:
+                                try:
+                                    val = float(row[1])
+                                    rows.append((ts, val))
+                                except ValueError:
+                                    pass
+        except Exception as e:
+            logging.error(f"Error reading grid history for history credits: {e}")
+            
+        if rows:
+            rows.sort(key=lambda x: x[0])
+            for i in range(len(rows) - 1):
+                t_curr, p_curr = rows[i]
+                t_next, _ = rows[i+1]
+                dt_hours = (t_next - t_curr).total_seconds() / 3600.0
+                if 0.0 < dt_hours <= 1.0:
+                    if p_curr < 0.0:
+                        total_standard_export_kwh += abs(p_curr) * dt_hours
+            # Final point
+            t_last, p_last = rows[-1]
+            dt_hours = (datetime.datetime.now() - t_last).total_seconds() / 3600.0
+            if 0.0 < dt_hours <= 0.5:
+                if p_last < 0.0:
+                    total_standard_export_kwh += abs(p_last) * dt_hours
+
+    standard_credits_usd = total_standard_export_kwh * 0.19
+    
+    return flex_days_count, total_flex_discharge_kwh, flex_credits_usd, total_standard_export_kwh, standard_credits_usd
+
+
+def query_local_ollama(prompt: str, model: str, endpoint: Optional[str] = None) -> str:
     """Queries local Ollama generation API synchronously."""
+    target_endpoint = endpoint or OLLAMA_ENDPOINT
     payload = {
         "model": model,
         "prompt": prompt,
@@ -915,7 +1031,7 @@ def query_local_ollama(prompt: str, model: str) -> str:
     }
     data = json.dumps(payload).encode('utf-8')
     req = urllib.request.Request(
-        OLLAMA_ENDPOINT, 
+        target_endpoint, 
         data=data, 
         headers={'Content-Type': 'application/json'}
     )
@@ -925,7 +1041,7 @@ def query_local_ollama(prompt: str, model: str) -> str:
             res_data = json.loads(res_body)
             return res_data.get("response", "").strip()
     except Exception as e:
-        logging.error(f"Ollama API error: {e}")
+        logging.error(f"Ollama API error at {target_endpoint}: {e}")
         raise
 
 
@@ -1572,10 +1688,64 @@ Explanation:
         phase_diff=phase_diff,
         solar_corr=solar_corr
     )
+
+    # 14-Day History Calculations
+    history_start_dt = now_dt - datetime.timedelta(days=14)
+    history_deltas = calculate_deltas(history_start_dt)
+    history_flow_stats = calculate_flow_stats(history_start_dt)
+    
+    history_bat_rte = 0.0
+    if history_deltas["delta_bat_charge"] > 0.0:
+        history_bat_rte = history_deltas["delta_bat_discharge"] / history_deltas["delta_bat_charge"]
+        
+    flex_days_count, total_flex_discharge_kwh, flex_credits_usd, total_standard_export_kwh, standard_credits_usd = calculate_history_flex_and_credits(14)
+
+    # Load and format history prompt template
+    history_prompt_template = None
+    history_prompt_path = os.path.join(SCRIPT_DIR, "gemma_history_prompt.txt")
+    if os.path.exists(history_prompt_path):
+        try:
+            with open(history_prompt_path, 'r', encoding='utf-8') as f:
+                history_prompt_template = f.read()
+        except Exception as e:
+            logging.error(f"Failed to read history prompt template: {e}")
+            
+    if not history_prompt_template:
+        history_prompt_template = """=== 14-DAY HISTORICAL METRICS ===
+Total Grid Import: {delta_import:.2f} kWh
+Total Grid Export: {delta_export:.2f} kWh
+Solar PV Generation (Combined): {delta_solar:.2f} kWh
+Battery Round-Trip Efficiency (RTE): {battery_rte_pct:.1f}%
+
+Output:
+"""
+    formatted_history_prompt = history_prompt_template.format(
+        current_time=now_str,
+        delta_import=history_deltas["delta_import"],
+        delta_export=history_deltas["delta_export"],
+        delta_peak=history_deltas["delta_peak"],
+        delta_solar=history_deltas["delta_solar"],
+        delta_se_solar=history_deltas["delta_se_solar"],
+        delta_ch_solar=history_deltas["delta_ch_solar"],
+        delta_bat_charge=history_deltas["delta_bat_charge"],
+        delta_bat_discharge=history_deltas["delta_bat_discharge"],
+        battery_rte_pct=history_bat_rte * 100.0,
+        delta_se_load=history_deltas["delta_se_load"],
+        se_load_min=history_flow_stats["load_min"],
+        se_load_max=history_flow_stats["load_max"],
+        se_load_avg=history_flow_stats["load_avg"],
+        history_flex_events=flex_days_count,
+        history_flex_discharge_kwh=total_flex_discharge_kwh,
+        history_flex_credits=flex_credits_usd,
+        history_standard_export_kwh=total_standard_export_kwh,
+        history_standard_credits=standard_credits_usd,
+        remaining_lines=remaining_lines
+    )
     
     return {
         "formatted_prompt": formatted_prompt,
         "formatted_dft_prompt": formatted_dft_prompt,
+        "formatted_history_prompt": formatted_history_prompt,
         "temp_max": temp_max,
         "cloud_cover": cloud_cover,
         "solar_weather_modulation": solar_weather_modulation,
@@ -1609,7 +1779,189 @@ Explanation:
         "se_load_avg": flow_stats["load_avg"],
         "baseline_text": baseline_text,
         "baseline_timestamp": baseline_ts_str,
+        "sunrise_time": sunrise_time,
+        "sunset_time": sunset_time,
+        "month_name": month_name,
+        "day_type": day_type,
+        "warning_context": f"\nStatistical Anomaly Warnings (Keep these in mind for your analysis):\n{warning_context}" if warning_context else "",
+        "history_delta_import": history_deltas["delta_import"],
+        "history_delta_export": history_deltas["delta_export"],
+        "history_delta_peak": history_deltas["delta_peak"],
+        "history_delta_solar": history_deltas["delta_solar"],
+        "history_delta_se_solar": history_deltas["delta_se_solar"],
+        "history_delta_ch_solar": history_deltas["delta_ch_solar"],
+        "history_delta_bat_charge": history_deltas["delta_bat_charge"],
+        "history_delta_bat_discharge": history_deltas["delta_bat_discharge"],
+        "history_delta_se_load": history_deltas["delta_se_load"],
+        "history_se_load_min": history_flow_stats["load_min"],
+        "history_se_load_max": history_flow_stats["load_max"],
+        "history_se_load_avg": history_flow_stats["load_avg"],
+        "history_battery_rte": history_bat_rte,
+        "history_flex_events": flex_days_count,
+        "history_flex_discharge_kwh": total_flex_discharge_kwh,
+        "history_flex_credits": flex_credits_usd,
+        "history_standard_export_kwh": total_standard_export_kwh,
+        "history_standard_credits": standard_credits_usd,
     }
+
+
+def format_verify_prompts(
+    analysis_data: Dict[str, Any],
+    proposer_draft: str,
+    proposer_dft_draft: str,
+    proposer_history_draft: str,
+    baseline_time: str,
+    baseline_text: str,
+    current_time: str,
+    remaining_lines: int
+) -> Tuple[str, str, str]:
+    """Loads and formats the verifier prompts with raw telemetry metrics and drafts.
+
+    Args:
+        analysis_data: A dictionary containing microgrid statistical metrics.
+        proposer_draft: The initial Slide 1 summary text proposed by the local model.
+        proposer_dft_draft: The initial Slide 3 DFT text proposed by the local model.
+        proposer_history_draft: The initial Slide 2 history summary proposed by local model.
+        baseline_time: Time of baseline reference window.
+        baseline_text: Summary text of baseline reference window.
+        current_time: Current timestamp of evaluation loop.
+        remaining_lines: Budget of lines allowed for wrapped output on kiosk display.
+
+    Returns:
+        A tuple of strings (formatted_verify_summary_prompt, formatted_verify_dft_prompt, formatted_verify_history_prompt).
+
+    Raises:
+        None.
+    """
+    verify_summary_template: str = ""
+    verify_summary_path = os.path.join(SCRIPT_DIR, "gemma_verify_summary_prompt.txt")
+    if os.path.exists(verify_summary_path):
+        try:
+            with open(verify_summary_path, 'r', encoding='utf-8') as f:
+                verify_summary_template = f.read()
+        except Exception as e:
+            logging.error(f"Failed to read verify summary template: {e}")
+
+    if not verify_summary_template:
+        # Minimal verification fallback if prompt file is missing
+        verify_summary_template = (
+            "Proposer draft: {proposer_draft}\n"
+            "Verify this draft. Net Grid Import: {delta_import:.2f} kWh, "
+            "Net Grid Export: {delta_export:.2f} kWh, "
+            "Battery Discharged: {delta_bat_discharge:.2f} kWh."
+        )
+
+    verify_dft_template: str = ""
+    verify_dft_path = os.path.join(SCRIPT_DIR, "gemma_verify_dft_prompt.txt")
+    if os.path.exists(verify_dft_path):
+        try:
+            with open(verify_dft_path, 'r', encoding='utf-8') as f:
+                verify_dft_template = f.read()
+        except Exception as e:
+            logging.error(f"Failed to read verify dft template: {e}")
+
+    if not verify_dft_template:
+        verify_dft_template = (
+            "Proposer draft: {proposer_draft}\n"
+            "Verify this DFT explanation. Solar Peak: {solar_24h_peak_hour}"
+        )
+
+    verify_history_template: str = ""
+    verify_history_path = os.path.join(SCRIPT_DIR, "gemma_verify_history_prompt.txt")
+    if os.path.exists(verify_history_path):
+        try:
+            with open(verify_history_path, 'r', encoding='utf-8') as f:
+                verify_history_template = f.read()
+        except Exception as e:
+            logging.error(f"Failed to read verify history template: {e}")
+
+    if not verify_history_template:
+        verify_history_template = (
+            "Proposer draft: {proposer_draft}\n"
+            "Verify this history draft. Total Grid Import: {delta_import:.2f} kWh, "
+            "Total Grid Export: {delta_export:.2f} kWh, "
+            "Battery Discharged: {delta_bat_discharge:.2f} kWh."
+        )
+
+    # Resolve decimal hour representations to standard formats
+    solar_peak_hour_str: str = format_decimal_hour(analysis_data.get("solar_24h_peak_hour", 12.0))
+    grid_peak_hour_str: str = format_decimal_hour(analysis_data.get("grid_12h_peak_hour", 12.0))
+
+    # Safely extract values from analysis_data to format the templates
+    formatted_verify_summary: str = verify_summary_template.format(
+        baseline_time=baseline_time,
+        baseline_text=baseline_text,
+        current_time=current_time,
+        delta_import=analysis_data.get("delta_import", 0.0),
+        delta_export=analysis_data.get("delta_export", 0.0),
+        delta_peak=analysis_data.get("delta_peak", 0.0),
+        delta_solar=analysis_data.get("delta_solar", 0.0),
+        delta_se_solar=analysis_data.get("delta_se_solar", 0.0),
+        delta_ch_solar=analysis_data.get("delta_ch_solar", 0.0),
+        delta_bat_charge=analysis_data.get("delta_bat_charge", 0.0),
+        delta_bat_discharge=analysis_data.get("delta_bat_discharge", 0.0),
+        delta_se_load=analysis_data.get("delta_se_load", 0.0),
+        se_load_min=analysis_data.get("se_load_min", 0.0),
+        se_load_max=analysis_data.get("se_load_max", 0.0),
+        se_load_avg=analysis_data.get("se_load_avg", 0.0),
+        expected_temp_max=analysis_data.get("temp_max", 0.0),
+        expected_cloud_cover=analysis_data.get("cloud_cover", 0.0),
+        solar_weather_modulation=analysis_data.get("solar_weather_modulation", 1.0),
+        solar_slope=analysis_data.get("solar_slope", 0.0),
+        grid_slope=analysis_data.get("grid_slope", 0.0),
+        warning_context=analysis_data.get("warning_context", ""),
+        remaining_lines=remaining_lines,
+        proposer_draft=proposer_draft
+    )
+
+    # Check phase separation and correlation safely
+    se_peak = analysis_data.get("se_24h_peak_hour", 12.0)
+    ch_peak = analysis_data.get("ch_24h_peak_hour", 12.0)
+    phase_diff: float = (se_peak - ch_peak) % 24
+
+    formatted_verify_dft: str = verify_dft_template.format(
+        sunrise_time=analysis_data.get("sunrise_time", "06:00"),
+        sunset_time=analysis_data.get("sunset_time", "18:00"),
+        solar_24h_amp=analysis_data.get("solar_24h_amp", 0.0),
+        solar_24h_peak_hour=solar_peak_hour_str,
+        solar_weather_modulation=analysis_data.get("solar_weather_modulation", 1.0),
+        grid_24h_amp=analysis_data.get("grid_24h_amp", 0.0),
+        grid_12h_amp=analysis_data.get("grid_12h_amp", 0.0),
+        grid_12h_peak_hour=grid_peak_hour_str,
+        grid_bimodal_ratio=analysis_data.get("grid_bimodal_ratio", 1.0),
+        grid_24h_snr_db=analysis_data.get("grid_24h_snr_db", 0.0),
+        grid_12h_snr_db=analysis_data.get("grid_12h_snr_db", 0.0),
+        solar_24h_snr_db=analysis_data.get("solar_24h_snr_db", 0.0),
+        phase_diff=phase_diff,
+        solar_corr=analysis_data.get("solar_correlation", 1.0),
+        proposer_draft=proposer_dft_draft
+    )
+
+    formatted_verify_history: str = verify_history_template.format(
+        delta_import=analysis_data.get("history_delta_import", 0.0),
+        delta_export=analysis_data.get("history_delta_export", 0.0),
+        delta_peak=analysis_data.get("history_delta_peak", 0.0),
+        delta_solar=analysis_data.get("history_delta_solar", 0.0),
+        delta_se_solar=analysis_data.get("history_delta_se_solar", 0.0),
+        delta_ch_solar=analysis_data.get("history_delta_ch_solar", 0.0),
+        delta_bat_charge=analysis_data.get("history_delta_bat_charge", 0.0),
+        delta_bat_discharge=analysis_data.get("history_delta_bat_discharge", 0.0),
+        battery_rte_pct=analysis_data.get("history_battery_rte", 0.0) * 100.0,
+        delta_se_load=analysis_data.get("history_delta_se_load", 0.0),
+        se_load_min=analysis_data.get("history_se_load_min", 0.0),
+        se_load_max=analysis_data.get("history_se_load_max", 0.0),
+        se_load_avg=analysis_data.get("history_se_load_avg", 0.0),
+        history_flex_events=analysis_data.get("history_flex_events", 0),
+        history_flex_discharge_kwh=analysis_data.get("history_flex_discharge_kwh", 0.0),
+        history_flex_credits=analysis_data.get("history_flex_credits", 0.0),
+        history_standard_export_kwh=analysis_data.get("history_standard_export_kwh", 0.0),
+        history_standard_credits=analysis_data.get("history_standard_credits", 0.0),
+        remaining_lines=remaining_lines,
+        proposer_draft=proposer_history_draft
+    )
+
+    return formatted_verify_summary, formatted_verify_dft, formatted_verify_history
+
 
 
 def _run_analysis_workflow_inner(
@@ -1632,12 +1984,74 @@ def _run_analysis_workflow_inner(
     analysis_data = calculate_analysis_metrics_and_prompts(
         baseline_ts_str, baseline_text, batch_interval_hours
     )
-    model_name: str = DEFAULT_MODEL
-    logging.info(f"Submitting Slide 1 summary query to Ollama model {model_name}...")
-    llm_response: str = query_local_ollama(analysis_data["formatted_prompt"], model_name)
     
-    logging.info(f"Submitting Slide 3 DFT explanation query to Ollama model {model_name}...")
-    dft_response: str = query_local_ollama(analysis_data["formatted_dft_prompt"], model_name)
+    # 1. Run local proposer model if configured and available
+    proposer_summary: str = ""
+    proposer_dft: str = ""
+    proposer_history: str = ""
+    local_proposer_active: bool = False
+    
+    if LOCAL_OLLAMA_ENDPOINT:
+        logging.info(f"Drafting Slide 1/2/3 initial summaries using local proposer model {LOCAL_EDGE_MODEL} at {LOCAL_OLLAMA_ENDPOINT}...")
+        try:
+            proposer_summary = query_local_ollama(
+                analysis_data["formatted_prompt"], 
+                LOCAL_EDGE_MODEL, 
+                endpoint=LOCAL_OLLAMA_ENDPOINT
+            )
+            proposer_dft = query_local_ollama(
+                analysis_data["formatted_dft_prompt"], 
+                LOCAL_EDGE_MODEL, 
+                endpoint=LOCAL_OLLAMA_ENDPOINT
+            )
+            proposer_history = query_local_ollama(
+                analysis_data["formatted_history_prompt"],
+                LOCAL_EDGE_MODEL,
+                endpoint=LOCAL_OLLAMA_ENDPOINT
+            )
+            local_proposer_active = True
+            logging.info("Successfully generated proposer drafts locally.")
+        except Exception as pe:
+            logging.warning(f"Local proposer model run failed or unreachable: {pe}. Falling back to single-pass remote generation.")
+            
+    # 2. Format verify prompts if proposer was successful, or fallback to standard prompts
+    llm_response: str = ""
+    dft_response: str = ""
+    history_response: str = ""
+    verifier_model_name: str = DEFAULT_MODEL
+    
+    if local_proposer_active:
+        remaining_lines = calculate_remaining_lines(baseline_text)
+        current_time_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        verify_summary_prompt, verify_dft_prompt, verify_history_prompt = format_verify_prompts(
+            analysis_data,
+            proposer_summary,
+            proposer_dft,
+            proposer_history,
+            baseline_ts_str,
+            baseline_text,
+            current_time_str,
+            remaining_lines
+        )
+        
+        logging.info(f"Submitting Slide 1 verifier/critic query to remote model {verifier_model_name}...")
+        llm_response = query_local_ollama(verify_summary_prompt, verifier_model_name)
+        
+        logging.info(f"Submitting Slide 3 verifier/critic query to remote model {verifier_model_name}...")
+        dft_response = query_local_ollama(verify_dft_prompt, verifier_model_name)
+
+        logging.info(f"Submitting Slide 2 verifier/critic query to remote model {verifier_model_name}...")
+        history_response = query_local_ollama(verify_history_prompt, verifier_model_name)
+    else:
+        # Single-pass fallback: query the verifier model directly with the proposer's standard prompts
+        logging.info(f"Submitting Slide 1 summary query (fallback) to remote model {verifier_model_name}...")
+        llm_response = query_local_ollama(analysis_data["formatted_prompt"], verifier_model_name)
+        
+        logging.info(f"Submitting Slide 3 DFT explanation query (fallback) to remote model {verifier_model_name}...")
+        dft_response = query_local_ollama(analysis_data["formatted_dft_prompt"], verifier_model_name)
+
+        logging.info(f"Submitting Slide 2 history explanation query (fallback) to remote model {verifier_model_name}...")
+        history_response = query_local_ollama(analysis_data["formatted_history_prompt"], verifier_model_name)
 
     # Construct and insert history record
     record: Dict[str, Any] = {
@@ -1676,7 +2090,8 @@ def _run_analysis_workflow_inner(
             "z_score_peak": analysis_data["z_score_peak"],
             "battery_rte": analysis_data["battery_rte"],
             "solar_correlation": analysis_data["solar_correlation"],
-            "daylight_duration": analysis_data["daylight_duration"]
+            "daylight_duration": analysis_data["daylight_duration"],
+            "history_explanation": history_response
         }),
         "escalation_status": 0,
         "escalation_timestamp": None
@@ -1691,6 +2106,7 @@ def _run_analysis_workflow_inner(
     return {
         "response": llm_response,
         "dft_explanation": dft_response,
+        "history_explanation": history_response,
         "metrics": {
             "temp_max": analysis_data["temp_max"],
             "cloud_cover": analysis_data["cloud_cover"],
@@ -1715,16 +2131,18 @@ def _run_analysis_workflow_inner(
     }
 
 
-def query_local_ollama_stream(prompt: str, model: str) -> Generator[str, None, None]:
+def query_local_ollama_stream(prompt: str, model: str, endpoint: Optional[str] = None) -> Generator[str, None, None]:
     """Queries local Ollama generation API with streaming enabled.
 
     Args:
         prompt: Formatted user instructions to analyze microgrid telemetry.
         model: Target model name loaded in local Ollama service.
+        endpoint: Optional custom Ollama endpoint to query.
 
     Yields:
         String token chunks as they arrive.
     """
+    target_endpoint = endpoint or OLLAMA_ENDPOINT
     payload = {
         "model": model,
         "prompt": prompt,
@@ -1738,7 +2156,7 @@ def query_local_ollama_stream(prompt: str, model: str) -> Generator[str, None, N
     }
     data = json.dumps(payload).encode('utf-8')
     req = urllib.request.Request(
-        OLLAMA_ENDPOINT,
+        target_endpoint,
         data=data,
         headers={'Content-Type': 'application/json'}
     )
@@ -1751,7 +2169,7 @@ def query_local_ollama_stream(prompt: str, model: str) -> Generator[str, None, N
                     if token:
                         yield token
     except Exception as e:
-        logging.error(f"Ollama streaming API error: {e}")
+        logging.error(f"Ollama streaming API error at {target_endpoint}: {e}")
         raise
 
 

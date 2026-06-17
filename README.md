@@ -121,24 +121,24 @@ flowchart TD
         GUI[dashboard.py / Tkinter GUI]
         Client[grpc_client.py]
     end
-    subgraph Jetson1 [Jetson #1: nvjetson (Data & Math)]
+    subgraph Jetson1 [Jetson #1: nvjetson (Data & Math Node)]
         Server[grpc_server.py: port 50051]
         DB[(backups/grid_history.db)]
-        OllamaLocal[Local Ollama: Slide 2 DFT]
+        OllamaLocal[Local Proposer Model: gemma:2b]
     end
-    subgraph Jetson2 [Jetson #2: nvagent (GPU AI Server)]
-        OllamaRemote[Remote Ollama: Slide 1 Summary]
+    subgraph Jetson2 [Jetson #2: nvagent (Dedicated GPU AI Server)]
+        OllamaRemote[Verifier & Critic Model: gemma4-it-q4]
     end
 
     GUI -->|1. Request telemetry update| Client
     Client -->|2. Secure gRPC stream (port 50051)| Server
     Server -->|3. Query historical records| DB
-    Server -->|4a. Trigger parallel Time-Domain query| OllamaRemote
-    Server -->|4b. Trigger parallel Frequency-Domain query| OllamaLocal
-    OllamaRemote -->|5a. Yield Slide 1 tokens| Server
-    OllamaLocal -->|5b. Yield Slide 2 tokens| Server
-    Server -->|6. gRPC streaming response (concurrent chunks)| Client
-    Client -->|7. Render Slide 1 & Slide 2 on the fly| GUI
+    Server -->|4. Query local proposer for initial drafts| OllamaLocal
+    OllamaLocal -->|5. Return Slide 1 & Slide 3 drafts| Server
+    Server -->|6. Query verifier with drafts & raw metrics| OllamaRemote
+    OllamaRemote -->|7. Stream verified & corrected tokens| Server
+    Server -->|8. Secure gRPC stream response| Client
+    Client -->|9. Render Slide 1 & Slide 3 on the fly| GUI
 ```
 
 ### 2. Core System Classes
@@ -148,7 +148,7 @@ The application codebase is structured into the following key logical classes:
 *   **`SolarEdgeClient`** ([dashboard_modules/solar.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard_modules/solar.py)): An asynchronous HTTP client wrapper for the SolarEdge API. Fetches `/currentPowerFlow` telemetry and converts raw solar arrays and battery SOC indicators.
 *   **`ChilliconClient`** ([dashboard_modules/solar.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard_modules/solar.py)): Scrapes solar production variables from the Chillicon gateway using persistent session cookie authentication.
 *   **`GridTelemetryClient`** ([dashboard_modules/grpc_client.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard_modules/grpc_client.py)): Encapsulates the secure gRPC stub connection. Requests streamed tokens from the stager using mTLS credentials.
-*   **`GridTelemetryService`** ([dashboard_modules/grpc_server.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard_modules/grpc_server.py)): The gRPC server implementation running on `nvjetson`. Computes DFT sinusoids, spawns dual concurrent worker threads to query local and remote Ollama engines, and yields merged token chunks to the client.
+*   **`GridTelemetryService`** ([dashboard_modules/grpc_server.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard_modules/grpc_server.py)): The gRPC server implementation running on `nvjetson`. Computes DFT sinusoids, executes a dual-node proposer-verifier feedback loop (querying the local proposer model on `nvjetson` for initial drafts and streaming verified critiques from the remote GPU server `nvagent`), and streams the finalized token chunks to the client.
 
 ### 3. Protobuf API Schema (`protos/grid_telemetry.proto`)
 The cross-node interface contracts are defined in [grid_telemetry.proto](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/protos/grid_telemetry.proto):
