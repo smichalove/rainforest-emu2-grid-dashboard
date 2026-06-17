@@ -5,6 +5,7 @@ Uses the shared dashboard_modules configuration and computations.
 """
 
 import datetime
+import bisect
 import logging
 import os
 import sys
@@ -30,10 +31,21 @@ class OfflineViewer(tk.Tk):
     """Offline GUI window that emulates physical kiosk rendering using historical CSV files."""
 
     def __init__(self) -> None:
-        """Initializes the OfflineViewer window, loads telemetry data, and prepares subplots.
+        """Initializes the OfflineViewer window, loads telemetry databases, and prepares subplots.
+
+        Prepares the window dimensions, parses CLI arguments for custom window limits,
+        reads local SQLite telemetry databases for grid history and SolarEdge/Chillicon
+        API logs, configures Matplotlib canvas layout, and generates widgets.
+
+        Args:
+            None.
+
+        Returns:
+            None.
 
         Raises:
-            Exception: Logs fallback errors internally if file parsing fails.
+            Exception: Logs fallback errors internally if history database or file
+                parsing fails.
         """
         super().__init__()
         self.title("Grid Monitor Preview")
@@ -479,6 +491,43 @@ class OfflineViewer(tk.Tk):
                 se_load_power_timestamps_copy: List[datetime.datetime] = list(self.se_load_power_timestamps)
                 se_load_power_copy: List[float] = list(self.se_load_power)
 
+            # Range limit ending at most recent reading
+            end_time: datetime.datetime = timestamps_copy[-1] if timestamps_copy else datetime.datetime.now()
+            if self.current_slide == 1:
+                start_time: datetime.datetime = end_time - datetime.timedelta(hours=24)
+            else:
+                start_time = end_time - datetime.timedelta(hours=config.HISTORY_HOURS)
+
+            # Slice grid usage data to active window for rendering performance
+            if timestamps_copy:
+                start_idx: int = max(0, bisect.bisect_left(timestamps_copy, start_time) - 1)
+                timestamps_copy = timestamps_copy[start_idx:]
+                usage_copy = usage_copy[start_idx:]
+                
+                # If on Slide 2 and point count is extremely high, downsample with integer stride
+                if self.current_slide == 2 and len(usage_copy) > 10000:
+                    stride: int = len(usage_copy) // 5000
+                    timestamps_copy = timestamps_copy[::stride]
+                    usage_copy = usage_copy[::stride]
+
+            # Slice SolarEdge PV data to active window
+            if se_timestamps_copy:
+                start_idx = max(0, bisect.bisect_left(se_timestamps_copy, start_time) - 1)
+                se_timestamps_copy = se_timestamps_copy[start_idx:]
+                se_power_copy = se_power_copy[start_idx:]
+
+            # Slice Chillicon PV data to active window
+            if chilicon_timestamps_copy:
+                start_idx = max(0, bisect.bisect_left(chilicon_timestamps_copy, start_time) - 1)
+                chilicon_timestamps_copy = chilicon_timestamps_copy[start_idx:]
+                chilicon_power_copy = chilicon_power_copy[start_idx:]
+
+            # Slice SolarEdge Load power data to active window
+            if se_load_power_timestamps_copy:
+                start_idx = max(0, bisect.bisect_left(se_load_power_timestamps_copy, start_time) - 1)
+                se_load_power_timestamps_copy = se_load_power_timestamps_copy[start_idx:]
+                se_load_power_copy = se_load_power_copy[start_idx:]
+
             if len(usage_copy) > 1:
                 x_nums = mdates.date2num(timestamps_copy)
                 segments: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
@@ -504,12 +553,6 @@ class OfflineViewer(tk.Tk):
             else:
                 self.load_line.set_data([], [])
 
-            # Range limit ending at most recent reading
-            end_time: datetime.datetime = timestamps_copy[-1] if timestamps_copy else datetime.datetime.now()
-            if self.current_slide == 1:
-                start_time: datetime.datetime = end_time - datetime.timedelta(hours=24)
-            else:
-                start_time = end_time - datetime.timedelta(hours=config.HISTORY_HOURS)
             self.ax.set_xlim(start_time, end_time)
 
             if usage_copy:

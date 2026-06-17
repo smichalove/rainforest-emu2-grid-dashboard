@@ -142,6 +142,10 @@ All Python code must strictly follow the Google Python Style Guide and readabili
   - Never parse or analyze logs silently to make internal design decisions without explaining the log findings to the user first.
   - When debugging or running emulation scripts, output status details and progress metrics to the user so they can follow along.
 
+- **Troubleshooting Inventory Reference:**
+  > [!TIP]
+  > Always refer to the [logs.md](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/logs.md) catalog in the root of the workspace for the current list of log files, their diagnostic purpose, and the commands to inspect them across all systems.
+
 ---
 
 ## 10. Network Topology & Hostnames

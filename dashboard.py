@@ -17,6 +17,7 @@ Repository Module Map Reference (loaded via dashboard_modules package):
 
 import csv
 import datetime
+import bisect
 import json
 import logging
 import os
@@ -139,7 +140,22 @@ class GridDashboard(tk.Tk):
     # --------------------------------------------------------------------------------------
 
     def __init__(self) -> None:
-        """Initializes the GridDashboard window, plot, and background supervisor."""
+        """Initializes the GridDashboard window, plots, and daemon background threads.
+
+        Configures the fullscreen window geometry, initializes telemetry and API
+        buffers, loads credentials, configures Matplotlib canvas elements, and
+        starts the background telemetry and stager supervisor loops.
+
+        Args:
+            None.
+
+        Returns:
+            None.
+
+        Raises:
+            Exception: Logs and handles any startup exceptions during GUI init or
+                file system checks.
+        """
         super().__init__()
         self.title("EMU-2 Grid Monitor")
         
@@ -1123,6 +1139,42 @@ class GridDashboard(tk.Tk):
                 se_load_power_timestamps_copy: List[datetime.datetime] = list(self.se_load_power_timestamps)
                 se_load_power_copy: List[float] = list(self.se_load_power)
 
+            now: datetime.datetime = datetime.datetime.now()
+            if self.current_slide == 1:
+                start_time: datetime.datetime = now - datetime.timedelta(hours=24)
+            else:
+                start_time = now - datetime.timedelta(hours=config.HISTORY_HOURS)
+
+            # Slice grid usage data to active window for rendering performance
+            if timestamps_copy:
+                start_idx: int = max(0, bisect.bisect_left(timestamps_copy, start_time) - 1)
+                timestamps_copy = timestamps_copy[start_idx:]
+                usage_copy = usage_copy[start_idx:]
+                
+                # If on Slide 2 and point count is extremely high, downsample with integer stride
+                if self.current_slide == 2 and len(usage_copy) > 10000:
+                    stride: int = len(usage_copy) // 5000
+                    timestamps_copy = timestamps_copy[::stride]
+                    usage_copy = usage_copy[::stride]
+
+            # Slice SolarEdge PV data to active window
+            if se_timestamps_copy:
+                start_idx = max(0, bisect.bisect_left(se_timestamps_copy, start_time) - 1)
+                se_timestamps_copy = se_timestamps_copy[start_idx:]
+                se_power_copy = se_power_copy[start_idx:]
+
+            # Slice Chillicon PV data to active window
+            if chilicon_timestamps_copy:
+                start_idx = max(0, bisect.bisect_left(chilicon_timestamps_copy, start_time) - 1)
+                chilicon_timestamps_copy = chilicon_timestamps_copy[start_idx:]
+                chilicon_power_copy = chilicon_power_copy[start_idx:]
+
+            # Slice SolarEdge Load power data to active window
+            if se_load_power_timestamps_copy:
+                start_idx = max(0, bisect.bisect_left(se_load_power_timestamps_copy, start_time) - 1)
+                se_load_power_timestamps_copy = se_load_power_timestamps_copy[start_idx:]
+                se_load_power_copy = se_load_power_copy[start_idx:]
+
             if len(usage_copy) > 1:
                 x_nums = mdates.date2num(timestamps_copy)
                 segments: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
@@ -1148,11 +1200,6 @@ class GridDashboard(tk.Tk):
             else:
                 self.load_line.set_data([], [])
 
-            now: datetime.datetime = datetime.datetime.now()
-            if self.current_slide == 1:
-                start_time: datetime.datetime = now - datetime.timedelta(hours=24)
-            else:
-                start_time = now - datetime.timedelta(hours=config.HISTORY_HOURS)
             self.ax.set_xlim(start_time, now)
 
             if usage_copy:
