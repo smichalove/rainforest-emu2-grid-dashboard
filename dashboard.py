@@ -740,13 +740,13 @@ class GridDashboard(tk.Tk):
 
         # Watermarks
         self.summary_text_obj = self.ax.text(
-            0.02, 0.95, "Awaiting AI Analysis...",
+            0.02, 1.02, "Awaiting AI Analysis...",
             transform=self.ax.transAxes, ha='left', va='top',
             fontsize=config.SUMMARY_FONT_SIZE, color=config.SUMMARY_COLOR, alpha=config.SUMMARY_ALPHA,
             fontfamily='monospace', weight='bold', zorder=10
         )
         self.summary_text_obj_freq = self.ax_freq.text(
-            0.02, 0.95, "Awaiting Frequency Domain Analysis...",
+            0.02, 1.02, "Awaiting Frequency Domain Analysis...",
             transform=self.ax_freq.transAxes, ha='left', va='top',
             fontsize=config.SUMMARY_FONT_SIZE, color=config.SUMMARY_COLOR, alpha=config.SUMMARY_ALPHA,
             fontfamily='monospace', weight='bold', zorder=10
@@ -1322,7 +1322,7 @@ class GridDashboard(tk.Tk):
 
             # Recreate watermark
             self.summary_text_obj_freq = self.ax_freq.text(
-                0.02, 0.95, self.wrap_text(self.local_dft_text),
+                0.02, 1.02, self.wrap_text(self.local_dft_text),
                 transform=self.ax_freq.transAxes, ha='left', va='top',
                 fontsize=config.SUMMARY_FONT_SIZE, color=config.SUMMARY_COLOR, alpha=config.SUMMARY_ALPHA,
                 fontfamily='monospace', weight='bold', zorder=10
