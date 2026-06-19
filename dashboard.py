@@ -216,11 +216,20 @@ class GridDashboard(tk.Tk):
         self.cached_full_history_spectrum: Dict[str, Any] = {}
 
         # Resolve paths
-        self.history_file = os.path.join(script_dir, 'grid_history.db')
-        self.se_history_file = os.path.join(script_dir, 'solaredge_history.csv')
-        self.se_battery_history_file = os.path.join(script_dir, 'solaredge_battery_history.csv')
-        self.se_flow_history_file = os.path.join(script_dir, 'solaredge_flow_history.csv')
-        self.chilicon_history_file = os.path.join(script_dir, 'chilicon_history.csv')
+        # Prioritize loading from Mac sync service directory if present
+        sync_dir = "/Users/treven/rainforest_db"
+        if os.path.exists(sync_dir):
+            self.history_file = os.path.join(sync_dir, "grid_history.db")
+            self.se_history_file = os.path.join(sync_dir, "solaredge_history.csv")
+            self.se_battery_history_file = os.path.join(sync_dir, "solaredge_battery_history.csv")
+            self.se_flow_history_file = os.path.join(sync_dir, "solaredge_flow_history.csv")
+            self.chilicon_history_file = os.path.join(sync_dir, "chilicon_history.csv")
+        else:
+            self.history_file = os.path.join(script_dir, 'grid_history.db')
+            self.se_history_file = os.path.join(script_dir, 'solaredge_history.csv')
+            self.se_battery_history_file = os.path.join(script_dir, 'solaredge_battery_history.csv')
+            self.se_flow_history_file = os.path.join(script_dir, 'solaredge_flow_history.csv')
+            self.chilicon_history_file = os.path.join(script_dir, 'chilicon_history.csv')
         self.summary_cache_file = os.path.join(script_dir, 'gemini_summary.json')
 
         # Load configurations and credentials
@@ -726,6 +735,10 @@ class GridDashboard(tk.Tk):
         self.lc = LineCollection([], linewidths=1.8, zorder=2)
         self.ax.add_collection(self.lc)
         self.load_line, = self.ax.plot([], [], color=config.CONSUMPTION_COLOR, label='Appliance Load (SE Approx)', linewidth=1.8, alpha=0.85, zorder=1.8)
+        self.battery_energy_line, = self.ax.plot([], [], color=config.BATTERY_ENERGY_COLOR, label='Battery Stored Energy (SoC)', linewidth=1.8, alpha=0.9, zorder=2.1)
+        self.battery_bottom_line, = self.ax.plot([], [], color=config.BATTERY_ENERGY_COLOR, label='_nolegend_', linewidth=1.0, alpha=0.4, zorder=2.0)
+        self.battery_rate_line, = self.ax.plot([], [], color=config.EXPORT_COLOR, label='Battery Discharge Rate (kW)', linewidth=1.5, alpha=0.8, zorder=2.0)
+        self.battery_fill = None
 
         # Slide 2 Axis (Frequency Domain)
         self.ax_freq = self.fig.add_axes(rect, facecolor='black')
@@ -1138,6 +1151,9 @@ class GridDashboard(tk.Tk):
                 chilicon_power_copy: List[float] = list(self.chilicon_power)
                 se_load_power_timestamps_copy: List[datetime.datetime] = list(self.se_load_power_timestamps)
                 se_load_power_copy: List[float] = list(self.se_load_power)
+                se_battery_timestamps_copy: List[datetime.datetime] = list(self.se_battery_timestamps)
+                se_battery_power_copy: List[float] = list(self.se_battery_power)
+                se_battery_soc_copy: List[float] = list(self.se_battery_soc)
 
             now: datetime.datetime = datetime.datetime.now()
             if self.current_slide == 1:
@@ -1175,6 +1191,13 @@ class GridDashboard(tk.Tk):
                 se_load_power_timestamps_copy = se_load_power_timestamps_copy[start_idx:]
                 se_load_power_copy = se_load_power_copy[start_idx:]
 
+            # Slice SolarEdge Battery data to active window
+            if se_battery_timestamps_copy:
+                start_idx = max(0, bisect.bisect_left(se_battery_timestamps_copy, start_time) - 1)
+                se_battery_timestamps_copy = se_battery_timestamps_copy[start_idx:]
+                se_battery_power_copy = se_battery_power_copy[start_idx:]
+                se_battery_soc_copy = se_battery_soc_copy[start_idx:]
+
             if len(usage_copy) > 1:
                 x_nums = mdates.date2num(timestamps_copy)
                 segments: List[Tuple[Tuple[float, float], Tuple[float, float]]] = []
@@ -1200,13 +1223,68 @@ class GridDashboard(tk.Tk):
             else:
                 self.load_line.set_data([], [])
 
+            if hasattr(self, 'battery_fill') and self.battery_fill is not None:
+                try:
+                    self.battery_fill.remove()
+                except Exception:
+                    pass
+                self.battery_fill = None
+
+            soc_kwh_copy = []
+            battery_bottom_copy = []
+            battery_rate_filtered = []
+            if len(se_battery_timestamps_copy) > 1:
+                for soc, power in zip(se_battery_soc_copy, se_battery_power_copy):
+                    if abs(power) < 0.05:
+                        soc_kwh_copy.append(float('nan'))
+                        battery_bottom_copy.append(float('nan'))
+                        battery_rate_filtered.append(float('nan'))
+                    else:
+                        # Top of battery (fill level): 100% SoC = 0.0, 20% SoC = -8.0
+                        soc_kwh_copy.append(soc * 0.1 - 10.0)
+                        # Bottom of battery: constant line at -10.0
+                        battery_bottom_copy.append(-10.0)
+                        if power > 0.05:
+                            # Only plot rate when discharging (discharge wattage above X)
+                            battery_rate_filtered.append(power)
+                        else:
+                            # Omit charging rate below X (slope of SoC is sufficient)
+                            battery_rate_filtered.append(float('nan'))
+                self.battery_energy_line.set_data(se_battery_timestamps_copy, soc_kwh_copy)
+                self.battery_bottom_line.set_data(se_battery_timestamps_copy, battery_bottom_copy)
+                self.battery_rate_line.set_data(se_battery_timestamps_copy, battery_rate_filtered)
+                
+                # Render a semi-transparent solid fill representing the energy level
+                self.battery_fill = self.ax.fill_between(
+                    se_battery_timestamps_copy,
+                    battery_bottom_copy,
+                    soc_kwh_copy,
+                    color=config.BATTERY_ENERGY_COLOR,
+                    alpha=0.15,
+                    zorder=1.9
+                )
+            else:
+                self.battery_energy_line.set_data([], [])
+                self.battery_bottom_line.set_data([], [])
+                self.battery_rate_line.set_data([], [])
+
             self.ax.set_xlim(start_time, now)
 
-            if usage_copy:
-                y_min: float = min(usage_copy)
-                y_max: float = max(usage_copy)
+            # Compute Y-limits dynamically so that the 10 kWh battery curve fits without clipping
+            all_y_vals = [y for y in usage_copy if y == y]
+            if len(se_load_power_copy) > 0:
+                all_y_vals.extend([y for y in se_load_power_copy if y == y])
+            if len(se_battery_timestamps_copy) > 0:
+                all_y_vals.extend([y for y in soc_kwh_copy if y == y])
+                all_y_vals.extend([y for y in battery_bottom_copy if y == y])
+                all_y_vals.extend([y for y in battery_rate_filtered if y == y])
+
+            if all_y_vals:
+                y_min: float = min(all_y_vals)
+                y_max: float = max(all_y_vals)
                 y_range: float = max(y_max - y_min, 1.0)
-                self.ax.set_ylim(min(0.0, y_min - 0.15 * y_range), max(0.0, y_max + 0.85 * y_range))
+                # Keep top range open to at least 10.0 to fit the battery capacity fully
+                self.ax.set_ylim(min(0.0, y_min - 0.15 * y_range), max(10.0, y_max + 0.15 * y_range))
 
             # Solar edge bar charts
             if not self.solar_off and hasattr(self, 'ax_bar'):
