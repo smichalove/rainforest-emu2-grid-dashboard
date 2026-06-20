@@ -5,6 +5,15 @@
 
 A robust, 24-hour real-time grid monitoring dashboard using a Rainforest EMU-2 smart meter connected to a Raspberry Pi. It automatically boots into a fullscreen kiosk mode over HDMI, safely bypasses modern Wayland graphic quirks, and seamlessly persists data to SQLite and local CSVs to survive power outages.
 
+> [!IMPORTANT]
+> **Core Architecture & Agentic Edge AI Capabilities:**
+> This repository provides a complete, edge-intelligent ecosystem for home microgrids:
+> * **Unified Microgrid Plotting:** Real-time 24-hour rolling visualization of smart meter grid consumption (Rainforest EMU-2/Eagle), SolarEdge solar PV generation, battery storage flow, and Chillicon microinverter data on a single dashboard layout.
+> * **Interactive Chat Interface (REPL):** A CLI dialog interface allowing you to query historical telemetry, analyze solar efficiency, and consult a local LLM/VLM in real-time.
+> * **Agentic Context & User Annotations:** The ability to log user annotations (e.g. appliance runs, Puget Sound Energy Flex events) that are automatically timestamped, stored persistently, and injected dynamically into LLM prompts as contextual intelligence.
+> 
+> *All Edge AI, chat, and agentic context features are fully supported on a **single NVIDIA Jetson Orin Nano** (8GB VRAM) running local Ollama inference models. Due to severe hardware and memory constraints, a standalone Raspberry Pi kiosk deployment **does not support local offline inference**; hence, the local chat interface and agentic capabilities require the Jetson (or an equivalent external Ollama server) to function. Alternatively, developers wishing to run these agentic and chat features in the cloud using Google Gemini must switch from the default cost-optimized cloud GCS batch mode (which only compiles baselines every 4 hours) to direct real-time Vertex AI API usage.*
+
 > [!NOTE]
 > **Product & Compatibility Note:** The Rainforest EMU-2 is a legacy hardware product that has been discontinued. For deployments using current-generation hardware, the **Rainforest EAGLE 3** features a local API that outputs a very similar XML structure, making this dashboard framework highly compatible and adaptable for it.
 
@@ -673,4 +682,36 @@ LIMIT 100;
 ## Future Scalability & Memory Management
 To prevent long-term file I/O latency, memory spikes, or SD card wear from infinitely expanding telemetry logs on the Raspberry Pi kiosk, a future roadmap has been drafted:
 * See [retention_and_memory_management_plan.md](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/planning/retention_and_memory_management_plan.md) for architectural options (including logrotate + tail primitives, SQLite databases, and hourly analytics compression) to optimize resource consumption and downstream ML performance on local networks.
+
+---
+
+## Interactive Context-Aware REPL Client (CLI)
+
+An interactive, terminal-based REPL chat client (`repl_client.py`) is included to let developers hold natural-language dialogues with the local VLM server, analyzing microgrid telemetry alongside saved user notes.
+
+### Core Capabilities
+* **Automatic Telemetry Aggregation**: When you type a query, the client reads the last 48 hours of SQLite data and CSV telemetry, generates a formatted hourly summary table, and prepends it to the LLM system prompt context dynamically.
+* **OS-Level Signal Handling**: Prevents terminal hanging by handling `SIGINT` (Ctrl-C) cleanly, allowing you to exit back to the shell safely at any time while keeping raw terminal formatting in sync.
+* **Flexible `/paste` Mode**: Type `/paste` or `/multiline` anywhere in your prompt to input raw multiline blocks (e.g. system logs) without the shell splitting them. Pressing `Ctrl-C` inside paste mode cancels the paste buffer and returns you to the normal prompt.
+* **Persistent Dialogue Archiving**: Logs all REPL conversations locally to `repl_chat_log.jsonl` in the sync folder for future offline analysis.
+* **Smart Database `/note` Logging**: Append `/note <message>` to any query. The client automatically infers the target timestamp from your conversation and logs the note to `user_annotations.json`.
+* **VLM-Powered `/summary` Command**: Type `/summary` to load all historical database annotations and conversation logs (ignoring time window filters) and trigger the local model to write a comprehensive natural-language synthesis of appliance signatures and server events.
+
+### Setup and Running the CLI
+1. Ensure the SQLite database and SolarEdge/Chillicon CSV files are synced to your local telemetry folder (defaults to `~/rainforest_db`).
+2. Run your local VLM server or Ollama endpoint (e.g. `localhost:11434` running `gemma4-it-q4:latest`).
+3. Set your configuration overrides in a `.env` file at the root level if different from default:
+   ```env
+   LOCAL_SERVER_URL=http://localhost:11434/api/chat
+   OLLAMA_MODEL=gemma4-it-q4:latest
+   RAINFOREST_SYNC_DIR=~/rainforest_db
+   ```
+4. Start the interactive REPL client:
+   ```bash
+   python3 repl_client.py
+   ```
+5. Run the logic validation tests:
+   ```bash
+   python3 test_repl_logic.py
+   ```
 

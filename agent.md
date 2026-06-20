@@ -218,6 +218,8 @@ graph TD
 #### Verification & Testing (Runs on developer workstation)
 - **[render_local_plot.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/render_local_plot.py)**: Mock desktop Tkinter GUI application that displays Slide 1 and Slide 2 layouts without hardware interfaces, simulating slide rotation, weather checks, and telemetry rendering.
 - **[plot_and_open.sh](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/plot_and_open.sh)**: Utility script that runs `render_local_plot.py` to capture and verify Matplotlib renderings.
+- **[repl_client.py](file:///Users/treven/rainforest-emu2-grid-dashboard-public/repl_client.py)**: Interactive context-aware terminal REPL client for querying local microgrid telemetry databases alongside user notes, utilizing local Ollama models.
+- **[test_repl_logic.py](file:///Users/treven/rainforest-emu2-grid-dashboard-public/test_repl_logic.py)**: Validation test suite for the REPL client logic, ensuring robust SIGINT handling, multi-line command parsing, and local database queries.
 
 #### Prompt Templates
 - **[gemma_hybrid_prompt.txt](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/gemma_hybrid_prompt.txt)**: Prompt template used by `stage_local_summary.py` to analyze time-domain metrics.
@@ -225,7 +227,26 @@ graph TD
 
 ---
 
-## 15. Implementation Plan & Roadmap Integrity
+## 15. Interactive Context-Aware REPL Client
+
+* **Script:** [repl_client.py](file:///Users/treven/rainforest-emu2-grid-dashboard-public/repl_client.py)
+* **Model:** Local Ollama server models (e.g., `gemma4-it-q4:latest` or vision models)
+* **Inputs:** Local SQLite telemetry (`grid_history.db`), CSV metrics (`solaredge_history.csv`, etc.), and user annotations (`user_annotations.json`)
+* **Outputs:** Persistent annotations stored in `user_annotations.json` and conversation archives in `repl_chat_log.jsonl`
+
+### Purpose
+To provide an interactive, context-aware command-line interface (REPL) that allows homeowners and developers to query local microgrid telemetry databases alongside user notes, utilizing local VLM/Ollama servers.
+
+### Core Features & Integrations
+1. **OS-Level Signal Handling**: Implements an explicit `SIGINT` (Ctrl-C) signal handler to override default macOS `libedit`/`readline` prompt overrides. It ensures the REPL can always be exited cleanly without python tracebacks, while dynamically managing handlers to allow keyboard interruptions during multiline paste mode.
+2. **Flexible Paste Commands**: Scans for `/paste` or `/multiline` anywhere in the user prompt (as a prefix, suffix, or inline trigger), automatically preserving other surrounding text as the starting context.
+3. **Escaped Newline Auto-Expansion**: Automatically parses literal `\n` backslash-escapes in the prompt buffer and expands them into real formatting newlines for cleaner model parsing.
+4. **Persistent Conversation Archival**: Saves all dialogue turns to `repl_chat_log.jsonl` in the sync folder so that dialogue details are preserved permanently for downstream agent analysis.
+5. **VLM-Powered Summary Command**: Provides a built-in `/summary` command that loads all historical user annotations and past chat logs (bypassing active 48-hour filters) and prompts the local model to write a comprehensive, natural-language synthesis of appliance signatures and server events.
+
+---
+
+## 16. Implementation Plan & Roadmap Integrity
 
 - **Preserve Uncommitted Plans & Roadmaps:**
   > [!IMPORTANT]
