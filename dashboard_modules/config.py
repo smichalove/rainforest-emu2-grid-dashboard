@@ -35,6 +35,8 @@ IMPORT_COLOR: str = '#f43f5e'          # Modern rose/crimson red
 EXPORT_COLOR: str = '#00ff00'          # Classic neon green
 EXPECTED_SOLAR_COLOR: str = '#ffff00'  # Bright yellow for expected weather-modulated solar
 CONSUMPTION_COLOR: str = 'white'     # White for household consumption / appliance load
+BATTERY_ENERGY_COLOR: str = 'dodgerblue'   # Neon blue/cyan for battery stored energy (kWh)
+BATTERY_RATE_COLOR: str = 'dodgerblue'     # Neon blue/cyan for battery charge/discharge rate (kW)
 
 # Slide Rotation Interval Settings (in milliseconds)
 SLIDE_1_DURATION_MS: int = 90000       # 1.5 minutes

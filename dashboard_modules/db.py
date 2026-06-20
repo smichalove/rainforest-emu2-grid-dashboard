@@ -281,3 +281,159 @@ def insert_analysis_history(db_path: str, record: Dict[str, Any]) -> bool:
         logging.error(f"Failed to insert analysis history record: {e}")
         return False
 
+
+def query_solaredge_history(
+    db_path: str,
+    cutoff_hours: int = 24,
+    reference_time: Optional[datetime.datetime] = None
+) -> Tuple[List[datetime.datetime], List[float], List[datetime.datetime], List[float], List[float]]:
+    """Queries SolarEdge PV and battery history tables from SQLite.
+
+    Args:
+        db_path: The absolute path to the SQLite database.
+        cutoff_hours: Number of hours in the past to load.
+        reference_time: Optional reference datetime.
+
+    Returns:
+        Tuple: (pv_timestamps, pv_power, battery_timestamps, battery_power, battery_soc)
+    """
+    pv_ts: List[datetime.datetime] = []
+    pv_power: List[float] = []
+    bat_ts: List[datetime.datetime] = []
+    bat_power: List[float] = []
+    bat_soc: List[float] = []
+
+    if not os.path.exists(db_path):
+        return pv_ts, pv_power, bat_ts, bat_power, bat_soc
+
+    ref = reference_time if reference_time is not None else datetime.datetime.now()
+    cutoff = ref - datetime.timedelta(hours=cutoff_hours)
+    cutoff_str = cutoff.isoformat()
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+
+        # Query SolarEdge PV power
+        cursor.execute(
+            "SELECT timestamp, pv_kw FROM solaredge_history WHERE timestamp > ? ORDER BY timestamp ASC",
+            (cutoff_str,)
+        )
+        for row in cursor.fetchall():
+            try:
+                pv_ts.append(datetime.datetime.fromisoformat(row[0]))
+                pv_power.append(float(row[1]))
+            except Exception as e:
+                logging.debug(f"Error parsing solaredge_history db row: {row} - {e}")
+
+        # Query SolarEdge Battery power & SoC
+        cursor.execute(
+            "SELECT timestamp, battery_kw, soc FROM solaredge_battery_history WHERE timestamp > ? ORDER BY timestamp ASC",
+            (cutoff_str,)
+        )
+        for row in cursor.fetchall():
+            try:
+                bat_ts.append(datetime.datetime.fromisoformat(row[0]))
+                bat_power.append(float(row[1]))
+                bat_soc.append(float(row[2]))
+            except Exception as e:
+                logging.debug(f"Error parsing solaredge_battery_history db row: {row} - {e}")
+
+        conn.close()
+    except sqlite3.Error as e:
+        logging.error(f"Failed to query SolarEdge database history: {e}")
+
+    return pv_ts, pv_power, bat_ts, bat_power, bat_soc
+
+
+def query_solaredge_flow_history(
+    db_path: str,
+    cutoff_hours: int = 24,
+    reference_time: Optional[datetime.datetime] = None
+) -> Tuple[List[datetime.datetime], List[float]]:
+    """Queries SolarEdge load flow history (specifically load_power_kw) from SQLite.
+
+    Args:
+        db_path: The absolute path to the SQLite database.
+        cutoff_hours: Number of hours in the past to load.
+        reference_time: Optional reference datetime.
+
+    Returns:
+        Tuple: (timestamps, load_power_kw)
+    """
+    load_ts: List[datetime.datetime] = []
+    load_power: List[float] = []
+
+    if not os.path.exists(db_path):
+        return load_ts, load_power
+
+    ref = reference_time if reference_time is not None else datetime.datetime.now()
+    cutoff = ref - datetime.timedelta(hours=cutoff_hours)
+    cutoff_str = cutoff.isoformat()
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT timestamp, load_power_kw FROM solaredge_flow_history WHERE timestamp > ? ORDER BY timestamp ASC",
+            (cutoff_str,)
+        )
+        for row in cursor.fetchall():
+            try:
+                load_ts.append(datetime.datetime.fromisoformat(row[0]))
+                load_power.append(float(row[1]))
+            except Exception as e:
+                logging.debug(f"Error parsing solaredge_flow_history db row: {row} - {e}")
+        conn.close()
+    except sqlite3.Error as e:
+        logging.error(f"Failed to query SolarEdge flow database history: {e}")
+
+    return load_ts, load_power
+
+
+def query_chilicon_history(
+    db_path: str,
+    cutoff_hours: int = 24,
+    reference_time: Optional[datetime.datetime] = None
+) -> Tuple[List[datetime.datetime], List[float], List[float]]:
+    """Queries Chillicon PV history (power_kw and lifetime_wh) from SQLite.
+
+    Args:
+        db_path: The absolute path to the SQLite database.
+        cutoff_hours: Number of hours in the past to load.
+        reference_time: Optional reference datetime.
+
+    Returns:
+        Tuple: (timestamps, power_kw, lifetime_wh)
+    """
+    ch_ts: List[datetime.datetime] = []
+    ch_power: List[float] = []
+    ch_energy: List[float] = []
+
+    if not os.path.exists(db_path):
+        return ch_ts, ch_power, ch_energy
+
+    ref = reference_time if reference_time is not None else datetime.datetime.now()
+    cutoff = ref - datetime.timedelta(hours=cutoff_hours)
+    cutoff_str = cutoff.isoformat()
+
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT timestamp, power_kw, lifetime_wh FROM chilicon_history WHERE timestamp > ? ORDER BY timestamp ASC",
+            (cutoff_str,)
+        )
+        for row in cursor.fetchall():
+            try:
+                ch_ts.append(datetime.datetime.fromisoformat(row[0]))
+                ch_power.append(float(row[1]))
+                ch_energy.append(float(row[2]))
+            except Exception as e:
+                logging.debug(f"Error parsing chilicon_history db row: {row} - {e}")
+        conn.close()
+    except sqlite3.Error as e:
+        logging.error(f"Failed to query Chillicon database history: {e}")
+
+    return ch_ts, ch_power, ch_energy
+

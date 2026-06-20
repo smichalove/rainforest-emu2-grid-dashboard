@@ -9,14 +9,14 @@ echo "Generating kiosk dashboard preview screenshot..."
 ./venv/bin/python3 render_local_plot.py --screenshot --close
 
 echo "Opening dashboard previews..."
-if [ -f "dashboard_preview_full.jpeg" ]; then
-    open dashboard_preview_full.jpeg
-    open dashboard_preview_slide2_full.jpeg
-    open dashboard_preview_slide3_full.jpeg
+if [ -f "1_slide_full.jpeg" ]; then
+    open 1_slide_full.jpeg
+    open 2_slide_full.jpeg
+    open 3_slide_full.jpeg
 else
-    open dashboard_preview.jpeg
-    open dashboard_preview_slide2.jpeg
-    open dashboard_preview_slide3.jpeg
+    open 1_slide.jpeg
+    open 2_slide.jpeg
+    open 3_slide.jpeg
 fi
 
 echo "Done!"

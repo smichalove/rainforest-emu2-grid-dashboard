@@ -38,11 +38,15 @@ class SolarEdgeClient:
     def load_history(self, cutoff_hours: int = 24) -> Tuple[
         List[datetime.datetime], List[float], List[datetime.datetime], List[float], List[float]
     ]:
-        """Loads historical SolarEdge data from CSV, cleaning corruptions.
+        """Loads historical SolarEdge data from SQLite database or CSV, cleaning corruptions.
 
         Returns:
             Tuple: (pv_timestamps, pv_power, battery_timestamps, battery_power, battery_soc)
         """
+        if self.history_file.endswith('.db'):
+            from . import db
+            return db.query_solaredge_history(self.history_file, cutoff_hours)
+
         now = datetime.datetime.now()
         cutoff = now - datetime.timedelta(hours=cutoff_hours)
 
@@ -83,7 +87,7 @@ class SolarEdgeClient:
         return pv_ts, pv_power, bat_ts, bat_power, bat_soc
 
     def load_flow_history(self, cutoff_hours: int = 24) -> Tuple[List[datetime.datetime], List[float]]:
-        """Loads historical SolarEdge flow data (specifically load_power) from CSV.
+        """Loads historical SolarEdge flow data (specifically load_power) from SQLite database or CSV.
 
         Args:
             cutoff_hours: Number of hours in the past to load.
@@ -91,6 +95,10 @@ class SolarEdgeClient:
         Returns:
             Tuple of (timestamps, load_power_in_kw).
         """
+        if self.flow_history_file.endswith('.db'):
+            from . import db
+            return db.query_solaredge_flow_history(self.flow_history_file, cutoff_hours)
+
         now = datetime.datetime.now()
         cutoff = now - datetime.timedelta(hours=cutoff_hours)
         
@@ -224,11 +232,15 @@ class ChilliconClient:
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookie_jar))
 
     def load_history(self, cutoff_hours: int = 24) -> Tuple[List[datetime.datetime], List[float], List[float]]:
-        """Loads historical Chillicon generation data from CSV.
+        """Loads historical Chillicon generation data from SQLite database or CSV.
 
         Returns:
             Tuple of lists: (timestamps, power_in_kw, total_daily_energy_in_wh).
         """
+        if self.history_file.endswith('.db'):
+            from . import db
+            return db.query_chilicon_history(self.history_file, cutoff_hours)
+
         now = datetime.datetime.now()
         cutoff = now - datetime.timedelta(hours=cutoff_hours)
 
