@@ -21,6 +21,9 @@ You are a senior microgrid AI verifier and critic. Your job is to review a draft
 - Recent Net Grid Demand Slope (dG/dt): {grid_slope:.2f} kW/hr
 {warning_context}
 
+=== USER ANNOTATIONS ===
+{annotations_str}
+
 === VERIFICATION & CORRECTION RULES ===
 1. **PSE Flex Event Validation**: A PSE Flex event must ONLY be reported if active battery discharging is positive (`delta_bat_discharge` > 0.1 kWh, currently {delta_bat_discharge:.2f} kWh). If the proposer draft claims a Flex event but discharging is <= 0.1 kWh, REMOVE all references to a Flex event. Check that the draft correctly notes the post-Flex recycle phase draws ~0.96 kWh of additional energy (causing a normal grid import spike), which is normal expected system behavior rather than an unexplained load spike.
 2. **Air Conditioning (A/C) Cycling**: Verify if A/C cycling (represented as a heavy cyclical drone of 1.5 kW to 3.5 kW) is mentioned. If it did not occur (max power {se_load_max:.2f} kW is less than 1.5 kW), make sure the draft does not fabricate it.

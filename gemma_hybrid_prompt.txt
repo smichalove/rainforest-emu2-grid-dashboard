@@ -17,6 +17,9 @@ Live Telemetry since baseline ({baseline_time} to {current_time}):
 - SolarEdge Appliance Load (Approx) Energy: {delta_se_load:.2f} kWh
 - SolarEdge Appliance Load (Approx) Power: Min {se_load_min:.2f} kW | Max {se_load_max:.2f} kW | Avg {se_load_avg:.2f} kW
 
+=== USER ANNOTATIONS ===
+{annotations_str}
+
 === ENVIRONMENTAL & SEASONAL PREDICTORS ===
 - Current Month: {month_name} (Seasonal Baseline)
 - Day Type: {day_type} (Weekday vs. Weekend demand predictor)

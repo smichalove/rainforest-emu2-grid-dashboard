@@ -75,6 +75,10 @@ All Python code must strictly follow the Google Python Style Guide and readabili
   > [!IMPORTANT]
   > For every command executed or proposed on the terminal, the agent must provide a quick, one-line explanation of what the command does and why it is being executed.
 
+- **Script Path Portability (Absolute / Resolved Paths):**
+  > [!IMPORTANT]
+  > When writing or modifying shell scripts (`.sh`), never use un-anchored relative paths (like `./`) for file interactions or script executions. Always dynamically resolve the script's directory (using `SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"`) or use home directory references (like `~/`) to ensure the script operates correctly regardless of the caller's working directory.
+
 ---
 
 ## 5. Dependency Pinned Requirements

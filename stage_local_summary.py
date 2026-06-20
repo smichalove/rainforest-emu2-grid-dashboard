@@ -124,6 +124,28 @@ def parse_timestamp(ts_str: str) -> Optional[datetime.datetime]:
         return None
 
 
+def load_annotations(backup_dir: str) -> List[Dict[str, str]]:
+    """Loads existing user annotations from the sync folder database.
+
+    Args:
+        backup_dir: Path to the backups folder containing user_annotations.json.
+
+    Returns:
+        A list of annotation dictionaries, e.g. [{"timestamp": "...", "annotation": "..."}].
+    """
+    path: str = os.path.join(backup_dir, "user_annotations.json")
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+        except Exception as e:
+            logging.error(f"Failed to read user annotations on stager: {e}")
+    return []
+
+
+
 WEATHER_CACHE_FILE: str = os.path.join(SCRIPT_DIR, "weather_cache.json")
 
 def fetch_weather(lat: str = DEFAULT_LAT, lon: str = DEFAULT_LON) -> Tuple[Optional[float], Optional[float], Optional[str], Optional[str]]:
@@ -1411,6 +1433,22 @@ def calculate_analysis_metrics_and_prompts(
                 baseline_dt = datetime.datetime.now()
                 baseline_ts_str = baseline_dt.strftime("%Y-%m-%d %H:%M:%S")
 
+    # Load and filter user annotations since baseline_dt
+    annotations_list = load_annotations(BACKUP_DIR)
+    recent_annotations = []
+    if baseline_dt:
+        for ann in annotations_list:
+            ann_ts = parse_timestamp(ann.get("timestamp", ""))
+            if ann_ts and ann_ts >= baseline_dt:
+                recent_annotations.append(ann)
+
+    if recent_annotations:
+        annotations_str = "\n".join(
+            [f"- [{ann['timestamp']}]: {ann['annotation']}" for ann in recent_annotations]
+        )
+    else:
+        annotations_str = "No user annotations logged in this window."
+
     # 1. Fetch weather forecast (with sunrise/sunset)
     temp_max, cloud_cover, sunrise, sunset = fetch_weather()
     
@@ -1592,6 +1630,9 @@ Live Telemetry since baseline ({baseline_time} to {current_time}):
 - SolarEdge Appliance Load (Approx) Energy: {delta_se_load:.2f} kWh
 - SolarEdge Appliance Load (Approx) Power: Min {se_load_min:.2f} kW | Max {se_load_max:.2f} kW | Avg {se_load_avg:.2f} kW
 
+=== USER ANNOTATIONS ===
+{annotations_str}
+
 Output:
 """
 
@@ -1669,7 +1710,8 @@ Explanation:
         grid_slope=grid_slope,
         warning_context=f"\nStatistical Anomaly Warnings (Keep these in mind for your analysis):\n{warning_context}" if warning_context else "",
         remaining_lines=remaining_lines,
-        day_date=day_date
+        day_date=day_date,
+        annotations_str=annotations_str
     )
     
     formatted_dft_prompt = dft_prompt_template.format(
@@ -1746,6 +1788,7 @@ Output:
         "formatted_prompt": formatted_prompt,
         "formatted_dft_prompt": formatted_dft_prompt,
         "formatted_history_prompt": formatted_history_prompt,
+        "annotations_str": annotations_str,
         "temp_max": temp_max,
         "cloud_cover": cloud_cover,
         "solar_weather_modulation": solar_weather_modulation,
@@ -1848,7 +1891,8 @@ def format_verify_prompts(
             "Proposer draft: {proposer_draft}\n"
             "Verify this draft. Net Grid Import: {delta_import:.2f} kWh, "
             "Net Grid Export: {delta_export:.2f} kWh, "
-            "Battery Discharged: {delta_bat_discharge:.2f} kWh."
+            "Battery Discharged: {delta_bat_discharge:.2f} kWh.\n"
+            "=== USER ANNOTATIONS ===\n{annotations_str}"
         )
 
     verify_dft_template: str = ""
@@ -1911,7 +1955,8 @@ def format_verify_prompts(
         grid_slope=analysis_data.get("grid_slope", 0.0),
         warning_context=analysis_data.get("warning_context", ""),
         remaining_lines=remaining_lines,
-        proposer_draft=proposer_draft
+        proposer_draft=proposer_draft,
+        annotations_str=analysis_data.get("annotations_str", "No user annotations logged in this window.")
     )
 
     # Check phase separation and correlation safely

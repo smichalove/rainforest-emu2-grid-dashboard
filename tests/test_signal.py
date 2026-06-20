@@ -172,7 +172,8 @@ def test_prompt_formatting_success() -> None:
             consumption_12h_snr_db=14.5,
             warning_context="",
             batch_interval_hours=4,
-            remaining_lines=15
+            remaining_lines=15,
+            annotations_str="No user annotations logged."
         )
         assert "- Solar Weather Modulation Factor: 0.50" in formatted
         assert "- SolarEdge Diurnal Peak Hour (NW Array): 11:30" in formatted

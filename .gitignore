@@ -21,6 +21,8 @@ merged_summary.json
 emulated_jobs.json
 emulation_results.txt
 sample_rendering.txt
+*.dmg
+Antigravity.dmg
 
 # Design documentation files
 *.docx
