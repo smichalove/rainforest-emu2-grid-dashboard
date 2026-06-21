@@ -639,6 +639,17 @@ export DISPLAY=:0 && python3 dashboard.py
 export DISPLAY=:0 && python3 dashboard.py --localllm
 ```
 
+#### D. Interactive Chat Client (REPL)
+To chat interactively with the local edge AI using synced telemetry and database history, run:
+```bash
+~/run_gridchat
+```
+or run the python client directly:
+```bash
+python3 repl_client.py
+```
+This client automatically queries the local edge model (Ollama) on the RTX 4060 GPU server, dynamically builds a local SQLite database (`local_repl.db`) from synced CSV files to serve as context, integrates the past 168-hour history, and supports multimodal queries (with `/image <path>`) as well as local note logs (`/note <message>`).
+
 If you do not have a SolarEdge solar system configured and want to completely disable SolarEdge telemetry querying, history loading, bar chart plotting, and aligned aggregations, run the dashboard using the `--solaroff` option:
 ```bash
 python3 dashboard.py --solaroff

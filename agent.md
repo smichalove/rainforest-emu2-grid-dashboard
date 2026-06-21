@@ -271,3 +271,67 @@ graph TD
 - **Proactive Status Updates:**
   - You must keep all roadmap files, task lists (`task.md`), and planning documents up-to-date. As soon as a feature is completed, tested, or deployed, update its status using explicit **[DONE]**, **[RESOLVED]**, or `[x]` checkmarks.
 
+---
+
+## 17. SQLite Database Schema & Telemetry Semantics
+
+Any AI agent interacting with this repository or writing telemetry query code must conform to the following schema and semantic rules:
+
+### Database: `grid_history.db`
+This database serves as the unified storage for raw and aggregated microgrid metrics.
+
+1. **`grid_history`** (overall net household grid demand)
+   - `timestamp` (TEXT PRIMARY KEY) - ISO format naive timestamp (`YYYY-MM-DDTHH:MM:SS.mmmmmm`)
+   - `kw` (REAL NOT NULL) - Net grid power demand in kW. **Positive values = importing** power from utility grid; **Negative values = exporting/feeding** power back to the grid.
+   - Index: `idx_grid_timestamp ON grid_history(timestamp)`
+
+2. **`solaredge_history`** (Northwest Solar PV array generation)
+   - `timestamp` (TEXT PRIMARY KEY) - ISO format timestamp (`YYYY-MM-DDTHH:MM:SS`)
+   - `pv_kw` (REAL NOT NULL) - Northwest (NW) SolarEdge solar PV array generation in kW.
+   - Index: `idx_se_timestamp ON solaredge_history(timestamp)`
+
+3. **`solaredge_battery_history`** (battery power flow and SoC status)
+   - `timestamp` (TEXT PRIMARY KEY) - ISO format timestamp (`YYYY-MM-DDTHH:MM:SS`)
+   - `battery_kw` (REAL NOT NULL) - Battery power charging/discharging in kW. **Positive values = charging/storing** energy; **Negative values = discharging/releasing** energy back to the house/grid.
+   - `soc` (REAL NOT NULL) - State of charge percentage (0.0 to 100.0).
+   - Index: `idx_se_bat_timestamp ON solaredge_battery_history(timestamp)`
+
+4. **`solaredge_flow_history`** (integrated house power flow records)
+   - `timestamp` (TEXT PRIMARY KEY) - ISO format timestamp (`YYYY-MM-DDTHH:MM:SS`)
+   - `pv_power_kw` (REAL NOT NULL) - Combined active Solar PV production in kW.
+   - `load_power_kw` (REAL NOT NULL) - Total household load/consumption power draw in kW.
+   - `grid_import_kw` (REAL NOT NULL) - Active grid import in kW.
+   - `grid_export_kw` (REAL NOT NULL) - Active grid export in kW.
+   - Index: `idx_se_flow_timestamp ON solaredge_flow_history(timestamp)`
+
+5. **`chilicon_history`** (Southwest Solar PV array generation)
+   - `timestamp` (TEXT PRIMARY KEY) - ISO format timestamp (`YYYY-MM-DDTHH:MM:SS`)
+   - `power_kw` (REAL NOT NULL) - Southwest (SW) Solar PV array microinverter generation in kW.
+   - `lifetime_wh` (REAL NOT NULL) - Cumulative lifetime energy production in Wh.
+   - Index: `idx_ch_timestamp ON chilicon_history(timestamp)`
+
+### Database: `analysis_history.db`
+Stores Edge AI daily summary history and frequency metrics.
+
+1. **`analysis_history`**
+   - `timestamp` (TEXT PRIMARY KEY) - Timestamp of execution.
+   - `baseline_timestamp` (TEXT), `baseline_text` (TEXT), `summary_text` (TEXT), `dft_explanation` (TEXT).
+   - `delta_import`, `delta_export`, `delta_peak`, `delta_solar`, `delta_se_solar`, `delta_ch_solar`, `delta_bat_charge`, `delta_bat_discharge`, `delta_se_load` (all REAL).
+   - `se_load_min`, `se_load_max`, `se_load_avg` (REAL).
+   - `expected_temp_max`, `expected_cloud_cover` (REAL).
+   - `spectral_metrics_json` (TEXT - JSON serialized DFT amplitudes/SNRs).
+   - `escalation_status` (TEXT), `escalation_timestamp` (TEXT).
+
+### Critical Semantic Disambiguation Warnings
+> [!IMPORTANT]
+> * **Chilicon vs. Chiller**: `chilicon_history` tracks Southwest (SW) Solar PV array generation. It is **NOT** a chiller or cooling load database.
+> * **No Chiller Table**: The microgrid has no separate sub-meter table tracking chiller consumption. Any chiller load is bundled under the general household load (`load_power_kw` in `solaredge_flow_history`).
+> * **EV Vehicles**: The homeowner does **NOT** own an electric vehicle. Never mention EV, EV charging, or car charging under any circumstances.
+
+### Mathematical Integration Warning (kW vs. kWh)
+> [!WARNING]
+> * **No Direct Summation on Raw Data**: The database tables (`grid_history`, `solaredge_history`, `chilicon_history`, `solaredge_battery_history`) store raw, periodic **instantaneous power readings (kW)** at irregular intervals (e.g. 5 to 15 minutes). Running a simple `SUM(kw)` or `SUM(pv_kw)` query directly on the raw tables will yield an incorrect result that is 4x to 12x too large.
+> * **Riemann Sum Requirement**: To compute energy (kWh) over a duration, you must write queries or code that computes the time-weighted integral: $\text{Energy} = \sum \left( \text{Power}_i \times \Delta t_i \right)$, where $\Delta t_i$ is the time difference in hours between samples.
+> * **Hourly Average Tables**: If you are using pre-aggregated hourly average tables (where each row represents a distinct 1-hour interval), summing the hourly average power (kW) values is mathematically correct because the time delta is $\Delta t = 1$ hour.
+
+

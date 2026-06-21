@@ -16,6 +16,7 @@ import json
 import os
 import re
 import readline
+import shutil
 import signal
 import sqlite3
 import sys
@@ -55,7 +56,7 @@ OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "gemma4-it-q4:latest")
 SYNC_DIR: str = os.getenv("RAINFOREST_SYNC_DIR", "/Users/treven/rainforest_db")
 DEFAULT_TEMPERATURE: float = 0.2
 DEFAULT_MAX_NEW_TOKENS: int = 4096
-TELEMETRY_WINDOW_HOURS: int = 48
+TELEMETRY_WINDOW_HOURS: int = 168
 
 
 def parse_time_str(ts_str: str) -> Optional[datetime.datetime]:
@@ -84,6 +85,38 @@ def parse_time_str(ts_str: str) -> Optional[datetime.datetime]:
         return None
 
 
+def load_system_prompt(file_name: str = "repl_system_prompt.txt") -> str:
+    """Loads the system prompt template from an external file on disk.
+
+    Args:
+        file_name: The filename of the prompt template (e.g., 'repl_system_prompt.txt').
+
+    Returns:
+        The raw string content of the system prompt template.
+    """
+    script_dir: str = os.path.dirname(os.path.abspath(__file__))
+    file_path: str = os.path.join(script_dir, file_name)
+    if not os.path.exists(file_path):
+        file_path = file_name
+
+    if os.path.exists(file_path):
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception as e:
+            print(f"[Warning] Failed to read prompt template: {e}")
+
+    # Fallback prompt in case the file cannot be read/accessed
+    return (
+        "You are a helpful Edge AI microgrid assistant analyzing electrical telemetry data for Steven's house.\n"
+        "The grid import and export values, Solar PV yield, battery state-of-charge (SoC), and charging rates are monitored.\n"
+        "=== {telemetry_window_hours}-HOUR TELEMETRY DATA ===\n"
+        "{telemetry_table}\n"
+        "=== USER ANNOTATIONS ===\n"
+        "{annotations_str}\n"
+    )
+
+
 def encode_image_to_base64(file_path: str) -> Optional[str]:
     """Reads and encodes an image file to a base64 string.
 
@@ -105,6 +138,130 @@ def encode_image_to_base64(file_path: str) -> Optional[str]:
         return None
 
 
+def build_local_database(sync_dir: str) -> str:
+    """Builds a local database containing all synced CSV tables and grid history.
+
+    Copies the raw grid_history.db and migrates the SolarEdge, battery, flow,
+    and Chilicon CSV records into it.
+
+    Args:
+        sync_dir: The directory containing synced telemetry CSVs and grid_history.db.
+
+    Returns:
+        The path to the local unified SQLite database.
+    """
+    src_db: str = os.path.join(sync_dir, "grid_history.db")
+    dest_db: str = os.path.join(sync_dir, "local_repl.db")
+
+    # Copy raw database if it exists
+    if os.path.exists(src_db):
+        try:
+            shutil.copy2(src_db, dest_db)
+        except Exception as e:
+            print(f"[Warning] Failed to copy grid_history.db to local_repl.db: {e}")
+            if not os.path.exists(dest_db):
+                # Try to initialize empty
+                conn = sqlite3.connect(dest_db)
+                conn.close()
+    else:
+        # Create empty db
+        try:
+            conn = sqlite3.connect(dest_db)
+            conn.close()
+        except Exception as e:
+            print(f"[Error] Failed to initialize local_repl.db: {e}")
+            return src_db  # Fallback
+
+    try:
+        conn = sqlite3.connect(dest_db)
+        cursor = conn.cursor()
+
+        # Initialize grid_history table just in case it didn't exist or database was blank
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS grid_history (
+                timestamp TEXT PRIMARY KEY,
+                kw REAL NOT NULL
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_grid_timestamp ON grid_history(timestamp)")
+
+        # Helper to migrate CSV to table
+        def migrate_csv_to_table(
+            csv_name: str, create_sql: str, insert_sql: str, index_sql: str, col_indices: List[int]
+        ) -> None:
+            csv_path: str = os.path.join(sync_dir, csv_name)
+            if not os.path.exists(csv_path):
+                return
+            cursor.execute(create_sql)
+            cursor.execute(index_sql)
+            rows: List[Tuple[str, ...]] = []
+            try:
+                with open(csv_path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line or "," not in line:
+                            continue
+                        parts = line.split(",")
+                        ts = parts[0].strip()
+                        try:
+                            # Extract columns
+                            row_vals = [ts]
+                            for idx in col_indices:
+                                row_vals.append(float(parts[idx]))
+                            rows.append(tuple(row_vals))
+                        except (ValueError, IndexError):
+                            continue
+            except Exception as e:
+                print(f"[Warning] Failed to read {csv_name} during migration: {e}")
+                return
+
+            if rows:
+                cursor.executemany(insert_sql, rows)
+
+        # 1. Migrate SolarEdge PV History
+        migrate_csv_to_table(
+            "solaredge_history.csv",
+            "CREATE TABLE IF NOT EXISTS solaredge_history (timestamp TEXT PRIMARY KEY, pv_kw REAL NOT NULL)",
+            "INSERT OR IGNORE INTO solaredge_history (timestamp, pv_kw) VALUES (?, ?)",
+            "CREATE INDEX IF NOT EXISTS idx_se_timestamp ON solaredge_history(timestamp)",
+            [1]
+        )
+
+        # 2. Migrate SolarEdge Battery History
+        migrate_csv_to_table(
+            "solaredge_battery_history.csv",
+            "CREATE TABLE IF NOT EXISTS solaredge_battery_history (timestamp TEXT PRIMARY KEY, battery_kw REAL NOT NULL, soc REAL NOT NULL)",
+            "INSERT OR IGNORE INTO solaredge_battery_history (timestamp, battery_kw, soc) VALUES (?, ?, ?)",
+            "CREATE INDEX IF NOT EXISTS idx_se_bat_timestamp ON solaredge_battery_history(timestamp)",
+            [1, 2]
+        )
+
+        # 3. Migrate SolarEdge Flow History (Load)
+        migrate_csv_to_table(
+            "solaredge_flow_history.csv",
+            "CREATE TABLE IF NOT EXISTS solaredge_flow_history (timestamp TEXT PRIMARY KEY, pv_power_kw REAL NOT NULL, load_power_kw REAL NOT NULL, grid_import_kw REAL NOT NULL, grid_export_kw REAL NOT NULL)",
+            "INSERT OR IGNORE INTO solaredge_flow_history (timestamp, pv_power_kw, load_power_kw, grid_import_kw, grid_export_kw) VALUES (?, ?, ?, ?, ?)",
+            "CREATE INDEX IF NOT EXISTS idx_se_flow_timestamp ON solaredge_flow_history(timestamp)",
+            [1, 2, 3, 4]
+        )
+
+        # 4. Migrate Chillicon History
+        migrate_csv_to_table(
+            "chilicon_history.csv",
+            "CREATE TABLE IF NOT EXISTS chilicon_history (timestamp TEXT PRIMARY KEY, power_kw REAL NOT NULL, lifetime_wh REAL NOT NULL)",
+            "INSERT OR IGNORE INTO chilicon_history (timestamp, power_kw, lifetime_wh) VALUES (?, ?, ?)",
+            "CREATE INDEX IF NOT EXISTS idx_ch_timestamp ON chilicon_history(timestamp)",
+            [1, 2]
+        )
+
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[Warning] Failed to migrate CSVs to local database: {e}")
+
+    return dest_db
+
+
 def load_telemetry_table(sync_dir: str, window_hours: int = 48) -> str:
     """Loads and aggregates local microgrid telemetry logs into a markdown table.
 
@@ -115,121 +272,119 @@ def load_telemetry_table(sync_dir: str, window_hours: int = 48) -> str:
     Returns:
         A formatted markdown table representing the hourly data blocks.
     """
+    db_path: str = build_local_database(sync_dir)
+
     now_dt: datetime.datetime = datetime.datetime.now()
     start_dt: datetime.datetime = now_dt - datetime.timedelta(hours=window_hours)
     start_hour_dt: datetime.datetime = start_dt.replace(minute=0, second=0, microsecond=0)
-    
+
     # Generate the hourly keys
     target_hours: List[datetime.datetime] = [
         start_hour_dt + datetime.timedelta(hours=i) for i in range(window_hours + 1)
     ]
     hour_keys: List[str] = [dt.strftime("%Y-%m-%d %H:00") for dt in target_hours]
-    
+
     # Initialize the data map
-    data: Dict[str, Dict[str, List[float]]] = {
+    data: Dict[str, Dict[str, float]] = {
         hk: {
-            "grid": [],
-            "se": [],
-            "ch": [],
-            "bat_power": [],
-            "bat_soc": [],
-            "load": []
+            "grid": 0.0,
+            "se": 0.0,
+            "ch": 0.0,
+            "bat_power": 0.0,
+            "bat_soc": 0.0,
+            "load": 0.0
         }
         for hk in hour_keys
     }
-    
-    # 1. Fetch grid history from SQLite
-    grid_db_path: str = os.path.join(sync_dir, "grid_history.db")
-    if os.path.exists(grid_db_path):
-        try:
-            conn = sqlite3.connect(grid_db_path)
-            cursor = conn.cursor()
-            cutoff_str: str = start_hour_dt.isoformat()
-            cursor.execute(
-                "SELECT timestamp, kw FROM grid_history WHERE timestamp >= ? ORDER BY timestamp ASC",
-                (cutoff_str,)
-            )
-            for row in cursor.fetchall():
-                ts: Optional[datetime.datetime] = parse_time_str(row[0])
-                if ts:
-                    hk: str = ts.strftime("%Y-%m-%d %H:00")
-                    if hk in data:
-                        data[hk]["grid"].append(float(row[1]))
-            conn.close()
-        except Exception as e:
-            print(f"[Warning] Failed to query grid database: {e}")
 
-    # Helper function to parse CSV files safely
-    def parse_csv_into_data(file_name: str, keys: List[str], col_map: Dict[str, int]) -> None:
-        file_path: str = os.path.join(sync_dir, file_name)
-        if os.path.exists(file_path):
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line or "," not in line:
-                            continue
-                        parts: List[str] = line.split(",")
-                        ts: Optional[datetime.datetime] = parse_time_str(parts[0])
-                        if ts:
-                            hk: str = ts.strftime("%Y-%m-%d %H:00")
-                            if hk in data:
-                                for key_name, col_idx in col_map.items():
-                                    if len(parts) > col_idx:
-                                        try:
-                                            val: float = float(parts[col_idx])
-                                            data[hk][key_name].append(val)
-                                        except ValueError:
-                                            pass
-            except Exception as e:
-                print(f"[Warning] Failed to read {file_name}: {e}")
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
+        cutoff_str: str = start_hour_dt.isoformat()
 
-    # 2. Parse SolarEdge CSV
-    parse_csv_into_data("solaredge_history.csv", hour_keys, {"se": 1})
-    
-    # 3. Parse Chillicon CSV
-    parse_csv_into_data("chilicon_history.csv", hour_keys, {"ch": 1})
-    
-    # 4. Parse battery state CSV
-    parse_csv_into_data("solaredge_battery_history.csv", hour_keys, {"bat_power": 1, "bat_soc": 2})
-    
-    # 5. Parse flow power CSV
-    parse_csv_into_data("solaredge_flow_history.csv", hour_keys, {"load": 2})
+        # 1. Fetch grid average power per hour
+        cursor.execute("""
+            SELECT strftime('%Y-%m-%d %H:00', timestamp) as hr, AVG(kw) 
+            FROM grid_history 
+            WHERE timestamp >= ? 
+            GROUP BY hr
+        """, (cutoff_str,))
+        for row in cursor.fetchall():
+            if row[0] in data:
+                data[row[0]]["grid"] = float(row[1])
+
+        # 2. Fetch SolarEdge PV average power per hour
+        cursor.execute("""
+            SELECT strftime('%Y-%m-%d %H:00', timestamp) as hr, AVG(pv_kw) 
+            FROM solaredge_history 
+            WHERE timestamp >= ? 
+            GROUP BY hr
+        """, (cutoff_str,))
+        for row in cursor.fetchall():
+            if row[0] in data:
+                data[row[0]]["se"] = float(row[1])
+
+        # 3. Fetch Chillicon PV average power per hour
+        cursor.execute("""
+            SELECT strftime('%Y-%m-%d %H:00', timestamp) as hr, AVG(power_kw) 
+            FROM chilicon_history 
+            WHERE timestamp >= ? 
+            GROUP BY hr
+        """, (cutoff_str,))
+        for row in cursor.fetchall():
+            if row[0] in data:
+                data[row[0]]["ch"] = float(row[1])
+
+        # 4. Fetch Battery average power and SoC per hour
+        cursor.execute("""
+            SELECT strftime('%Y-%m-%d %H:00', timestamp) as hr, AVG(battery_kw), AVG(soc) 
+            FROM solaredge_battery_history 
+            WHERE timestamp >= ? 
+            GROUP BY hr
+        """, (cutoff_str,))
+        for row in cursor.fetchall():
+            if row[0] in data:
+                data[row[0]]["bat_power"] = float(row[1])
+                data[row[0]]["bat_soc"] = float(row[2])
+
+        # 5. Fetch Load flow average power per hour
+        cursor.execute("""
+            SELECT strftime('%Y-%m-%d %H:00', timestamp) as hr, AVG(load_power_kw) 
+            FROM solaredge_flow_history 
+            WHERE timestamp >= ? 
+            GROUP BY hr
+        """, (cutoff_str,))
+        for row in cursor.fetchall():
+            if row[0] in data:
+                data[row[0]]["load"] = float(row[1])
+
+        conn.close()
+    except Exception as e:
+        print(f"[Warning] Failed to query local SQLite tables: {e}")
 
     # Render markdown table rows
     rows_markdown: List[str] = [
-        "| Hour | Net Grid (kW) | Solar PV (kW) | Battery SoC | Battery Power (kW) | House Load (kW) |",
-        "|---|---|---|---|---|---|",
+        "| Hour | Net Grid (kW) | SolarEdge PV (kW) | Chilicon PV (kW) | Battery SoC | Battery Power (kW) | House Load (kW) |",
+        "|---|---|---|---|---|---|---|",
     ]
-    
+
     for hk in hour_keys:
-        grid_vals = data[hk]["grid"]
-        avg_grid = sum(grid_vals) / len(grid_vals) if grid_vals else 0.0
-        
-        se_vals = data[hk]["se"]
-        avg_se = sum(se_vals) / len(se_vals) if se_vals else 0.0
-        
-        ch_vals = data[hk]["ch"]
-        avg_ch = sum(ch_vals) / len(ch_vals) if ch_vals else 0.0
-        avg_solar = avg_se + avg_ch
-        
-        bat_soc_vals = data[hk]["bat_soc"]
-        avg_soc = sum(bat_soc_vals) / len(bat_soc_vals) if bat_soc_vals else 0.0
-        
-        bat_pow_vals = data[hk]["bat_power"]
-        avg_bat_pow = sum(bat_pow_vals) / len(bat_pow_vals) if bat_pow_vals else 0.0
-        
-        load_vals = data[hk]["load"]
-        if load_vals:
-            avg_load = sum(load_vals) / len(load_vals)
-        else:
-            # Fallback to physical load balance formula if direct log is missing
+        avg_grid = data[hk]["grid"]
+        avg_se = data[hk]["se"]
+        avg_ch = data[hk]["ch"]
+        avg_soc = data[hk]["bat_soc"]
+        avg_bat_pow = data[hk]["bat_power"]
+        avg_load = data[hk]["load"]
+
+        # Fallback to physical load balance if load records are completely missing
+        if avg_load == 0.0 and (avg_grid != 0.0 or avg_se != 0.0 or avg_ch != 0.0):
+            avg_solar = avg_se + avg_ch
             avg_load = max(0.0, avg_grid + avg_solar + avg_bat_pow)
-            
+
         rows_markdown.append(
-            f"| {hk} | {avg_grid:.3f} | {avg_solar:.3f} | {avg_soc:.1f}% | {avg_bat_pow:.3f} | {avg_load:.3f} |"
+            f"| {hk} | {avg_grid:.3f} | {avg_se:.3f} | {avg_ch:.3f} | {avg_soc:.1f}% | {avg_bat_pow:.3f} | {avg_load:.3f} |"
         )
-        
+
     return "\n".join(rows_markdown)
 
 
@@ -583,31 +738,21 @@ Be concise, organized, and homeowner-oriented.
                 [f"- [{ann['timestamp']}]: {ann['annotation']}" for ann in recent_annotations]
             )
         else:
-            annotations_str = "No existing annotations found in this 48-hour window."
+            annotations_str = f"No existing annotations found in this {TELEMETRY_WINDOW_HOURS}-hour window."
 
-        # Format system prompt context
-        system_context = f"""You are a helpful Edge AI microgrid assistant analyzing electrical telemetry data for Steven's house.
-The grid import and export values, Solar PV yield, battery state-of-charge (SoC), and charging rates are monitored.
+        # Format system prompt context dynamically by loading from file
+        prompt_template: str = load_system_prompt("repl_system_prompt.txt")
+        try:
+            system_context = prompt_template.format(
+                telemetry_window_hours=TELEMETRY_WINDOW_HOURS,
+                telemetry_table=telemetry_table,
+                annotations_str=annotations_str
+            )
+        except KeyError as ke:
+            print(f"[Warning] Format key missing in prompt file: {ke}")
+            # Fallback if bracket parsing fails (e.g. from raw SQL queries in prompt)
+            system_context = prompt_template
 
-=== 48-HOUR TELEMETRY DATA ===
-{telemetry_table}
-
-=== USER ANNOTATIONS ===
-{annotations_str}
-
-=== DATABASE & FILE SCHEMA CONTEXT ===
-- grid_history.db contains a SQLite table `grid_history` with columns: `timestamp` (TEXT, ISO format) and `kw` (REAL).
-- solaredge_history.csv: `timestamp` (TEXT), `pv_kw` (REAL).
-- solaredge_battery_history.csv: `timestamp` (TEXT), `battery_kw` (REAL), `soc` (REAL).
-- solaredge_flow_history.csv: `timestamp` (TEXT), `grid_power_kw` (REAL), `load_power_kw` (REAL).
-- chilicon_history.csv: `timestamp` (TEXT), `power_kw` (REAL), `lifetime_wh` (REAL).
-
-=== INSTRUCTIONS ===
-1. Analyze the data around specific times if asked (e.g. "peak around 13:30 today" or "yesterday at 19:00").
-2. Connect user queries to the data rows and existing annotations.
-3. If asked, write SQLite or scripting code using the exact schema context defined above.
-4. Be concise, friendly, and homeowner-oriented.
-"""
 
         # Build structured message list for Ollama's chat API
         messages: List[Dict[str, str]] = [
@@ -628,7 +773,7 @@ The grid import and export values, Solar PV yield, battery state-of-charge (SoC)
             "options": {
                 "temperature": DEFAULT_TEMPERATURE,
                 "num_predict": DEFAULT_MAX_NEW_TOKENS,
-                "num_ctx": 8192
+                "num_ctx": 16384
             }
         }
 
