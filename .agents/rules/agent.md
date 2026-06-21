@@ -157,6 +157,13 @@ All Python code must strictly follow the Google Python Style Guide and readabili
 - **Jetson Orin Nano (Data & Math Node)**: `steven@nvjetson` (or `192.168.8.68`)
 - **Jetson Orin Nano (Dedicated GPU AI Server)**: `steven@nvagent` (or `192.168.8.45`)
 - **Raspberry Pi (Kiosk Display)**: `steven@rainforestpi` (or `192.168.8.70`)
+- **Ubuntu GPU Server (Local Ollama/VLM Inference Server)**: `steven@ubunto-giga` (or `192.168.8.193`)
+  * **CPU**: AMD Ryzen 5 5500 (6 Cores / 12 Threads)
+  * **Motherboard**: Gigabyte AB350M-DS3H-CF (AMD B350 Chipset, BIOS Version F51g)
+  * **RAM**: 32 GB DDR4
+  * **GPU**: NVIDIA GeForce RTX 4060 (8 GB VRAM, CUDA 13.2 / Driver 595.71.05)
+  * **Storage**: 1 TB SATA SSD (Root OS `/`) + 500 GB NVMe M.2 SSD (ext4, mounted at `/mnt/nvme`)
+  * **OS**: Ubuntu 26.04 LTS
 
 ## 11. Avoid hardcoding values
 - use parameters when possible or run time args
