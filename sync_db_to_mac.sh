@@ -33,7 +33,7 @@ if [ "$USE_PI" = true ]; then
     rsync -avz --progress --include="*.csv" --exclude="*" "${PI_USER}@${PI_HOST}:/home/steven/rainforest-emu2-grid-dashboard/" ./
 else
     JETSON_HOST="${JETSON_HOST:-nvjetson}"
-    JETSON_USER="${JETSON_USER:-steven}"
+    JETSON_USER="${JETSON_SSH_USER:-${JETSON_USER:-steven}}"
     
     # 0. Push local user annotations first if they exist
     if [ -f "$SCRIPT_DIR/user_annotations.json" ]; then

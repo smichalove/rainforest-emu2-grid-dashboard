@@ -444,7 +444,7 @@ def sync_annotations_to_remote(sync_dir: str) -> None:
 
     # Configuration for ssh / rsync
     jetson_host: str = os.getenv("JETSON_HOST", "nvjetson")
-    jetson_user: str = os.getenv("JETSON_USER", "steven")
+    jetson_user: str = os.getenv("JETSON_SSH_USER") or os.getenv("JETSON_USER") or "steven"
     target_path: str = "/home/grid_backup/backups/user_annotations.json"
 
     print(f"[Sync] Pushing user_annotations.json to Jetson ({jetson_user}@{jetson_host})...")
@@ -797,7 +797,8 @@ Be concise, organized, and homeowner-oriented.
             system_context = prompt_template.format(
                 telemetry_window_hours=TELEMETRY_WINDOW_HOURS,
                 telemetry_table=telemetry_table,
-                annotations_str=annotations_str
+                annotations_str=annotations_str,
+                current_time=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             )
         except KeyError as ke:
             print(f"[Warning] Format key missing in prompt file: {ke}")
