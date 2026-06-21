@@ -640,6 +640,12 @@ def run_repl() -> None:
             print("Exiting...")
             break
 
+        # Intercept history clearing commands
+        if user_input.lower().strip() in ("/clear", "/reset"):
+            chat_history = []
+            print("Conversation history cleared.")
+            continue
+
         images_base64: List[str] = []
         prompt_text: str = user_input
         note_text: Optional[str] = None
