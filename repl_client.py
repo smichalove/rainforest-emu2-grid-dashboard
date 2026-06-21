@@ -546,6 +546,57 @@ def log_chat_message(sync_dir: str, role: str, content: str) -> None:
         print(f"[Warning] Failed to log chat message: {e}")
 
 
+def execute_sql(db_path: str, sql: str) -> str:
+    """Executes a SQLite query against local_repl.db with backups/analysis_history.db attached.
+
+    Args:
+        db_path: The path to local_repl.db.
+        sql: The SQL query string.
+
+    Returns:
+        A formatted string containing the query results or error message.
+    """
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        backups_db_path = os.path.join(script_dir, "backups/analysis_history.db")
+        if os.path.exists(backups_db_path):
+            conn.execute(f"ATTACH DATABASE '{backups_db_path}' AS backups_db")
+            
+        cursor = conn.cursor()
+        cursor.execute(sql)
+        
+        # Get column names
+        if cursor.description:
+            cols = [desc[0] for desc in cursor.description]
+            rows = cursor.fetchall()
+            if not rows:
+                return "Query executed successfully. No rows returned."
+            
+            # Format as a clean markdown table
+            res = [f"| {' | '.join(cols)} |", f"| {' | '.join(['---'] * len(cols))} |"]
+            for row in rows:
+                row_str = []
+                for val in row:
+                    if val is None:
+                        row_str.append("NULL")
+                    elif isinstance(val, float):
+                        row_str.append(f"{val:.3f}")
+                    else:
+                        row_str.append(str(val))
+                res.append(f"| {' | '.join(row_str)} |")
+            return "\n".join(res)
+        else:
+            conn.commit()
+            return f"Query executed successfully. Rows affected: {cursor.rowcount}"
+    except Exception as e:
+        return f"Error executing SQL: {e}"
+    finally:
+        if conn:
+            conn.close()
+
+
 def run_repl() -> None:
     """Runs the interactive Read-Eval-Print Loop (REPL) CLI chat client.
 
@@ -765,69 +816,114 @@ Be concise, organized, and homeowner-oriented.
         # Add current user prompt
         messages.append({"role": "user", "content": prompt_text})
 
-        # Prepare request payload for local Ollama chat API on nvagent
-        payload = {
-            "model": OLLAMA_MODEL,
-            "messages": messages,
-            "stream": False,
-            "options": {
-                "temperature": DEFAULT_TEMPERATURE,
-                "num_predict": DEFAULT_MAX_NEW_TOKENS,
-                "num_ctx": 16384
-            }
-        }
-
-        print("Waiting for response...")
+        # Run completion tool-execution loop
+        active_messages = list(messages)
+        tool_executed = False
+        final_response_text = ""
+        final_response_thinking = ""
         
-        req = urllib.request.Request(
-            SERVER_URL,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST"
-        )
+        # Maximum 5 iterations to allow multiple tool calls, but prevent infinite loops
+        for iteration in range(5):
+            payload = {
+                "model": OLLAMA_MODEL,
+                "messages": active_messages,
+                "stream": False,
+                "options": {
+                    "temperature": DEFAULT_TEMPERATURE,
+                    "num_predict": DEFAULT_MAX_NEW_TOKENS,
+                    "num_ctx": 16384
+                }
+            }
 
-        try:
-            with urllib.request.urlopen(req, timeout=120.0) as response:
-                result = json.loads(response.read().decode("utf-8"))
-                response_thinking = result.get("message", {}).get("thinking", "").strip()
-                response_text = result.get("message", {}).get("content", "").strip()
-                
-                if response_thinking:
-                    print("\n[Thinking Process]")
-                    print(response_thinking)
-                    print("-" * 50)
-                
-                print("\nResponse:")
-                if response_text:
-                    print(response_text)
-                else:
-                    print("<Empty response content>")
-                print()
-                
-                if result.get("done_reason") == "length":
-                    print("[Warning] The response was truncated because it reached the token limit.")
-                    print()
-                
-                # Update history using role-based keys matching Ollama chat API
-                chat_history.append({"role": "user", "content": prompt_text})
-                stored_response = response_text if response_text else (f"Thinking: {response_thinking}" if response_thinking else "")
-                chat_history.append({"role": "assistant", "content": stored_response})
-                if len(chat_history) > 10:  # Keep last 5 rounds of conversation
-                    chat_history = chat_history[-10:]
-                
-                # Log the conversation history to persistent storage for later analysis
-                log_chat_message(SYNC_DIR, "user", prompt_text)
-                log_chat_message(SYNC_DIR, "assistant", stored_response)
-        except urllib.error.HTTPError as e:
+            if not tool_executed:
+                print("Waiting for response...")
+            else:
+                print("Waiting for agent to process query results...")
+            
+            req = urllib.request.Request(
+                SERVER_URL,
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+
             try:
-                error_body = e.read().decode("utf-8")
-                print(f"\n[Error] Server returned HTTP {e.code}: {error_body}\n")
-            except Exception:
-                print(f"\n[Error] Server returned HTTP {e.code}: {e.reason}\n")
-        except urllib.error.URLError as e:
-            print(f"\n[Error] Failed to connect to server at {SERVER_URL}: {e.reason}\n")
-        except Exception as e:
-            print(f"\n[Error] An unexpected error occurred: {e}\n")
+                with urllib.request.urlopen(req, timeout=120.0) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+                    response_thinking = result.get("message", {}).get("thinking", "").strip()
+                    response_text = result.get("message", {}).get("content", "").strip()
+                    
+                    if response_thinking and not tool_executed:
+                        print("\n[Thinking Process]")
+                        print(response_thinking)
+                        print("-" * 50)
+                    
+                    # Look for tool call tags
+                    tool_call_match = re.search(r'<tool_call>(.*?)</tool_call>', response_text, re.DOTALL)
+                    if tool_call_match:
+                        tool_json_str = tool_call_match.group(1).strip()
+                        print(f"\n[Executing Tool Call]: {tool_json_str}")
+                        sql_query = ""
+                        try:
+                            tool_data = json.loads(tool_json_str)
+                            sql_query = tool_data.get("sql", "")
+                        except Exception:
+                            # Fallback: extract SELECT query directly if not well-formed JSON
+                            sql_match = re.search(r'(SELECT\s+.*)', tool_json_str, re.IGNORECASE | re.DOTALL)
+                            if sql_match:
+                                sql_query = sql_match.group(1).strip()
+                        
+                        if sql_query:
+                            print(f"[Executing SQL]: {sql_query}")
+                            db_path = os.path.join(SYNC_DIR, "local_repl.db")
+                            query_res = execute_sql(db_path, sql_query)
+                            print(f"[Results]:\n{query_res}\n")
+                            
+                            # Append the assistant's output with tool call and the tool's result to active_messages
+                            active_messages.append({"role": "assistant", "content": response_text})
+                            active_messages.append({"role": "user", "content": f"TOOL RESULT:\n{query_res}"})
+                            tool_executed = True
+                            continue  # Loop back and send active_messages to the model
+                        else:
+                            print("[Error] Failed to extract valid SQL from tool call.")
+                    
+                    # If we get here, no tool call was executed. This is the final response.
+                    final_response_text = response_text
+                    final_response_thinking = response_thinking
+                    break
+            except urllib.error.HTTPError as e:
+                try:
+                    error_body = e.read().decode("utf-8")
+                    print(f"\n[Error] Server returned HTTP {e.code}: {error_body}\n")
+                except Exception:
+                    print(f"\n[Error] Server returned HTTP {e.code}: {e.reason}\n")
+                break
+            except urllib.error.URLError as e:
+                print(f"\n[Error] Failed to connect to server at {SERVER_URL}: {e.reason}\n")
+                break
+            except Exception as e:
+                print(f"\n[Error] An unexpected error occurred: {e}\n")
+                break
+        
+        # If we got a final response, display and log it
+        if final_response_text or final_response_thinking:
+            print("\nResponse:")
+            if final_response_text:
+                print(final_response_text)
+            else:
+                print("<Empty response content>")
+            print()
+            
+            # Update history using role-based keys matching Ollama chat API
+            chat_history.append({"role": "user", "content": prompt_text})
+            stored_response = final_response_text if final_response_text else (f"Thinking: {final_response_thinking}" if final_response_thinking else "")
+            chat_history.append({"role": "assistant", "content": stored_response})
+            if len(chat_history) > 10:  # Keep last 5 rounds of conversation
+                chat_history = chat_history[-10:]
+            
+            # Log the conversation history to persistent storage for later analysis
+            log_chat_message(SYNC_DIR, "user", prompt_text)
+            log_chat_message(SYNC_DIR, "assistant", stored_response)
 
         previous_user_input = user_input
 
