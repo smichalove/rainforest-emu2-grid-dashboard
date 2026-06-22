@@ -53,6 +53,7 @@ load_env_file()
 # Global configuration constants
 SERVER_URL: str = os.getenv("LOCAL_SERVER_URL", "http://192.168.8.45:11434/api/chat")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "gemma4-it-q4:latest")
+OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "131072"))
 SYNC_DIR: str = os.getenv("RAINFOREST_SYNC_DIR", "/Users/treven/rainforest_db")
 DEFAULT_TEMPERATURE: float = 0.2
 DEFAULT_MAX_NEW_TOKENS: int = 4096
@@ -838,7 +839,7 @@ Be concise, organized, and homeowner-oriented.
                 "options": {
                     "temperature": DEFAULT_TEMPERATURE,
                     "num_predict": DEFAULT_MAX_NEW_TOKENS,
-                    "num_ctx": 16384
+                    "num_ctx": OLLAMA_NUM_CTX
                 }
             }
 
