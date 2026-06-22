@@ -67,6 +67,10 @@ All Python code must strictly follow the Google Python Style Guide and readabili
   > Whenever the agent or application runs a prompt (either through emulation, test scripts, or local executions), the agent must explicitly print and show the raw prompt return/response text to the user.
   - This ensures full human-in-the-loop auditability and visibility of LLM behavior, allowing real-time assessment of output quality.
 
+- **No Direct Note Writing Capability:**
+  > [!IMPORTANT]
+  > The local model / VLM does NOT have any tools or APIs to write or modify user annotations (`user_annotations.json`). If the user asks the model to "log a note" or "add a note", the model must decline to do so, state its technical limitation, and instruct the user to use the client's built-in `/note <text>` shortcut directly.
+
 ---
 
 ## 4. Command Execution Guidelines
@@ -334,6 +338,12 @@ Stores Edge AI daily summary history and frequency metrics.
 > * **Chilicon vs. Chiller**: `chilicon_history` tracks Southwest (SW) Solar PV array generation. It is **NOT** a chiller or cooling load database.
 > * **No Chiller Table**: The microgrid has no separate sub-meter table tracking chiller consumption. Any chiller load is bundled under the general household load (`load_power_kw` in `solaredge_flow_history`).
 > * **EV Vehicles**: The homeowner does **NOT** own an electric vehicle. Never mention EV, EV charging, or car charging under any circumstances.
+
+### SQLite Timestamp Comparison Warning (T vs Space Format)
+> [!WARNING]
+> * **ISO Timestamp T Separator**: Timestamps in the SQLite databases (`local_repl.db` / `grid_history` / `solaredge_flow_history`) use the ISO standard **`T`** separator (e.g., `2026-06-22T07:23:59.302981`).
+> * **Format Mismatches**: When comparing or querying timestamps using string filters, always include the `T` separator in raw string literals (e.g., `'2026-06-22T07:18:33'`). 
+> * **Avoid Native datetime()**: Avoid using SQLite's native `datetime()` function directly in comparisons (e.g., `datetime('2026-06-22 07:18:33')`), as it outputs space-separated strings. Because the character `'T'` is lexicographically greater than a space `' '`, comparisons like `timestamp <= datetime(...)` will fail to match any rows.
 
 ### Mathematical Integration Warning (kW vs. kWh)
 > [!WARNING]
