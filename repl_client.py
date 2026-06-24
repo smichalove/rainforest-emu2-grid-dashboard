@@ -515,6 +515,62 @@ def infer_note_timestamp(current_text: str, previous_text: str = "") -> str:
     return dt.strftime("%Y-%m-%d %H:%M:00")
 
 
+def process_file_attachments(prompt_text: str) -> Tuple[Optional[str], bool]:
+    """Parses and attaches files specified with /file <path> in the prompt.
+
+    Args:
+        prompt_text: The user's input prompt.
+
+    Returns:
+        A tuple of (modified_prompt_text, is_valid). If invalid, returns (None, False).
+    """
+    file_matches = list(re.finditer(r'/file\s+(?:"([^"]+)"|\'([^\']+)\'|(\S+))', prompt_text))
+    if not file_matches:
+        return prompt_text, True
+
+    supported_extensions = ('.txt', '.csv', '.json', '.md', '.sh', '.py', '.sql', '.log', '.xml')
+    attached_contents = []
+
+    for match in file_matches:
+        full_match_str = match.group(0)
+        file_path = match.group(1) or match.group(2) or match.group(3)
+
+        # Resolve path
+        abs_path = os.path.abspath(file_path)
+        if not os.path.exists(abs_path):
+            print(f"[Error] File not found: {file_path}")
+            return None, False
+        if not os.path.isfile(abs_path):
+            print(f"[Error] Path is not a file: {file_path}")
+            return None, False
+
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == '.pdf':
+            print(f"[Error] PDF files are not supported. Only text files ({', '.join(supported_extensions)}) can be attached.")
+            return None, False
+        elif ext not in supported_extensions:
+            print(f"[Error] Unsupported file extension '{ext}'. Supported extensions: {', '.join(supported_extensions)}")
+            return None, False
+
+        try:
+            with open(abs_path, 'r', encoding='utf-8', errors='replace') as f:
+                content = f.read()
+            basename = os.path.basename(abs_path)
+            attached_contents.append(f"\n=== ATTACHED FILE: {basename} ===\n{content}\n")
+            prompt_text = prompt_text.replace(full_match_str, "").strip()
+        except Exception as e:
+            print(f"[Error] Failed to read file {file_path}: {e}")
+            return None, False
+
+    prompt_text = re.sub(r'\s+', ' ', prompt_text).strip()
+    if attached_contents:
+        if not prompt_text:
+            prompt_text = "Analyze the attached file(s)."
+        prompt_text += "\n" + "\n".join(attached_contents)
+
+    return prompt_text, True
+
+
 def sigint_handler(signum: int, frame: Optional[types.FrameType]) -> None:
     """Handles SIGINT (Ctrl-C) to exit the client gracefully.
 
@@ -611,6 +667,8 @@ def run_repl() -> None:
     print("  * Type your prompt and press Enter.")
     print("  * To include an image, start your message with:")
     print("    /image path/to/photo.jpg Your prompt here")
+    print("  * To attach a text/data file (e.g. .csv, .log, .py, .json), use:")
+    print("    /file path/to/file.txt Your prompt here")
     print("  * To save a note on telemetry, append or prefix:")
     print("    /note that was the kettle turning on")
     print("  * To paste multiline text/logs, type '/paste' and press Enter.")
@@ -774,6 +832,12 @@ Be concise, organized, and homeowner-oriented.
                     print("[Success] Image successfully loaded and attached to request payload.")
                 else:
                     continue
+
+            # Check for file command shortcut: /file <path> anywhere in the input
+            prompt_text, valid_files = process_file_attachments(prompt_text)
+            if not valid_files:
+                previous_user_input = user_input
+                continue
 
         # Convert literal \n sequences (backslash + n) to actual newlines
         prompt_text = prompt_text.replace("\\n", "\n")

@@ -345,6 +345,18 @@ Stores Edge AI daily summary history and frequency metrics.
 > * **Format Mismatches**: When comparing or querying timestamps using string filters, always include the `T` separator in raw string literals (e.g., `'2026-06-22T07:18:33'`). 
 > * **Avoid Native datetime()**: Avoid using SQLite's native `datetime()` function directly in comparisons (e.g., `datetime('2026-06-22 07:18:33')`), as it outputs space-separated strings. Because the character `'T'` is lexicographically greater than a space `' '`, comparisons like `timestamp <= datetime(...)` will fail to match any rows.
 
+### Unit Scaling Warning (Watts vs. kW)
+> [!IMPORTANT]
+> * **Database Unit is kW**: Database columns like `kw`, `pv_kw`, `battery_kw`, and `load_power_kw` store values in **Kilowatts (kW)** (e.g. `4.0` represents 4 kW).
+> * **User Thresholds in Watts**: When a user queries for threshold values (e.g., "loads above 1500" or "demand over 4000"), they are specifying these values in **Watts**.
+> * **Scaling Rule**: The model must always divide the user's threshold by 1000 to match the database unit before generating the SQL query (e.g. `WHERE kw > 4.0` for 4000 Watts). Never query for raw numbers like `kw > 4000` directly as it represents 4 Megawatts.
+
+### PSE Flex Event Detection Warning (Battery Discharge Constraint)
+> [!IMPORTANT]
+> * **No 'Flex' Text Marker**: The database does NOT store the word "flex" or "PSE" in any column of `analysis_history` to denote a Flex event.
+> * **Mathematical Indicator**: A PSE Flex event day is defined and detected *exclusively* by filtering for days where **`delta_bat_discharge > 0.1`** (since active battery dispatch is the only way a Flex event is recorded).
+> * **Query Rule**: To count, select, or analyze Flex events, always use `WHERE delta_bat_discharge > 0.1` in your SQL. Do not query for `%flex%` in `escalation_status`.
+
 ### Mathematical Integration Warning (kW vs. kWh)
 > [!WARNING]
 > * **No Direct Summation on Raw Data**: The database tables (`grid_history`, `solaredge_history`, `chilicon_history`, `solaredge_battery_history`) store raw, periodic **instantaneous power readings (kW)** at irregular intervals (e.g. 5 to 15 minutes). Running a simple `SUM(kw)` or `SUM(pv_kw)` query directly on the raw tables will yield an incorrect result that is 4x to 12x too large.
