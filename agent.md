@@ -363,4 +363,14 @@ Stores Edge AI daily summary history and frequency metrics.
 > * **Riemann Sum Requirement**: To compute energy (kWh) over a duration, you must write queries or code that computes the time-weighted integral: $\text{Energy} = \sum \left( \text{Power}_i \times \Delta t_i \right)$, where $\Delta t_i$ is the time difference in hours between samples.
 > * **Hourly Average Tables**: If you are using pre-aggregated hourly average tables (where each row represents a distinct 1-hour interval), summing the hourly average power (kW) values is mathematically correct because the time delta is $\Delta t = 1$ hour.
 
+### Raspberry Pi Kiosk Display Proxy (noVNC & websockify)
+> [!IMPORTANT]
+> * **Architecture**: The Pi runs a native RealVNC service (`vncserver-x11-serviced.service`) on port `5900`. `websockify` is run as a systemd service (`novnc-websockify.service`) on port `8059` to proxy connections to the web browser.
+> * **Browser Secure Context (HTTPS)**: Modern browsers disable the Web Crypto API (`crypto.subtle`) over HTTP. Because RealVNC's default `SystemAuth` authentication requires this API to verify credentials, the noVNC client will crash if accessed over unencrypted `http://`.
+> * **SSL Configuration**: To resolve this, websockify is configured to run with a self-signed SSL/TLS certificate (`--cert /etc/ssl/novnc.pem`). Users must connect using **`https://<IP>:8059/vnc.html`**.
+> * **RealVNC Compatibility**: To support standard VNC handshakes from websockify, the RealVNC server configuration `/root/.vnc/config.d/vncserver-x11` must specify:
+>   * `Encryption=PreferOn` (allows standard unencrypted loopback connections from the local websockify client).
+>   * `Authentication=SystemAuth` (retains the stable system credentials login).
+
+
 

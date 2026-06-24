@@ -109,3 +109,13 @@ def test_pse_csv_attachment():
     assert "STEVEN MICHALOVE" in updated
     assert "Electric billing,2023-09-07" in updated
 
+def test_backslash_escaped_path():
+    pse_file_escaped = "pse_electric_billing_billing_data_Service\\ 1_1_2023-09-07_to_2026-05-05.csv"
+    prompt = f"Analyze this billing data /file {pse_file_escaped}"
+    updated, success = process_file_attachments(prompt)
+    assert success is True
+    assert "Analyze this billing data" in updated
+    assert "STEVEN MICHALOVE" in updated
+    assert "Electric billing,2023-09-07" in updated
+
+

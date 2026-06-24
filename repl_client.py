@@ -524,7 +524,7 @@ def process_file_attachments(prompt_text: str) -> Tuple[Optional[str], bool]:
     Returns:
         A tuple of (modified_prompt_text, is_valid). If invalid, returns (None, False).
     """
-    file_matches = list(re.finditer(r'/file\s+(?:"([^"]+)"|\'([^\']+)\'|(\S+))', prompt_text))
+    file_matches = list(re.finditer(r'/file\s+(?:"([^"]+)"|\'([^\']+)\'|((?:[^\\\s]|\\.)+))', prompt_text))
     if not file_matches:
         return prompt_text, True
 
@@ -534,6 +534,9 @@ def process_file_attachments(prompt_text: str) -> Tuple[Optional[str], bool]:
     for match in file_matches:
         full_match_str = match.group(0)
         file_path = match.group(1) or match.group(2) or match.group(3)
+        if match.group(3):
+            # Unescape backslash-escaped characters
+            file_path = re.sub(r'\\(.)', r'\1', file_path)
 
         # Resolve path
         abs_path = os.path.abspath(file_path)
