@@ -379,5 +379,14 @@ Stores Edge AI daily summary history and frequency metrics.
 >   * `Authentication=SystemAuth` (retains the stable system credentials login).
 > * **NoVNC Safari Handshake Rule**: If the agent is tasked with checking the kiosk server state, it must enforce that `websockify` is explicitly routing over **`https://`** on port `8059`. Standard unencrypted `http://` will cause Safari to drop the Web Crypto API, crashing the VNC credential handshake.
 
+### Raspberry Pi Kiosk Display Mirroring (HDMI & xrandr)
+> [!IMPORTANT]
+> * **Hardware Layout**: The kiosk runs dual HDMI outputs (HDMI-1 and HDMI-2).
+> * **Extended vs. Mirrored Displays**: By default on reboot, X11/LightDM may configure the connected monitors as an extended desktop (e.g. primary HDMI-1 at 1024x768 and secondary HDMI-2 at 1920x1080 offset).
+> * **Mirroring Command**: To force display mirroring on startup, the autostart script `run_dashboard_system.sh` must execute the `xrandr` mirroring command prior to launching the dashboard GUI:
+>   `DISPLAY=:0 xrandr --output HDMI-2 --mode 1024x768 --same-as HDMI-1 || true`
+> * **Resolution Mapping**: Ensure the secondary HDMI-2 is explicitly set to match the primary resolution mode (1024x768) and marked as `--same-as HDMI-1`.
+
+
 
 
