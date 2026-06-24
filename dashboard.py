@@ -1068,18 +1068,18 @@ class GridDashboard(tk.Tk):
 
         if should_fetch:
             self.last_weather_attempt = now_time
-            try:
-                live_weather = weather.fetch_live_weather()
-                if live_weather:  # Only update cache if we got a valid response
-                    self.cached_weather = live_weather
-                    self.last_weather_fetch = now_time
-                    self.weather_backoff_delay = 10.0  # Reset backoff on success
-                else:
+            def bg_fetch():
+                try:
+                    live_weather = weather.fetch_live_weather()
+                    if live_weather:  # Only update cache if we got a valid response
+                        self.ui_queue.put(lambda: self._apply_weather_update(live_weather, now_time))
+                    else:
+                        self.weather_backoff_delay = min(self.weather_backoff_delay * 2, 900.0)
+                        logging.warning(f"Weather API returned empty in background. Backing off for {self.weather_backoff_delay:.1f}s.")
+                except Exception as e:
                     self.weather_backoff_delay = min(self.weather_backoff_delay * 2, 900.0)
-                    logging.warning(f"Weather API returned empty. Backing off for {self.weather_backoff_delay:.1f}s.")
-            except Exception as e:
-                self.weather_backoff_delay = min(self.weather_backoff_delay * 2, 900.0)
-                logging.error(f"Error fetching live weather in update_weather_display: {e}. Backing off for {self.weather_backoff_delay:.1f}s.")
+                    logging.error(f"Error fetching live weather in background: {e}. Backing off for {self.weather_backoff_delay:.1f}s.")
+            threading.Thread(target=bg_fetch, name="WeatherFetchThread", daemon=True).start()
 
         live_weather = self.cached_weather
         temp = live_weather.get("temp")
@@ -1126,6 +1126,12 @@ class GridDashboard(tk.Tk):
             
         if self.weather_label is not None:
             self.weather_label.config(text=f"{temp_str} | {sky_str}")
+
+    def _apply_weather_update(self, live_weather: Dict[str, Any], fetch_time: float) -> None:
+        """Applies cached weather update on the UI thread."""
+        self.cached_weather = live_weather
+        self.last_weather_fetch = fetch_time
+        self.weather_backoff_delay = 10.0  # Reset backoff on success
 
     def update_chart(self, label_text: str, color: str) -> None:
         """Draws current line coordinates and stacked bars on the canvas.
