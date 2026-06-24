@@ -71,6 +71,11 @@ All Python code must strictly follow the Google Python Style Guide and readabili
   > [!IMPORTANT]
   > The local model / VLM does NOT have any tools or APIs to write or modify user annotations (`user_annotations.json`). If the user asks the model to "log a note" or "add a note", the model must decline to do so, state its technical limitation, and instruct the user to use the client's built-in `/note <text>` shortcut directly.
 
+- **Image Training Guard:**
+  > [!IMPORTANT]
+  > **[IMAGE_TRAINING_GUARD]**
+  > When generating scripts or editing layouts for `render_local_plot.py`, ensure that any code change handles your high-end display elements (like specific watermarks or color metrics) using modular constants. Never let the agent overwrite the core Matplotlib coordinate matrices.
+
 ---
 
 ## 4. Command Execution Guidelines
@@ -338,6 +343,7 @@ Stores Edge AI daily summary history and frequency metrics.
 > * **Chilicon vs. Chiller**: `chilicon_history` tracks Southwest (SW) Solar PV array generation. It is **NOT** a chiller or cooling load database.
 > * **No Chiller Table**: The microgrid has no separate sub-meter table tracking chiller consumption. Any chiller load is bundled under the general household load (`load_power_kw` in `solaredge_flow_history`).
 > * **EV Vehicles**: The homeowner does **NOT** own an electric vehicle. Never mention EV, EV charging, or car charging under any circumstances.
+> * **Audio Stack Signature Isolation**: When verifying household signatures against `solaredge_flow_history`, a continuous baseline jump of ~412W indicates the audio amplification stacks (Ayre V-1xe/V-5xe) are idling. Do not classify this prolonged drone as an appliance anomaly or climate control system activation.
 
 ### SQLite Timestamp Comparison Warning (T vs Space Format)
 > [!WARNING]
@@ -371,6 +377,7 @@ Stores Edge AI daily summary history and frequency metrics.
 > * **RealVNC Compatibility**: To support standard VNC handshakes from websockify, the RealVNC server configuration `/root/.vnc/config.d/vncserver-x11` must specify:
 >   * `Encryption=PreferOn` (allows standard unencrypted loopback connections from the local websockify client).
 >   * `Authentication=SystemAuth` (retains the stable system credentials login).
+> * **NoVNC Safari Handshake Rule**: If the agent is tasked with checking the kiosk server state, it must enforce that `websockify` is explicitly routing over **`https://`** on port `8059`. Standard unencrypted `http://` will cause Safari to drop the Web Crypto API, crashing the VNC credential handshake.
 
 
 
