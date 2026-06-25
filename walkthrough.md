@@ -96,3 +96,26 @@ launchctl load ~/Library/LaunchAgents/com.treven.sync_db_to_mac.plist
 launchctl unload ~/Library/LaunchAgents/com.treven.sync_db_to_mac.plist
 ```
 
+---
+
+## 6. Kiosk HDMI Display Mirroring & noVNC Keepalives
+
+### Display Mirroring Configuration
+* **Problem**: After a Raspberry Pi reboot, the dual HDMI kiosk monitors defaulted to an extended desktop layout. The hardcoded `xrandr --output HDMI-2 ... --same-as HDMI-1` command failed silently on boot because modern kernels assign dynamic names to HDMI outputs (e.g. `HDMI-A-1/2` or `HDMI-0/1`), causing the rainforest telemetry widget to be clipped off-screen.
+* **Resolution**: 
+  1. Replaced the hardcoded outputs in [run_dashboard_system.sh](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/run_dashboard_system.sh) with a dynamic auto-detection block that parses `xrandr` outputs and automatically mirrors whatever connected screens are found.
+  2. Diagnosed network timeouts between the Mac and Pi as a dynamic bridge/hardware flow-offloading lockup on the downstairs router (`Flint2_downstairs`). Rebooted the downstairs router, restoring direct network connectivity and allowing the Mac to sync database files directly.
+  3. Reverted the temporary SSH/SCP `ProxyJump` tunnels in [redeploy.sh](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/redeploy.sh) to keep the production deployment pipeline direct and clean.
+  4. Fixed a sorting comparison mismatch in [tests/test_daily_summary_query.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/tests/test_daily_summary_query.py) by checking for exact expected daily counts.
+  5. Successfully redeployed, terminating duplicate Tkinter processes and starting a single, correctly-mirrored instance of the dashboard.
+
+
+### noVNC Timeout & Keepalive (Heartbeats - Reverted)
+* **Problem**: Inactive browser sessions using the HTML-based noVNC proxy disconnected frequently and forced users to manually re-login because browser tab suspension and default socket inactivity drop idle WebSocket connections.
+* **Attempted Resolution**:
+  1. Modified `/etc/systemd/system/novnc-websockify.service` on the Pi to add `--heartbeat 15` in `ExecStart`.
+  2. Reloaded systemd (`systemctl daemon-reload`) and restarted the service (`systemctl restart novnc-websockify`).
+* **Reversion**: The heartbeat configuration made the connection unreliable and caused disconnection issues. The service configuration has been completely reverted to its original state (removing the `--heartbeat 15` parameter), systemd has been reloaded, and the `novnc-websockify` service restarted to restore the baseline VNC setup.
+
+
+
