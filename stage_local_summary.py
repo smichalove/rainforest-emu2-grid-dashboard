@@ -1433,14 +1433,15 @@ def calculate_analysis_metrics_and_prompts(
                 baseline_dt = datetime.datetime.now()
                 baseline_ts_str = baseline_dt.strftime("%Y-%m-%d %H:%M:%S")
 
-    # Load and filter user annotations since baseline_dt
-    annotations_list = load_annotations(BACKUP_DIR)
-    recent_annotations = []
-    if baseline_dt:
-        for ann in annotations_list:
-            ann_ts = parse_timestamp(ann.get("timestamp", ""))
-            if ann_ts and ann_ts >= baseline_dt:
-                recent_annotations.append(ann)
+    # Load and filter user annotations within the active 48-hour window
+    annotations_list: List[Dict[str, str]] = load_annotations(BACKUP_DIR)
+    recent_annotations: List[Dict[str, str]] = []
+    now_dt: datetime.datetime = datetime.datetime.now()
+    cutoff_dt: datetime.datetime = now_dt - datetime.timedelta(hours=48)
+    for ann in annotations_list:
+        ann_ts: Optional[datetime.datetime] = parse_timestamp(ann.get("timestamp", ""))
+        if ann_ts and ann_ts >= cutoff_dt:
+            recent_annotations.append(ann)
 
     if recent_annotations:
         annotations_str = "\n".join(
