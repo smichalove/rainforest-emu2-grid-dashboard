@@ -86,7 +86,8 @@ This document maintains the official record of the network hosts, hardware confi
 *   **Hardware**:
     *   **OS/Arch**: Windows 10/11 x86_64
     *   **CPU**: AMD Ryzen 9 5900X (12 Cores / 24 Threads)
-    *   **GPU**: NVIDIA GeForce RTX 4070
+    *   **Memory**: 96 GB RAM
+    *   **GPU**: NVIDIA GeForce RTX 4070 Ti Super (16 GB GDDR6X)
 *   **Ollama Models**:
     *   None active.
 
