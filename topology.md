@@ -110,3 +110,29 @@ This document maintains the official record of the network hosts, hardware confi
 *   **Active Ollama Models**:
     *   `gemma2-9b-custom` (Offloaded to CPU memory - 5.73 tokens/s)
     *   `gemma2-2b-custom` (17.25 tokens/s)
+
+---
+
+## 4. Network Infrastructure
+
+### 4.1 Primary Home Gateway Router
+*   **Hostname**: `GL-MT6000_upstairs`
+*   **IP Address**: `192.168.8.1`
+*   **Role**: Primary internet gateway, DHCP/DNS server, and upstream WAN router.
+*   **Hardware**:
+    *   **Model**: GL.iNet GL-MT6000 (Flint 2)
+    *   **CPU**: Quad-core MediaTek MT7986 (ARMv8 rev 4)
+    *   **Memory**: 1 GB RAM (1013 MB usable)
+    *   **Storage**: 8 GB eMMC (7.2 GB overlay size)
+*   **OS**: OpenWrt (GL.iNet custom firmware based on 21.02-SNAPSHOT, Kernel 5.4.238)
+
+### 4.2 Downstairs Wireless Access Point
+*   **Hostname**: `Flint2_downstairs`
+*   **IP Address**: `192.168.8.2`
+*   **Role**: Downstairs Wi-Fi coverage extension (Access Point mode), bridged via a 2.5G physical ethernet backhaul.
+*   **Hardware**:
+    *   **Model**: GL.iNet GL-MT6000 (Flint 2)
+    *   **CPU**: Quad-core MediaTek MT7986 (ARMv8 rev 4)
+    *   **Memory**: 1 GB RAM (1013 MB usable)
+    *   **Storage**: 8 GB eMMC (7.2 GB overlay size)
+*   **OS**: OpenWrt (GL.iNet custom firmware based on 21.02-SNAPSHOT, Kernel 5.4.238)
