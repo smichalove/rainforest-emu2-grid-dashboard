@@ -79,6 +79,7 @@ This document maintains the official record of the network hosts, hardware confi
 *   **Hostname**: `i7dell`
 *   **Role**: Developer workstation (Currently Shutdown / Skipped).
 *   **Hardware**:
+    *   **CPU**: AMD Ryzen 9 5900X (12 Cores / 24 Threads)
     *   **GPU**: NVIDIA GeForce RTX 4070
 *   **Ollama Models**:
     *   None active.
