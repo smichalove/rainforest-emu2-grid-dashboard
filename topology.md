@@ -67,9 +67,11 @@ This document maintains the official record of the network hosts, hardware confi
 *   **IP Address**: `192.168.8.82`
 *   **Role**: Active database server hosting the canonical `photo_catalog` database (PostgreSQL 17).
 *   **Hardware**:
-    *   **OS/Arch**: Windows 10/11 x86_64
-    *   **GPU**: NVIDIA GeForce RTX 5080
-    *   **Storage**: Attached physical `H:` drive hosting the project/database files.
+    *   **OS/Arch**: Windows 10/11 x86_64 (PostgreSQL 17.10 on x86_64-windows)
+    *   **CPU**: AMD Ryzen 9 5950X (16 Cores / 32 Threads)
+    *   **Memory**: 128 GB RAM
+    *   **GPU**: NVIDIA GeForce RTX 5080 (16 GB GDDR6X)
+    *   **Storage**: Multi-drive layout (1.6 TB OS SSD, 16.7 TB D:, 7.5 TB I:, 1.8 TB J:, 14.9 TB O:, 1 TB T:) plus physical attached 1 TB SSD (`H:`) hosting the canonical photo catalog and project DB.
 *   **Ollama Models**:
     *   `gemma4:12b` (Gemma 4 12B)
 
