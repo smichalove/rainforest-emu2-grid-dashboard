@@ -21,7 +21,11 @@ This document maintains the official record of the network hosts, hardware confi
 *   **Hostname**: `nvagent`
 *   **IP Address**: `192.168.8.45` (Currently Offline / Dead)
 *   **Role**: Primary edge AI generation host for stager summaries.
-*   **Hardware**: Jetson Orin Nano (8 GB shared system RAM/VRAM)
+*   **Hardware**:
+    *   **CPU**: 6-core ARM Cortex-A78AE (Architecture: `aarch64`)
+    *   **Memory**: 8 GB LPDDR5 (7.4 GiB usable + 7.7 GiB swap on ZRAM)
+    *   **Storage**: 1 TB NVMe SSD (Model: `ORICO-J10`, Size: 953.9 GB)
+    *   **GPU**: 1024-core NVIDIA Ampere (integrated/shared system RAM)
 *   **OS**: Ubuntu Linux (JetPack)
 *   **Active Ollama Models**:
     *   `gemma4-vision-q4:latest` (VLM - 4.1 GB)
@@ -76,9 +80,11 @@ This document maintains the official record of the network hosts, hardware confi
     *   `gemma4:12b` (Gemma 4 12B)
 
 ### 2.2 Windows Workstation (Developer Node)
-*   **Hostname**: `i7dell`
-*   **Role**: Developer workstation (Currently Shutdown / Skipped).
+*   **Hostname**: `i7dell` (DellI7)
+*   **IP Address**: `192.168.8.113`
+*   **Role**: Active developer workstation.
 *   **Hardware**:
+    *   **OS/Arch**: Windows 10/11 x86_64
     *   **CPU**: AMD Ryzen 9 5900X (12 Cores / 24 Threads)
     *   **GPU**: NVIDIA GeForce RTX 4070
 *   **Ollama Models**:
