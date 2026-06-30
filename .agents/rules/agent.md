@@ -156,14 +156,36 @@ All Python code must strictly follow the Google Python Style Guide and readabili
 
 - **Jetson Orin Nano (Data & Math Node)**: `steven@nvjetson` (or `192.168.8.68`)
 - **Jetson Orin Nano (Dedicated GPU AI Server)**: `steven@nvagent` (or `192.168.8.45`)
+  * **Hardware**: Jetson Orin Nano (8 GB shared RAM/VRAM)
+  * **Ollama Models**:
+    * `gemma4-vision-q4:latest` (VLM - 4.1 GB)
+    * `gemma4-it-q4:latest` (Default Edge Model - 3.1 GB)
+    * `gemma4-e2b-q4:latest` (Edge 2B - 3.4 GB)
+    * `gemma2-edge:latest` (1.7 GB)
+    * `gemma2:2b-instruct-q4_K_M` (1.7 GB)
+    * `gemma2:9b-instruct-q3_K_M` (4.8 GB)
+    * `gemma2:9b` (5.4 GB)
+    * `gemma2:2b` (1.6 GB)
 - **Raspberry Pi (Kiosk Display)**: `steven@rainforestpi` (or `192.168.8.70`)
-- **Ubuntu GPU Server (Local Ollama/VLM Inference Server)**: `steven@ubunto-giga` (or `192.168.8.193`)
+- **Ubuntu Dedicated AI Server**: `steven@ubunto-giga` (or `192.168.8.193`)
   * **CPU**: AMD Ryzen 5 5500 (6 Cores / 12 Threads)
-  * **Motherboard**: Gigabyte AB350M-DS3H-CF (AMD B350 Chipset, BIOS Version F51g)
   * **RAM**: 32 GB DDR4
-  * **GPU**: NVIDIA GeForce RTX 4060 (8 GB VRAM, CUDA 13.2 / Driver 595.71.05)
-  * **Storage**: 1 TB SATA SSD (Root OS `/`) + 500 GB NVMe M.2 SSD (ext4, mounted at `/mnt/nvme`)
-  * **OS**: Ubuntu 26.04 LTS
+  * **GPU**: NVIDIA GeForce RTX 4060 (8 GB VRAM, CUDA 13.2)
+  * **Ollama Models**:
+    * `gemma4-it-q4:latest` (3.1 GB)
+    * `gemma2:9b` (5.4 GB)
+- **Windows Workstation (Native PostgreSQL DB Host)**: `postgres@i7office` (or `192.168.8.82`)
+  * **GPU**: NVIDIA GeForce RTX 5080
+  * **Ollama Model**: `gemma4:12b` (Gemma 4 12B)
+- **Windows Workstation (Developer Node)**: `steven@i7dell`
+  * **GPU**: NVIDIA GeForce RTX 4070
+  * **Ollama Model**: `gemma4:12b` (Gemma 4 12B)
+- **Ubuntu GPU Server (Staging & Testing Host)**: `steven@steven-len` (or `192.168.8.156` / `192.168.8.230` via Ethernet)
+  * **CPU**: Intel Xeon W-2135 (6 Cores / 12 Threads)
+  * **RAM**: 64 GB ECC DDR4
+  * **GPU**: NVIDIA Quadro P1000 (4 GB VRAM) + NVIDIA GeForce GTX 1050 Ti (4 GB VRAM)
+  * **Ollama Models**: `gemma2-9b-custom`, `gemma2-2b-custom` (quants offloaded to CPU memory)
+
 
 ## 11. Avoid hardcoding values
 - use parameters when possible or run time args
@@ -335,10 +357,33 @@ Stores Edge AI daily summary history and frequency metrics.
 > * **No Chiller Table**: The microgrid has no separate sub-meter table tracking chiller consumption. Any chiller load is bundled under the general household load (`load_power_kw` in `solaredge_flow_history`).
 > * **EV Vehicles**: The homeowner does **NOT** own an electric vehicle. Never mention EV, EV charging, or car charging under any circumstances.
 
-### Mathematical Integration Warning (kW vs. kWh)
+#### Mathematical Integration Warning (kW vs. kWh)
 > [!WARNING]
 > * **No Direct Summation on Raw Data**: The database tables (`grid_history`, `solaredge_history`, `chilicon_history`, `solaredge_battery_history`) store raw, periodic **instantaneous power readings (kW)** at irregular intervals (e.g. 5 to 15 minutes). Running a simple `SUM(kw)` or `SUM(pv_kw)` query directly on the raw tables will yield an incorrect result that is 4x to 12x too large.
 > * **Riemann Sum Requirement**: To compute energy (kWh) over a duration, you must write queries or code that computes the time-weighted integral: $\text{Energy} = \sum \left( \text{Power}_i \times \Delta t_i \right)$, where $\Delta t_i$ is the time difference in hours between samples.
 > * **Hourly Average Tables**: If you are using pre-aggregated hourly average tables (where each row represents a distinct 1-hour interval), summing the hourly average power (kW) values is mathematically correct because the time delta is $\Delta t = 1$ hour.
 
+### Kiosk AP Network Bridging & Loop Prevention (WDS, STP & SSH Keys)
+> [!IMPORTANT]
+> * **Hardware Layout**: The network consists of an upstairs primary gateway router (`192.168.8.1` / GL-MT6000) and a downstairs AP (`192.168.8.2` / Flint 2) connected via a high-speed 2.5G physical ethernet backbone. Both broadcast the same SSID (`PrivateAP5GHz`).
+> * **WDS Loop Hazard**: WDS (Wireless Distribution System / Wireless Mesh) must be permanently disabled (`option wds '0'`) on the downstairs AP's wireless interfaces. If WDS is enabled while the 2.5G physical backhaul is connected, it creates a bridge loop (broadcast storm), leading to:
+>   * High CPU packet-processing load (causing periodic 100ms+ ping spikes).
+>   * MAC address table flapping in the bridge switch database.
+>   * Unicast communication dropouts (preventing wireless clients like the Mac and the Pi from connecting via SSH or VNC).
+> * **STP Precaution**: Spanning Tree Protocol (STP) should be enabled on the network bridge configuration if redundant active links are ever desired, to prevent network loops.
+> * **SSH Authorization**: Development agents are authorized via the Mac's SSH public key (`~/.ssh/id_rsa.pub`) stored in `/etc/dropbear/authorized_keys` on both routers to query network interface states (`iwinfo`, `brctl`) non-destructively.
+
+### Network Configuration Restrictions
+> [!IMPORTANT]
+> * **No Unilateral Network Changes**: Never write to, modify, or rewrite router network configurations, DNS settings, DHCP client/server leases, or wireless interface settings without explicit user permission.
+
+---
+
+## 18. Database Security & Subnet Boundaries
+
+> [!WARNING]
+> * **Subnet Trust Vulnerability**: The `photo_catalog` PostgreSQL database on the Windows host `i7office` (`192.168.8.82`) is currently configured in `pg_hba.conf` using the `trust` authentication method for the entire local subnet:
+>   `host    all             all             192.168.8.0/24          trust`
+> * **No Security Boundary**: This allows any device connected to the local network (`192.168.8.0/24`) to gain unrestricted admin access to the database (including connecting as the superuser `postgres`) without requiring a password.
+> * **Hardening Recommendation**: To establish a secure boundary, it is strongly advised to modify `pg_hba.conf` to use **`scram-sha-256`** password authentication for all external network hosts, and enforce strong passwords for all database users.
 

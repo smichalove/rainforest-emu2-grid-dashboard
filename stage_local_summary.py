@@ -60,6 +60,21 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(message)s'
 )
 
+# Load environment configurations from .env at startup
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+_env_path = os.path.join(_script_dir, ".env")
+if os.path.exists(_env_path):
+    try:
+        with open(_env_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ[k.strip()] = v.strip().strip('"').strip("'")
+        logging.info("Loaded .env config file at startup.")
+    except Exception as e:
+        logging.error(f"Could not load .env file at startup: {e}")
+
 # -------------------------------------------------------------
 # Configuration Constants
 # -------------------------------------------------------------
@@ -78,6 +93,8 @@ CHILICON_HISTORY: str = os.path.join(BACKUP_DIR, "chilicon_history.csv")
 # Model configuration
 DEFAULT_MODEL: str = os.environ.get("EDGE_MODEL", "gemma4-it-q4")
 OLLAMA_ENDPOINT: str = os.environ.get("OLLAMA_HOST", "http://localhost:11434/api/generate")
+FALLBACK_OLLAMA_ENDPOINT: Optional[str] = os.environ.get("FALLBACK_OLLAMA_HOST")
+FALLBACK_EDGE_MODEL: str = os.environ.get("FALLBACK_EDGE_MODEL", "gemma4-it-q4:latest")
 
 # Dual-Node Multi-Agent Feedback Loop configurations
 LOCAL_OLLAMA_ENDPOINT: str = os.environ.get("LOCAL_OLLAMA_HOST", "http://localhost:11434/api/generate")
@@ -1040,31 +1057,47 @@ def calculate_history_flex_and_credits(
 def query_local_ollama(prompt: str, model: str, endpoint: Optional[str] = None) -> str:
     """Queries local Ollama generation API synchronously."""
     target_endpoint = endpoint or OLLAMA_ENDPOINT
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "system": "You are a precise, low-overhead edge AI energy assistant.",
-        "stream": False,
-        "options": {
-            "num_predict": 2048,
-            "num_ctx": 8192,
-            "temperature": 0.1
+    
+    endpoints_to_try = [target_endpoint]
+    if FALLBACK_OLLAMA_ENDPOINT and FALLBACK_OLLAMA_ENDPOINT not in endpoints_to_try:
+        endpoints_to_try.append(FALLBACK_OLLAMA_ENDPOINT)
+        
+    last_err = None
+    for curr_endpoint in endpoints_to_try:
+        curr_model = model
+        if curr_endpoint == FALLBACK_OLLAMA_ENDPOINT:
+            curr_model = FALLBACK_EDGE_MODEL
+            
+        payload = {
+            "model": curr_model,
+            "prompt": prompt,
+            "system": "You are a precise, low-overhead edge AI energy assistant.",
+            "stream": False,
+            "options": {
+                "num_predict": 2048,
+                "num_ctx": 8192,
+                "temperature": 0.1
+            }
         }
-    }
-    data = json.dumps(payload).encode('utf-8')
-    req = urllib.request.Request(
-        target_endpoint, 
-        data=data, 
-        headers={'Content-Type': 'application/json'}
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=300) as response:
-            res_body = response.read().decode('utf-8')
-            res_data = json.loads(res_body)
-            return res_data.get("response", "").strip()
-    except Exception as e:
-        logging.error(f"Ollama API error at {target_endpoint}: {e}")
-        raise
+        data = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(
+            curr_endpoint, 
+            data=data, 
+            headers={'Content-Type': 'application/json'}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=300) as response:
+                res_body = response.read().decode('utf-8')
+                res_data = json.loads(res_body)
+                return res_data.get("response", "").strip()
+        except Exception as e:
+            logging.error(f"Ollama API error at {curr_endpoint} with model {curr_model}: {e}")
+            last_err = e
+            if len(endpoints_to_try) > 1 and curr_endpoint == target_endpoint:
+                logging.warning(f"Attempting fallback query to {FALLBACK_OLLAMA_ENDPOINT}...")
+                
+    if last_err:
+        raise last_err
 
 
 def calculate_remaining_lines(baseline_text: str, max_allowed: int = 30) -> int:
@@ -2189,25 +2222,52 @@ def query_local_ollama_stream(prompt: str, model: str, endpoint: Optional[str] =
         String token chunks as they arrive.
     """
     target_endpoint = endpoint or OLLAMA_ENDPOINT
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "system": "You are a precise, low-overhead edge AI energy assistant.",
-        "stream": True,
-        "options": {
-            "num_predict": 2048,
-            "num_ctx": 8192,
-            "temperature": 0.1
+    
+    endpoints_to_try = [target_endpoint]
+    if FALLBACK_OLLAMA_ENDPOINT and FALLBACK_OLLAMA_ENDPOINT not in endpoints_to_try:
+        endpoints_to_try.append(FALLBACK_OLLAMA_ENDPOINT)
+        
+    connected = False
+    last_err = None
+    for curr_endpoint in endpoints_to_try:
+        curr_model = model
+        if curr_endpoint == FALLBACK_OLLAMA_ENDPOINT:
+            curr_model = FALLBACK_EDGE_MODEL
+            
+        payload = {
+            "model": curr_model,
+            "prompt": prompt,
+            "system": "You are a precise, low-overhead edge AI energy assistant.",
+            "stream": True,
+            "options": {
+                "num_predict": 2048,
+                "num_ctx": 8192,
+                "temperature": 0.1
+            }
         }
-    }
-    data = json.dumps(payload).encode('utf-8')
-    req = urllib.request.Request(
-        target_endpoint,
-        data=data,
-        headers={'Content-Type': 'application/json'}
-    )
+        data = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(
+            curr_endpoint,
+            data=data,
+            headers={'Content-Type': 'application/json'}
+        )
+        try:
+            response = urllib.request.urlopen(req, timeout=300)
+            connected = True
+            break
+        except Exception as e:
+            logging.error(f"Ollama stream API connection error at {curr_endpoint}: {e}")
+            last_err = e
+            if len(endpoints_to_try) > 1 and curr_endpoint == target_endpoint:
+                logging.warning(f"Attempting fallback stream connection to {FALLBACK_OLLAMA_ENDPOINT}...")
+                
+    if not connected:
+        if last_err:
+            raise last_err
+        return
+        
     try:
-        with urllib.request.urlopen(req, timeout=300) as response:
+        with response:
             for line in response:
                 if line:
                     chunk = json.loads(line.decode('utf-8'))
@@ -2215,7 +2275,7 @@ def query_local_ollama_stream(prompt: str, model: str, endpoint: Optional[str] =
                     if token:
                         yield token
     except Exception as e:
-        logging.error(f"Ollama streaming API error at {target_endpoint}: {e}")
+        logging.error(f"Ollama stream read error: {e}")
         raise
 
 
@@ -2349,23 +2409,12 @@ def main() -> None:
                 except ValueError:
                     pass
                     
-    # Read environment configs if present
-    env_path = os.path.join(SCRIPT_DIR, ".env")
-    if os.path.exists(env_path):
-        try:
-            with open(env_path, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        k, v = line.split("=", 1)
-                        os.environ[k.strip()] = v.strip().strip('"').strip("'")
-            logging.info("Loaded .env config file for server.")
-        except Exception as e:
-            logging.error(f"Could not load .env file: {e}")
-
-    global DEFAULT_MODEL, OLLAMA_ENDPOINT
+    # Environment configs loaded at module startup; re-binding globals
+    global DEFAULT_MODEL, OLLAMA_ENDPOINT, FALLBACK_OLLAMA_ENDPOINT, FALLBACK_EDGE_MODEL
     DEFAULT_MODEL = os.environ.get("EDGE_MODEL", DEFAULT_MODEL)
     OLLAMA_ENDPOINT = os.environ.get("OLLAMA_HOST", OLLAMA_ENDPOINT)
+    FALLBACK_OLLAMA_ENDPOINT = os.environ.get("FALLBACK_OLLAMA_HOST", FALLBACK_OLLAMA_ENDPOINT)
+    FALLBACK_EDGE_MODEL = os.environ.get("FALLBACK_EDGE_MODEL", FALLBACK_EDGE_MODEL)
 
     # Allow address reuse
     socketserver.TCPServer.allow_reuse_address = True

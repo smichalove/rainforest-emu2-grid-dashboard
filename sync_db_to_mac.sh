@@ -48,6 +48,7 @@ else
 
     echo "=== Pulling telemetry data from Jetson ($JETSON_HOST) ==="
     rsync -avz --progress "${JETSON_USER}@${JETSON_HOST}:/home/grid_backup/backups/grid_history.db" ./grid_history.db
+    rsync -avz --progress "${JETSON_USER}@${JETSON_HOST}:/home/grid_backup/backups/analysis_history.db" ./analysis_history.db
     rsync -avz --progress --include="*.csv" --exclude="*" "${JETSON_USER}@${JETSON_HOST}:/home/grid_backup/backups/" ./
 fi
 

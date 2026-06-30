@@ -53,6 +53,8 @@ load_env_file()
 # Global configuration constants
 SERVER_URL: str = os.getenv("LOCAL_SERVER_URL", "http://192.168.8.45:11434/api/chat")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "gemma4-it-q4:latest")
+FALLBACK_SERVER_URL: str = os.getenv("FALLBACK_SERVER_URL", "http://192.168.8.193:11434/api/chat")
+FALLBACK_OLLAMA_MODEL: str = os.getenv("FALLBACK_OLLAMA_MODEL", "gemma2:9b")
 OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "131072"))
 SYNC_DIR: str = os.getenv("RAINFOREST_SYNC_DIR", "/Users/treven/rainforest_db")
 DEFAULT_TEMPERATURE: float = 0.2
@@ -619,8 +621,11 @@ def execute_sql(db_path: str, sql: str) -> str:
     conn = None
     try:
         conn = sqlite3.connect(db_path)
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        backups_db_path = os.path.join(script_dir, "backups/analysis_history.db")
+        backups_db_path = os.path.join(SYNC_DIR, "analysis_history.db")
+        if not os.path.exists(backups_db_path):
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            backups_db_path = os.path.join(script_dir, "backups/analysis_history.db")
+            
         if os.path.exists(backups_db_path):
             conn.execute(f"ATTACH DATABASE '{backups_db_path}' AS backups_db")
             
@@ -923,49 +928,66 @@ Be concise, organized, and homeowner-oriented.
             )
 
             try:
-                with urllib.request.urlopen(req, timeout=120.0) as response:
-                    result = json.loads(response.read().decode("utf-8"))
-                    response_thinking = result.get("message", {}).get("thinking", "").strip()
-                    response_text = result.get("message", {}).get("content", "").strip()
+                try:
+                    with urllib.request.urlopen(req, timeout=300.0) as response:
+                        result = json.loads(response.read().decode("utf-8"))
+                except Exception as connection_err:
+                    if FALLBACK_SERVER_URL:
+                        print(f"\n[Warning] Primary server at {SERVER_URL} failed: {connection_err}")
+                        print(f"Attempting fallback to server {FALLBACK_SERVER_URL} (ubunto-giga) with model {FALLBACK_OLLAMA_MODEL}...")
+                        payload["model"] = FALLBACK_OLLAMA_MODEL
+                        fallback_req = urllib.request.Request(
+                            FALLBACK_SERVER_URL,
+                            data=json.dumps(payload).encode("utf-8"),
+                            headers={"Content-Type": "application/json"},
+                            method="POST"
+                        )
+                        with urllib.request.urlopen(fallback_req, timeout=300.0) as response:
+                            result = json.loads(response.read().decode("utf-8"))
+                    else:
+                        raise connection_err
+
+                response_thinking = result.get("message", {}).get("thinking", "").strip()
+                response_text = result.get("message", {}).get("content", "").strip()
+                
+                if response_thinking and not tool_executed:
+                    print("\n[Thinking Process]")
+                    print(response_thinking)
+                    print("-" * 50)
+                
+                # Look for tool call tags
+                tool_call_match = re.search(r'<tool_call>(.*?)</tool_call>', response_text, re.DOTALL)
+                if tool_call_match:
+                    tool_json_str = tool_call_match.group(1).strip()
+                    print(f"\n[Executing Tool Call]: {tool_json_str}")
+                    sql_query = ""
+                    try:
+                        tool_data = json.loads(tool_json_str)
+                        sql_query = tool_data.get("sql", "")
+                    except Exception:
+                        # Fallback: extract SELECT query directly if not well-formed JSON
+                        sql_match = re.search(r'(SELECT\s+.*)', tool_json_str, re.IGNORECASE | re.DOTALL)
+                        if sql_match:
+                            sql_query = sql_match.group(1).strip()
                     
-                    if response_thinking and not tool_executed:
-                        print("\n[Thinking Process]")
-                        print(response_thinking)
-                        print("-" * 50)
-                    
-                    # Look for tool call tags
-                    tool_call_match = re.search(r'<tool_call>(.*?)</tool_call>', response_text, re.DOTALL)
-                    if tool_call_match:
-                        tool_json_str = tool_call_match.group(1).strip()
-                        print(f"\n[Executing Tool Call]: {tool_json_str}")
-                        sql_query = ""
-                        try:
-                            tool_data = json.loads(tool_json_str)
-                            sql_query = tool_data.get("sql", "")
-                        except Exception:
-                            # Fallback: extract SELECT query directly if not well-formed JSON
-                            sql_match = re.search(r'(SELECT\s+.*)', tool_json_str, re.IGNORECASE | re.DOTALL)
-                            if sql_match:
-                                sql_query = sql_match.group(1).strip()
+                    if sql_query:
+                        print(f"[Executing SQL]: {sql_query}")
+                        db_path = os.path.join(SYNC_DIR, "local_repl.db")
+                        query_res = execute_sql(db_path, sql_query)
+                        print(f"[Results]:\n{query_res}\n")
                         
-                        if sql_query:
-                            print(f"[Executing SQL]: {sql_query}")
-                            db_path = os.path.join(SYNC_DIR, "local_repl.db")
-                            query_res = execute_sql(db_path, sql_query)
-                            print(f"[Results]:\n{query_res}\n")
-                            
-                            # Append the assistant's output with tool call and the tool's result to active_messages
-                            active_messages.append({"role": "assistant", "content": response_text})
-                            active_messages.append({"role": "user", "content": f"TOOL RESULT:\n{query_res}"})
-                            tool_executed = True
-                            continue  # Loop back and send active_messages to the model
-                        else:
-                            print("[Error] Failed to extract valid SQL from tool call.")
-                    
-                    # If we get here, no tool call was executed. This is the final response.
-                    final_response_text = response_text
-                    final_response_thinking = response_thinking
-                    break
+                        # Append the assistant's output with tool call and the tool's result to active_messages
+                        active_messages.append({"role": "assistant", "content": response_text})
+                        active_messages.append({"role": "user", "content": f"TOOL RESULT:\n{query_res}"})
+                        tool_executed = True
+                        continue  # Loop back and send active_messages to the model
+                    else:
+                        print("[Error] Failed to extract valid SQL from tool call.")
+                
+                # If we get here, no tool call was executed. This is the final response.
+                final_response_text = response_text
+                final_response_thinking = response_thinking
+                break
             except urllib.error.HTTPError as e:
                 try:
                     error_body = e.read().decode("utf-8")
