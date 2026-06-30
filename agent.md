@@ -433,3 +433,13 @@ Stores Edge AI daily summary history and frequency metrics.
 > * **No Security Boundary**: This allows any device connected to the local network (`192.168.8.0/24`) to gain unrestricted admin access to the database (including connecting as the superuser `postgres`) without requiring a password.
 > * **Hardening Recommendation**: To establish a secure boundary, it is strongly advised to modify `pg_hba.conf` to use **`scram-sha-256`** password authentication for all external network hosts, and enforce strong passwords for all database users.
 
+---
+
+## 19. Chilicon Power Cloud API Telemetry Ingestion Lag
+
+> [!NOTE]
+> * **API Ingestion Delay**: The Chilicon Power Cloud API (`cloud.chiliconpower.com/ajax/fetchOwnerUpdate`) has an inherent server-side processing lag of **~23 minutes** before microinverter readings are posted and visible in the JSON database payload.
+> * **Wall Console Mismatch**: Because the local CP-100 touchscreen gateway on the wall reads microinverters in real-time, the cloud-based dashboard display will always lag behind the physical wall console by **23 to 38 minutes** (depending on the 15-minute dashboard polling schedule).
+> * **No Direct Local API**: The local CP-100 gateway does not host a direct local API status URL (such as JSON or XML status pages) and only supports outbound cloud synchronization, meaning we cannot bypass this delay through local network queries.
+
+
