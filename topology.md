@@ -10,12 +10,16 @@ This document maintains the official record of the network hosts, hardware confi
 *   **Hostname**: `nvjetson`
 *   **IP Address**: `192.168.8.68`
 *   **Role**: Primary telemetry ingestion aggregator, stager daemon host (`stage_local_summary.py`), and gRPC service manager.
-*   **Hardware**: Jetson Orin Nano (8 GB shared system RAM/VRAM)
+*   **Hardware**:
+    *   **CPU**: 6-core ARM Cortex-A78AE (Architecture: `aarch64`)
+    *   **Memory**: 8 GB LPDDR5 (7.4 GiB usable + 7.7 GiB swap on ZRAM)
+    *   **Storage**: 1 TB NVMe SSD (Model: `ORICO-J10`, Size: 953.9 GB)
+    *   **GPU**: 1024-core NVIDIA Ampere (integrated/shared system RAM)
 *   **OS**: Ubuntu Linux (JetPack)
 
 ### 1.2 Jetson Orin Nano (Dedicated GPU AI Server)
 *   **Hostname**: `nvagent`
-*   **IP Address**: `192.168.8.45`
+*   **IP Address**: `192.168.8.45` (Currently Offline / Dead)
 *   **Role**: Primary edge AI generation host for stager summaries.
 *   **Hardware**: Jetson Orin Nano (8 GB shared system RAM/VRAM)
 *   **OS**: Ubuntu Linux (JetPack)
@@ -34,8 +38,9 @@ This document maintains the official record of the network hosts, hardware confi
 *   **IP Address**: `192.168.8.193`
 *   **Role**: Primary interactive REPL chat host; active stager daemon fallback node.
 *   **Hardware**:
-    *   **CPU**: AMD Ryzen 5 5500 (6 Cores / 12 Threads)
-    *   **RAM**: 32 GB DDR4
+    *   **CPU**: AMD Ryzen 5 5500 (6 Cores / 12 Threads, Architecture: `x86_64`)
+    *   **Memory**: 32 GB DDR4 (30 GiB usable)
+    *   **Storage**: 1.5 TB Total (512 GB NVMe SSD `SAMSUNG MZVLB512HAJQ-000L7` + 1 TB SATA SSD `Samsung SSD 860 EVO`)
     *   **GPU**: NVIDIA GeForce RTX 4060 (8 GB GDDR6 VRAM)
     *   **Motherboard**: Gigabyte AB350M-DS3H-CF (BIOS F51g)
 *   **OS**: Ubuntu 26.04 LTS
@@ -43,11 +48,14 @@ This document maintains the official record of the network hosts, hardware confi
     *   `gemma4-it-q4:latest` (Default Fallback Model - 3.1 GB)
     *   `gemma2:9b` (High-Performance 9B Model - 5.4 GB)
 
-### 1.4 Raspberry Pi (Kiosk Display Display)
+### 1.4 Raspberry Pi (Kiosk Display)
 *   **Hostname**: `rainforestpi`
-*   **IP Address**: `192.168.8.70`
+*   **IP Address**: `192.168.8.122` (DHCP updated; formerly `192.168.8.70`)
 *   **Role**: Kiosk frontend, rendering telemetry plots and streaming summaries from the stager daemon.
-*   **Hardware**: Raspberry Pi 4 Model B
+*   **Hardware**:
+    *   **CPU**: Broadcom BCM2711 / Quad-core ARM Cortex-A72 (Architecture: `aarch64`)
+    *   **Memory**: 4 GB LPDDR4 (3.7 GiB usable)
+    *   **Storage**: 64 GB MicroSD card (`/dev/mmcblk0p2`, 58 GB partition size)
 *   **OS**: Raspberry Pi OS (Debian)
 
 ---
@@ -59,17 +67,28 @@ This document maintains the official record of the network hosts, hardware confi
 *   **IP Address**: `192.168.8.82`
 *   **Role**: Active database server hosting the canonical `photo_catalog` database (PostgreSQL 17).
 *   **Hardware**:
+    *   **OS/Arch**: Windows 10/11 x86_64
     *   **GPU**: NVIDIA GeForce RTX 5080
+    *   **Storage**: Attached physical `H:` drive hosting the project/database files.
 *   **Ollama Models**:
     *   `gemma4:12b` (Gemma 4 12B)
 
 ### 2.2 Windows Workstation (Developer Node)
 *   **Hostname**: `i7dell`
-*   **Role**: Developer workstation.
+*   **Role**: Developer workstation (Currently Shutdown / Skipped).
 *   **Hardware**:
     *   **GPU**: NVIDIA GeForce RTX 4070
 *   **Ollama Models**:
-    *   `gemma4:12b` (Gemma 4 12B)
+    *   None active.
+
+### 2.3 Local macOS Workstation (Developer Node)
+*   **Hostname**: `Stevens-Air-2` (Local Mac)
+*   **Role**: Primary code interface, local plotting preview client, and local testing node.
+*   **Hardware**:
+    *   **CPU**: Apple M2 (Architecture: `arm64`)
+    *   **Memory**: 8 GB LPDDR5
+    *   **Storage**: 512 GB NVMe SSD (`460 GiB` APFS container size)
+*   **OS**: macOS
 
 ---
 
@@ -80,9 +99,11 @@ This document maintains the official record of the network hosts, hardware confi
 *   **IP Address**: `192.168.8.156` (formerly `192.168.8.51`)
 *   **Role**: Used strictly as an offline schema testing and model benchmark sandbox.
 *   **Hardware**:
-    *   **CPU**: Intel Xeon W-2135 (6 Cores)
-    *   **RAM**: 64 GB ECC DDR4
+    *   **CPU**: Intel Xeon W-2135 (6 Cores / 12 Threads, Architecture: `x86_64`)
+    *   **Memory**: 64 GB ECC DDR4 (61 GiB usable)
+    *   **Storage**: 2 TB SATA SSD (Model: `SSD 2TB`, Size: 1.9 TB)
     *   **GPU**: NVIDIA Quadro P1000 (4 GB) + NVIDIA GeForce GTX 1050 Ti (4 GB)
+*   **OS**: Ubuntu Linux
 *   **Active Ollama Models**:
     *   `gemma2-9b-custom` (Offloaded to CPU memory - 5.73 tokens/s)
     *   `gemma2-2b-custom` (17.25 tokens/s)
