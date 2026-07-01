@@ -973,6 +973,8 @@ Be concise, organized, and homeowner-oriented.
                         sql_match = re.search(r'(SELECT\s+.*)', tool_json_str, re.IGNORECASE | re.DOTALL)
                         if sql_match:
                             sql_query = sql_match.group(1).strip()
+                            # Clean trailing JSON leftovers (quotes, braces, semicolons) from regex extraction
+                            sql_query = re.sub(r'[\s"\';}]+$', '', sql_query)
                     
                     if sql_query:
                         print(f"[Executing SQL]: {sql_query}")
