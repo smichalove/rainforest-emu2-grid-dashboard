@@ -54,7 +54,7 @@ load_env_file()
 SERVER_URL: str = os.getenv("LOCAL_SERVER_URL", "http://192.168.8.45:11434/api/chat")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "gemma4-it-q4:latest")
 FALLBACK_SERVER_URL: str = os.getenv("FALLBACK_SERVER_URL", "http://192.168.8.193:11434/api/chat")
-FALLBACK_OLLAMA_MODEL: str = os.getenv("FALLBACK_OLLAMA_MODEL", "gemma2:9b")
+FALLBACK_OLLAMA_MODEL: str = os.getenv("FALLBACK_OLLAMA_MODEL", "gemma4-it-q4:latest")
 OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "131072"))
 SYNC_DIR: str = os.getenv("RAINFOREST_SYNC_DIR", "/Users/treven/rainforest_db")
 DEFAULT_TEMPERATURE: float = 0.2
@@ -955,8 +955,12 @@ Be concise, organized, and homeowner-oriented.
                     print(response_thinking)
                     print("-" * 50)
                 
-                # Look for tool call tags
-                tool_call_match = re.search(r'<tool_call>(.*?)</tool_call>', response_text, re.DOTALL)
+                # Look for tool call tags (supporting standard XML tags and native tool call tokens like <tool_call|>)
+                tool_call_match = re.search(
+                    r'<\|?tool_call\|?>(.*?)(?:</\|?tool_call\|?>|<\|?tool_response\|?>|<tool_call\|>|$)',
+                    response_text,
+                    re.DOTALL | re.IGNORECASE
+                )
                 if tool_call_match:
                     tool_json_str = tool_call_match.group(1).strip()
                     print(f"\n[Executing Tool Call]: {tool_json_str}")

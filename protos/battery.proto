@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package grid;
+
+import "google/protobuf/timestamp.proto";
+
+// Status indicating active phase of the battery storage system
+enum BatteryStatus {
+  BATTERY_STATUS_UNSPECIFIED = 0;
+  BATTERY_STATUS_IDLE = 1;
+  BATTERY_STATUS_CHARGING = 2;
+  BATTERY_STATUS_DISCHARGING = 3;
+}
+
+// Single telemetry record representing battery status at a specific point in time
+message BatteryReading {
+  google.protobuf.Timestamp timestamp = 1; // Binary nanosecond/second timestamp
+  double battery_kw = 2;                  // Signed power flow (+ = discharging, - = charging)
+  double soc = 3;                         // State of Charge percentage (0.0 - 100.0)
+  BatteryStatus status = 4;               // Status mode indicator
+}
+
+// Slice of historical battery telemetry records
+message BatterySlice {
+  string slice_id = 1;
+  repeated BatteryReading readings = 2;
+}

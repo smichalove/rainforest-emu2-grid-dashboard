@@ -97,6 +97,14 @@ class GridTelemetryClient:
         # Build the final network server endpoint address to bind the channel socket.
         server_address: str = f"{self.host}:{self.port}"
 
+        # Define gRPC channel options for robust keepalives and connection drop auto-detection
+        options = [
+            ('grpc.keepalive_time_ms', 10000),      # Send keepalive pings every 10 seconds
+            ('grpc.keepalive_timeout_ms', 5000),    # Wait 5 seconds for keepalive response
+            ('grpc.keepalive_permit_without_calls', True),
+            ('grpc.http2.max_pings_without_data', 0),
+        ]
+
         if not self.use_mtls:
             # Fallback warning. Plaintext loopbacks are only utilized for local developer
             # workstation unit/contract test sandboxing. In production (edge display to Jetson),
@@ -104,7 +112,7 @@ class GridTelemetryClient:
             logging.warning(
                 f"Establishing INSECURE plaintext channel to {server_address}"
             )
-            self.channel = grpc.insecure_channel(server_address)
+            self.channel = grpc.insecure_channel(server_address, options=options)
         else:
             # Initialize Mutual TLS (mTLS) zero-trust channel. We enforce peer certificate
             # verification on both sides (server verifies client, client verifies server) to
@@ -138,7 +146,7 @@ class GridTelemetryClient:
                     private_key=client_key,
                     certificate_chain=client_cert,
                 )
-                self.channel = grpc.secure_channel(server_address, credentials)
+                self.channel = grpc.secure_channel(server_address, credentials, options=options)
             except Exception as e:
                 # Log critical trace information to simplify on-site kiosk debugging.
                 logging.error(f"Failed to load certificate files for mTLS: {e}")
@@ -260,7 +268,7 @@ class GridTelemetryClient:
         )
 
         try:
-            stream_iter = self.stub.GetTelemetryAnalysisStream(request)
+            stream_iter = self.stub.GetTelemetryAnalysisStream(request, timeout=120)
             for chunk in stream_iter:
                 yield chunk
         except grpc.RpcError as e:
