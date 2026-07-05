@@ -309,6 +309,10 @@ graph TD
 - **Proactive Status Updates:**
   - You must keep all roadmap files, task lists (`task.md`), and planning documents up-to-date. As soon as a feature is completed, tested, or deployed, update its status using explicit **[DONE]**, **[RESOLVED]**, or `[x]` checkmarks.
 
+- **Mandatory Post-Mortem Documentation:**
+  > [!IMPORTANT]
+  > Upon resolving any code regressions, logic bugs, architectural issues, or significant feature gaps, you MUST document the failure, root cause, and resolution details as a new section under the "Post-Mortem" logs of this repository's `agent.md` file before concluding the turn. This guarantees persistent engineering context is saved dynamically.
+
 ---
 
 ## 17. SQLite Database Schema & Telemetry Semantics
