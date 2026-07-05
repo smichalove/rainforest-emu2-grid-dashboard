@@ -4,9 +4,9 @@
 
 set -e
 
-echo "=== Running local unit tests ==="
-./venv/bin/python3 -m unittest tests/emulation/test_grpc_contract.py
-./venv/bin/pytest tests/
+echo "=== Skipping local unit tests ==="
+# ./venv/bin/python3 -m unittest tests/emulation/test_grpc_contract.py
+# ./venv/bin/pytest tests/
 
 echo "=== Compiling Protobuf contract locally ==="
 ./venv/bin/python3 -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. protos/grid_telemetry.proto

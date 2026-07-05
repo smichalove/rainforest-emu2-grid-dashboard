@@ -339,6 +339,14 @@ class ChilliconClient:
                 if len(parsed) >= 3:
                     energy_wh = float(parsed[1])
                     power_kw = float(parsed[2])
+                    
+                    # Fallback to last non-negative value in 5-minute interval list if current power is 0.0
+                    if power_kw == 0.0 and len(parsed) >= 1 and isinstance(parsed[0], list):
+                        non_negative = [v for v in parsed[0] if v != -1]
+                        if non_negative:
+                            power_kw = float(non_negative[-1]) / 1000.0
+                            logging.info(f"Chilicon current power is 0.0, falling back to last active interval value: {power_kw:.3f} kW")
+                            
                     now = datetime.datetime.now()
                     
                     write_csv_row(self.history_file, [now.isoformat(), f"{power_kw:.3f}", f"{energy_wh:.1f}"])

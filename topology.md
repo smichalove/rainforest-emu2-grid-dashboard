@@ -93,12 +93,30 @@ This document maintains the official record of the network hosts, hardware confi
 
 ### 2.3 Local macOS Workstation (Developer Node)
 *   **Hostname**: `Stevens-Air-2` (Local Mac)
-*   **Role**: Primary code interface, local plotting preview client, and local testing node.
+*   **IP Address**: `192.168.8.71`
+*   **Role**: Primary code interface, local plotting preview client, and local testing/LLM node.
 *   **Hardware**:
     *   **CPU**: Apple M2 (Architecture: `arm64`)
     *   **Memory**: 8 GB LPDDR5
     *   **Storage**: 512 GB NVMe SSD (`460 GiB` APFS container size)
 *   **OS**: macOS
+*   **Ollama Models**:
+    *   `gemma4-it-q4:latest` (Custom local 2B edge model)
+        *   > [!NOTE]
+        *   > **Performance Profile**: Runs a 4-bit quantized version of the model (~5–6 GB VRAM footprint). This requires half the memory bandwidth to read the weights during generation, achieving a fast **~10–15 seconds per batch**.
+
+### 2.4 Remote macOS Workstation (Curation Node)
+*   **Hostname**: `Stevens-Mini-2` (Mac Mini M4)
+*   **IP Address**: `192.168.8.103` (2.5 GbE Interface `en8`)
+*   **Role**: High-performance Apple Silicon curation node.
+*   **Hardware**:
+    *   **CPU**: Apple M4 (10-Core CPU, Architecture: `arm64`)
+    *   **Memory**: 16 GB Unified Memory (UMA)
+*   **OS**: macOS
+*   **Active Ollama Models**:
+    *   `gemma4:e4b` (Text-only curation)
+        *   > [!NOTE]
+        *   > **Performance Profile**: Runs the higher precision `e4b` model. Depending on the exact template, 8-bit or higher precision doubles the memory bandwidth pressure and mathematical calculations per token, resulting in a slower **~55–60 seconds per batch** despite the M4 hardware.
 
 ---
 
