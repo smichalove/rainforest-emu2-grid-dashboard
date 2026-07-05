@@ -313,6 +313,10 @@ graph TD
   > [!IMPORTANT]
   > Upon resolving any code regressions, logic bugs, architectural issues, or significant feature gaps, you MUST document the failure, root cause, and resolution details as a new section under the "Post-Mortem" logs of this repository's `agent.md` file before concluding the turn. This guarantees persistent engineering context is saved dynamically.
 
+- **No Chinese-Authored Models:**
+  > [!IMPORTANT]
+  > The user refuses to use any models developed by labs in China (including but not limited to DeepSeek, Qwen, Yi). Never propose, download, configure, or use these models in any curation, indexing, code-generation, or chat setups. Prioritize models from Western/non-Chinese labs (such as Google Gemma, Meta Llama, and Mistral/Codestral).
+
 ---
 
 ## 17. SQLite Database Schema & Telemetry Semantics
