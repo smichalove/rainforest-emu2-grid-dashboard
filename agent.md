@@ -465,4 +465,9 @@ During this session, we resolved the Chilicon PV real-time counter dropout and f
 * **Failure**: The python/pytest test execution hung indefinitely during the local pre-deployment check of `redeploy.sh`. The process consumed near-zero CPU and was stuck in a synchronous `read` system call because of macOS Gatekeeper / certificate verification delays scanning Python 3.14.5 executables and package libraries.
 * **Resolution**: Modified `redeploy.sh` to temporarily comment out/bypass the local test execution phase, allowing code to be copied and services restarted on the Pi and Jetson servers instantly.
 
+### 3. gRPC Keepalive Mismatch (UNAVAILABLE: Too many pings Connection Drop)
+* **Failure**: The microgrid kiosk UI periodically failed to render the agent analysis, showing a `Connection failed (Stager Offline)` error. Logs revealed `UNAVAILABLE: Too many pings` and `Received a GOAWAY with error code ENHANCE_YOUR_CALM` because the client sent keepalive heartbeats every 10 seconds, while the server used default ping restrictions. The server interpreted the client's idle pings as a flood, issued a GOAWAY frame, and dropped the socket connection. The connection periodically "self-healed" due to automatic client-side reconnection backoffs, but would fail again once idle.
+* **Resolution**: Updated `start_grpc_server` in `grpc_server.py` to specify keepalive channel arguments (permitting keepalive pings without active calls, setting the minimum ping receive interval to 5 seconds, and disabling ping strikes completely). This aligns the server with the client's keepalive frequency and stabilizes the connection.
+
+
 

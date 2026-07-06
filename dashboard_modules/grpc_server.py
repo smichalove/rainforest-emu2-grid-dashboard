@@ -681,7 +681,17 @@ def start_grpc_server(
     # of 10 workers. This ensures that concurrent connections (e.g. parallel sensor
     # ingestion streams and interactive LLM token queries) can be resolved concurrently
     # without blockages or task starvation.
-    server = grpc.server(concurrent.futures.ThreadPoolExecutor(max_workers=10))
+    server_options = [
+        ('grpc.keepalive_time_ms', 10000),             # Send keepalive pings every 10 seconds
+        ('grpc.keepalive_timeout_ms', 5000),           # Wait 5 seconds for response
+        ('grpc.keepalive_permit_without_calls', True), # Allow keepalive pings without active calls
+        ('grpc.http2.min_recv_ping_interval_without_data_ms', 5000), # Allow pings as frequently as every 5 seconds
+        ('grpc.http2.max_ping_strikes', 0)             # Turn off ping strikes completely
+    ]
+    server = grpc.server(
+        concurrent.futures.ThreadPoolExecutor(max_workers=10),
+        options=server_options
+    )
     pb2_grpc.add_GridTelemetryServiceServicer_to_server(
         GridTelemetryService(
             db_path,
