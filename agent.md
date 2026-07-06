@@ -469,5 +469,13 @@ During this session, we resolved the Chilicon PV real-time counter dropout and f
 * **Failure**: The microgrid kiosk UI periodically failed to render the agent analysis, showing a `Connection failed (Stager Offline)` error. Logs revealed `UNAVAILABLE: Too many pings` and `Received a GOAWAY with error code ENHANCE_YOUR_CALM` because the client sent keepalive heartbeats every 10 seconds, while the server used default ping restrictions. The server interpreted the client's idle pings as a flood, issued a GOAWAY frame, and dropped the socket connection. The connection periodically "self-healed" due to automatic client-side reconnection backoffs, but would fail again once idle.
 * **Resolution**: Updated `start_grpc_server` in `grpc_server.py` to specify keepalive channel arguments (permitting keepalive pings without active calls, setting the minimum ping receive interval to 5 seconds, and disabling ping strikes completely). This aligns the server with the client's keepalive frequency and stabilizes the connection.
 
+### 4. Client-Side Timeout Cutoff & Cumulative Failover Latency (Kiosk Connection Failures)
+* **Failure**: Even after fixing the gRPC connection drop, the kiosk still occasionally displayed "Connection failed (Stager Offline)" on Slide 2. Stager logs showed that the multi-node failover logic was executing, but it was wasting 30 seconds timing out on unresponsive/slow nodes (like `localhost` or loading delays on `nvagent`) for every individual proposer draft in the workflow. This cumulative delay reached 3 minutes, causing the Pi kiosk's gRPC client to hit its internal timeout limit and abort the connection.
+* **Resolution**:
+  1. Increased client-side socket query timeouts in `agent_loop.py` and `stage_local_summary.py` from 30 seconds to 90 seconds, allowing slower edge GPU servers (like `nvagent`) enough time to finish their inference without premature cutoff.
+  2. Implemented "Failover Memory" (a global cache `_failed_endpoints_cache`) that remembers failed/offline endpoints for 10 minutes. Subsequent requests skip these endpoints instantly, avoiding cumulative timeout delays.
+  3. Fixed endpoint ordering bugs in `stage_local_summary.py` and `repl_client.py` to ensure `nvagent` is always tried first in the priority order.
+
+
 
 

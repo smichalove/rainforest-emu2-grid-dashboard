@@ -122,19 +122,28 @@ This document maintains the official record of the network hosts, hardware confi
 
 ## 3. Staging & Diagnostics (Offline)
 
-### 3.1 Ubuntu GPU Server (Former Staging Server)
+### 3.1 Ubuntu GPU Server (Old Staging Server)
 *   **Hostname**: `steven-len`
-*   **IP Address**: `192.168.8.156` (formerly `192.168.8.51`)
+*   **IP Address**: `192.168.8.156`
+*   **MAC Address**: `a4:ae:11:11:26:38`
 *   **Role**: Used strictly as an offline schema testing and model benchmark sandbox.
 *   **Hardware**:
     *   **CPU**: Intel Xeon W-2135 (6 Cores / 12 Threads, Architecture: `x86_64`)
-    *   **Memory**: 64 GB ECC DDR4 (61 GiB usable)
-    *   **Storage**: 2 TB SATA SSD (Model: `SSD 2TB`, Size: 1.9 TB)
+    *   **Memory**: 64 GB ECC DDR4
     *   **GPU**: NVIDIA Quadro P1000 (4 GB) + NVIDIA GeForce GTX 1050 Ti (4 GB)
 *   **OS**: Ubuntu Linux
-*   **Active Ollama Models**:
-    *   `gemma2-9b-custom` (Offloaded to CPU memory - 5.73 tokens/s)
-    *   `gemma2-2b-custom` (17.25 tokens/s)
+
+### 3.2 Ubuntu GPU Workstation (New Workstation Build)
+*   **Hostname**: `len-big` (alias `big-len`)
+*   **IP Address**: `192.168.8.51` (pinned via router DHCP lease)
+*   **MAC Address**: `a4:ae:11:1d:19:2c`
+*   **Role**: High-speed database sync staging, edge Ollama model host, and primary file storage sandbox.
+*   **Hardware**:
+    *   **CPU**: Intel Xeon W-2135 (6 Cores / 12 Threads, Architecture: `x86_64`)
+    *   **Memory**: 64 GB RAM
+    *   **Storage**: 500GB Samsung NVMe SSD (Root) + 2TB SATA HDD (Mounted at `/mnt/storage` for overflow)
+    *   **GPU**: NVIDIA Quadro P1000 (4 GB VRAM)
+*   **OS**: Ubuntu 26.04 LTS (Kernel 7.0)
 
 ---
 

@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Tuple, Union
 _ollama_host_env: str = os.environ.get("OLLAMA_HOST", "http://nvagent:11434")
 OLLAMA_ENDPOINT: str = _ollama_host_env if _ollama_host_env.endswith("/api/generate") else _ollama_host_env.rstrip("/") + "/api/generate"
 DEFAULT_MODEL: str = "gemma4-it-q4:latest"
+_failed_endpoints_cache: Dict[str, float] = {}
 
 SYSTEM_PROMPT: str = """You are a precise, edge-based AI microgrid analysis agent.
 You have access to the SQLite database containing microgrid telemetry tables:
@@ -75,7 +76,7 @@ def execute_sql_query(db_path: str, sql: str) -> str:
 
 
 def query_ollama(prompt: str, model: str = DEFAULT_MODEL) -> str:
-    """Sends a synchronous request to the Ollama endpoint.
+    """Sends a synchronous request to the Ollama endpoint with robust multi-node failover.
 
     Args:
         prompt: The fully constructed prompt string.
@@ -87,6 +88,10 @@ def query_ollama(prompt: str, model: str = DEFAULT_MODEL) -> str:
     Raises:
         IOError: If communication with Ollama fails.
     """
+    import socket
+    import urllib.error
+    import urllib.request
+
     system_prompt = SYSTEM_PROMPT
     prompt_path = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -99,33 +104,107 @@ def query_ollama(prompt: str, model: str = DEFAULT_MODEL) -> str:
         except Exception as pe:
             logging.error(f"Error reading gemma_agent_prompt.txt: {pe}")
 
-    payload: Dict[str, Any] = {
-        "model": model,
-        "prompt": prompt,
-        "system": system_prompt,
-        "stream": False,
-        "options": {
-            "temperature": 0.1,
-            "num_predict": 1024,
-            "num_ctx": 4096
-        }
-    }
+    # Helper to check if running on the Pi kiosk
+    def is_running_on_pi() -> bool:
+        try:
+            hostname = socket.gethostname().lower()
+            return "pi" in hostname or "rainforest" in hostname
+        except Exception:
+            return False
+
+    # Build sequential rotation endpoints
+    endpoints = [
+        "http://192.168.8.45:11434/api/generate",  # 1. nvagent (Primary dedicated GPU)
+        "http://192.168.8.193:11434/api/generate", # 2. ubunto-giga (Secondary GPU)
+        "http://192.168.8.68:11434/api/generate",  # 3. nvjetson (Data/Math Node)
+        "http://192.168.8.82:11434/api/generate"   # 4. i7office (Windows DB Host)
+    ]
+
+    # Add env configurations dynamically if different
+    for env_var in ["OLLAMA_HOST", "FALLBACK_OLLAMA_HOST", "LOCAL_OLLAMA_HOST"]:
+        val = os.environ.get(env_var)
+        if val:
+            if not val.endswith("/api/generate"):
+                val = val.rstrip("/") + "/api/generate"
+            if val not in endpoints:
+                endpoints.append(val)
+
+    # Exclude localhost on Pi, otherwise append it at the end
+    if not is_running_on_pi():
+        local_endpoint = "http://localhost:11434/api/generate"
+        if local_endpoint not in endpoints:
+            endpoints.append(local_endpoint)
+
+    # Filter out endpoints that failed recently (within 10 minutes)
+    import time
+    now = time.time()
+    active_endpoints = []
+    for ep in endpoints:
+        failed_at = _failed_endpoints_cache.get(ep, 0.0)
+        if now - failed_at > 600.0:
+            active_endpoints.append(ep)
     
-    try:
-        data: bytes = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            OLLAMA_ENDPOINT,
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=120) as response:
-            resp_bytes: bytes = response.read()
-            resp_data = json.loads(resp_bytes.decode("utf-8"))
-            return str(resp_data.get("response", ""))
-    except Exception as err:
-        logging.error(f"Failed to query Ollama at {OLLAMA_ENDPOINT}: {err}")
-        raise IOError(f"Ollama call failed: {err}")
+    # Fallback to try everything if all endpoints are temporarily blocked
+    if not active_endpoints:
+        active_endpoints = endpoints
+
+    # Build sequence of models to try
+    models_to_try = []
+    if model:
+        models_to_try.append(model)
+    fallback_models = [
+        "gemma4-it-q4:latest",
+        "gemma4-it-q4",
+        "gemma2:2b",
+        "gemma2:9b",
+        "gemma2-edge:latest"
+    ]
+    for fm in fallback_models:
+        if fm not in models_to_try:
+            models_to_try.append(fm)
+
+    last_err = None
+    for endpoint in active_endpoints:
+        for target_model in models_to_try:
+            payload: Dict[str, Any] = {
+                "model": target_model,
+                "prompt": prompt,
+                "system": system_prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0.1,
+                    "num_predict": 1024,
+                    "num_ctx": 4096
+                }
+            }
+            try:
+                data = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(
+                    endpoint,
+                    data=data,
+                    headers={"Content-Type": "application/json"},
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=90) as response:
+                    resp_bytes = response.read()
+                    resp_data = json.loads(resp_bytes.decode("utf-8"))
+                    return str(resp_data.get("response", ""))
+            except urllib.error.HTTPError as http_err:
+                last_err = http_err
+                if http_err.code == 404:
+                    logging.warning(f"Ollama model {target_model} not found (404) at {endpoint}. Trying fallback models...")
+                    continue
+                else:
+                    logging.error(f"Ollama server at {endpoint} returned HTTP error {http_err.code}: {http_err.reason}")
+                    _failed_endpoints_cache[endpoint] = time.time()
+                    break
+            except Exception as conn_err:
+                last_err = conn_err
+                _failed_endpoints_cache[endpoint] = time.time()
+                logging.warning(f"Failed to connect to Ollama endpoint {endpoint} with model {target_model}: {conn_err}")
+                break
+
+    raise IOError(f"Ollama failover failed. All endpoints/models exhausted. Last error: {last_err}")
 
 
 def run_agentic_sql_loop(

@@ -61,6 +61,74 @@ DEFAULT_TEMPERATURE: float = 0.2
 DEFAULT_MAX_NEW_TOKENS: int = 4096
 TELEMETRY_WINDOW_HOURS: int = 168
 
+_failed_endpoints_cache: Dict[str, float] = {}
+
+
+def get_repl_endpoints_and_models(model: str) -> Tuple[List[str], List[str]]:
+    """Resolves rotation endpoints and fallback model names for the REPL client."""
+    import socket
+    import time
+    
+    # Helper to check if running on the Pi kiosk
+    def is_running_on_pi() -> bool:
+        try:
+            hostname = socket.gethostname().lower()
+            return "pi" in hostname or "rainforest" in hostname
+        except Exception:
+            return False
+
+    endpoints = [
+        "http://192.168.8.45:11434/api/chat",  # 1. nvagent (Primary dedicated GPU)
+        "http://192.168.8.193:11434/api/chat", # 2. ubunto-giga (Secondary GPU)
+        "http://192.168.8.68:11434/api/chat",  # 3. nvjetson (Data/Math Node)
+        "http://192.168.8.82:11434/api/chat"   # 4. i7office (Windows DB Host)
+    ]
+    
+    # Add env configurations dynamically if different
+    for env_var in ["LOCAL_SERVER_URL", "SERVER_URL", "FALLBACK_SERVER_URL"]:
+        val = os.getenv(env_var)
+        if val:
+            if not val.endswith("/api/chat"):
+                val = val.rstrip("/") + "/api/chat"
+            if val not in endpoints:
+                endpoints.append(val)
+
+    # Exclude localhost on Pi, otherwise append it at the end
+    if not is_running_on_pi():
+        local_endpoint = "http://localhost:11434/api/chat"
+        if local_endpoint not in endpoints:
+            endpoints.append(local_endpoint)
+
+    # Filter out endpoints that failed recently (within 10 minutes)
+    now = time.time()
+    active_endpoints = []
+    for ep in endpoints:
+        failed_at = _failed_endpoints_cache.get(ep, 0.0)
+        if now - failed_at > 600.0:
+            active_endpoints.append(ep)
+            
+    # Fallback to try everything if all endpoints are temporarily blocked
+    if not active_endpoints:
+        active_endpoints = endpoints
+
+    # Build sequence of models to try
+    models_to_try = []
+    if model:
+        models_to_try.append(model)
+        
+    fallback_models = [
+        "gemma4-it-q4:latest",
+        "gemma4-it-q4",
+        "gemma2:2b",
+        "gemma2:9b",
+        "gemma2-edge:latest"
+    ]
+    for fm in fallback_models:
+        if fm not in models_to_try:
+            models_to_try.append(fm)
+            
+    return endpoints, models_to_try
+
 
 def parse_time_str(ts_str: str) -> Optional[datetime.datetime]:
     """Robust parser for datetime strings of varying formats.
@@ -920,32 +988,39 @@ Be concise, organized, and homeowner-oriented.
             else:
                 print("Waiting for agent to process query results...")
             
-            req = urllib.request.Request(
-                SERVER_URL,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST"
-            )
-
             try:
-                try:
-                    with urllib.request.urlopen(req, timeout=300.0) as response:
-                        result = json.loads(response.read().decode("utf-8"))
-                except Exception as connection_err:
-                    if FALLBACK_SERVER_URL:
-                        print(f"\n[Warning] Primary server at {SERVER_URL} failed: {connection_err}")
-                        print(f"Attempting fallback to server {FALLBACK_SERVER_URL} (ubunto-giga) with model {FALLBACK_OLLAMA_MODEL}...")
-                        payload["model"] = FALLBACK_OLLAMA_MODEL
-                        fallback_req = urllib.request.Request(
-                            FALLBACK_SERVER_URL,
+                result = None
+                last_err = None
+                endpoints, models_to_try = get_repl_endpoints_and_models(OLLAMA_MODEL)
+                
+                for endpoint in endpoints:
+                    for target_model in models_to_try:
+                        payload["model"] = target_model
+                        req = urllib.request.Request(
+                            endpoint,
                             data=json.dumps(payload).encode("utf-8"),
                             headers={"Content-Type": "application/json"},
                             method="POST"
                         )
-                        with urllib.request.urlopen(fallback_req, timeout=300.0) as response:
-                            result = json.loads(response.read().decode("utf-8"))
-                    else:
-                        raise connection_err
+                        try:
+                            with urllib.request.urlopen(req, timeout=30.0) as response:
+                                result = json.loads(response.read().decode("utf-8"))
+                            break
+                        except urllib.error.HTTPError as http_err:
+                            last_err = http_err
+                            if http_err.code == 404:
+                                continue
+                            else:
+                                break
+                        except Exception as conn_err:
+                            last_err = conn_err
+                            break
+                    if result:
+                        break
+                        
+                if not result:
+                    print(f"\n[Error] All server/model fallbacks failed. Last error: {last_err}\n")
+                    break
 
                 response_thinking = result.get("message", {}).get("thinking", "").strip()
                 response_text = result.get("message", {}).get("content", "").strip()

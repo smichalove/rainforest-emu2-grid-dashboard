@@ -95,6 +95,7 @@ DEFAULT_MODEL: str = os.environ.get("EDGE_MODEL", "gemma4-it-q4")
 OLLAMA_ENDPOINT: str = os.environ.get("OLLAMA_HOST", "http://localhost:11434/api/generate")
 FALLBACK_OLLAMA_ENDPOINT: Optional[str] = os.environ.get("FALLBACK_OLLAMA_HOST")
 FALLBACK_EDGE_MODEL: str = os.environ.get("FALLBACK_EDGE_MODEL", "gemma4-it-q4:latest")
+_failed_endpoints_cache: Dict[str, float] = {}
 
 # Dual-Node Multi-Agent Feedback Loop configurations
 LOCAL_OLLAMA_ENDPOINT: str = os.environ.get("LOCAL_OLLAMA_HOST", "http://localhost:11434/api/generate")
@@ -1054,50 +1055,129 @@ def calculate_history_flex_and_credits(
     return flex_days_count, total_flex_discharge_kwh, flex_credits_usd, total_standard_export_kwh, standard_credits_usd
 
 
-def query_local_ollama(prompt: str, model: str, endpoint: Optional[str] = None) -> str:
-    """Queries local Ollama generation API synchronously."""
-    target_endpoint = endpoint or OLLAMA_ENDPOINT
+def _get_fallback_endpoints_and_models(model: str, custom_endpoint: Optional[str] = None) -> Tuple[List[str], List[str]]:
+    import socket
+    import time
     
-    endpoints_to_try = [target_endpoint]
-    if FALLBACK_OLLAMA_ENDPOINT and FALLBACK_OLLAMA_ENDPOINT not in endpoints_to_try:
-        endpoints_to_try.append(FALLBACK_OLLAMA_ENDPOINT)
-        
-    last_err = None
-    for curr_endpoint in endpoints_to_try:
-        curr_model = model
-        if curr_endpoint == FALLBACK_OLLAMA_ENDPOINT:
-            curr_model = FALLBACK_EDGE_MODEL
-            
-        payload = {
-            "model": curr_model,
-            "prompt": prompt,
-            "system": "You are a precise, low-overhead edge AI energy assistant.",
-            "stream": False,
-            "options": {
-                "num_predict": 2048,
-                "num_ctx": 8192,
-                "temperature": 0.1
-            }
-        }
-        data = json.dumps(payload).encode('utf-8')
-        req = urllib.request.Request(
-            curr_endpoint, 
-            data=data, 
-            headers={'Content-Type': 'application/json'}
-        )
+    # Helper to check if running on the Pi kiosk
+    def is_running_on_pi() -> bool:
         try:
-            with urllib.request.urlopen(req, timeout=300) as response:
-                res_body = response.read().decode('utf-8')
-                res_data = json.loads(res_body)
-                return res_data.get("response", "").strip()
-        except Exception as e:
-            logging.error(f"Ollama API error at {curr_endpoint} with model {curr_model}: {e}")
-            last_err = e
-            if len(endpoints_to_try) > 1 and curr_endpoint == target_endpoint:
-                logging.warning(f"Attempting fallback query to {FALLBACK_OLLAMA_ENDPOINT}...")
+            hostname = socket.gethostname().lower()
+            return "pi" in hostname or "rainforest" in hostname
+        except Exception:
+            return False
+
+    # Base list of endpoints
+    endpoints = [
+        "http://192.168.8.45:11434/api/generate",  # 1. nvagent (Primary dedicated GPU)
+        "http://192.168.8.193:11434/api/generate", # 2. ubunto-giga (Secondary GPU)
+        "http://192.168.8.68:11434/api/generate",  # 3. nvjetson (Data/Math Node)
+        "http://192.168.8.82:11434/api/generate"   # 4. i7office (Windows DB Host)
+    ]
+    
+    # Prepend target custom endpoint if provided
+    if custom_endpoint:
+        if not custom_endpoint.endswith("/api/generate"):
+            custom_endpoint = custom_endpoint.rstrip("/") + "/api/generate"
+        if custom_endpoint in endpoints:
+            endpoints.remove(custom_endpoint)
+        endpoints.insert(0, custom_endpoint)
+
+    # Add env configurations dynamically if different
+    for env_var in ["OLLAMA_HOST", "FALLBACK_OLLAMA_HOST", "LOCAL_OLLAMA_HOST"]:
+        val = os.environ.get(env_var)
+        if val:
+            if not val.endswith("/api/generate"):
+                val = val.rstrip("/") + "/api/generate"
+            if val not in endpoints:
+                endpoints.append(val)
+
+    # Exclude localhost on Pi, otherwise append it at the end
+    if not is_running_on_pi():
+        local_endpoint = "http://localhost:11434/api/generate"
+        if local_endpoint not in endpoints:
+            endpoints.append(local_endpoint)
+
+    # Filter out endpoints that failed recently (within 10 minutes)
+    now = time.time()
+    active_endpoints = []
+    for ep in endpoints:
+        failed_at = _failed_endpoints_cache.get(ep, 0.0)
+        if now - failed_at > 600.0:
+            active_endpoints.append(ep)
+            
+    # Fallback to try everything if all endpoints are temporarily blocked
+    if not active_endpoints:
+        active_endpoints = endpoints
+
+    # Build sequence of models to try
+    models_to_try = []
+    if model:
+        models_to_try.append(model)
+    
+    fallback_models = [
+        "gemma4-it-q4:latest",
+        "gemma4-it-q4",
+        "gemma2:2b",
+        "gemma2:9b",
+        "gemma2-edge:latest"
+    ]
+    for fm in fallback_models:
+        if fm not in models_to_try:
+            models_to_try.append(fm)
+            
+    return active_endpoints, models_to_try
+
+
+def query_local_ollama(prompt: str, model: str, endpoint: Optional[str] = None) -> str:
+    """Queries local Ollama generation API synchronously with robust failover."""
+    import urllib.error
+    import time
+    endpoints, models_to_try = _get_fallback_endpoints_and_models(model, endpoint)
+    
+    last_err = None
+    for curr_endpoint in endpoints:
+        for curr_model in models_to_try:
+            payload = {
+                "model": curr_model,
+                "prompt": prompt,
+                "system": "You are a precise, low-overhead edge AI energy assistant.",
+                "stream": False,
+                "options": {
+                    "num_predict": 2048,
+                    "num_ctx": 8192,
+                    "temperature": 0.1
+                }
+            }
+            data = json.dumps(payload).encode('utf-8')
+            req = urllib.request.Request(
+                curr_endpoint, 
+                data=data, 
+                headers={'Content-Type': 'application/json'}
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=90) as response:
+                    res_body = response.read().decode('utf-8')
+                    res_data = json.loads(res_body)
+                    return res_data.get("response", "").strip()
+            except urllib.error.HTTPError as http_err:
+                last_err = http_err
+                if http_err.code == 404:
+                    logging.warning(f"Ollama model {curr_model} not found (404) at {curr_endpoint}. Trying fallback models...")
+                    continue
+                else:
+                    logging.error(f"Ollama server at {curr_endpoint} returned HTTP error {http_err.code}: {http_err.reason}")
+                    _failed_endpoints_cache[curr_endpoint] = time.time()
+                    break
+            except Exception as conn_err:
+                last_err = conn_err
+                _failed_endpoints_cache[curr_endpoint] = time.time()
+                logging.warning(f"Failed to connect to Ollama endpoint {curr_endpoint} with model {curr_model}: {conn_err}")
+                break
                 
     if last_err:
         raise last_err
+    raise IOError("Ollama failover failed. All endpoints/models exhausted.")
 
 
 def calculate_remaining_lines(baseline_text: str, max_allowed: int = 30) -> int:
@@ -2211,7 +2291,7 @@ def _run_analysis_workflow_inner(
 
 
 def query_local_ollama_stream(prompt: str, model: str, endpoint: Optional[str] = None) -> Generator[str, None, None]:
-    """Queries local Ollama generation API with streaming enabled.
+    """Queries local Ollama generation API with streaming enabled and robust failover.
 
     Args:
         prompt: Formatted user instructions to analyze microgrid telemetry.
@@ -2221,46 +2301,53 @@ def query_local_ollama_stream(prompt: str, model: str, endpoint: Optional[str] =
     Yields:
         String token chunks as they arrive.
     """
-    target_endpoint = endpoint or OLLAMA_ENDPOINT
+    import urllib.error
+    endpoints, models_to_try = _get_fallback_endpoints_and_models(model, endpoint)
     
-    endpoints_to_try = [target_endpoint]
-    if FALLBACK_OLLAMA_ENDPOINT and FALLBACK_OLLAMA_ENDPOINT not in endpoints_to_try:
-        endpoints_to_try.append(FALLBACK_OLLAMA_ENDPOINT)
-        
     connected = False
     last_err = None
-    for curr_endpoint in endpoints_to_try:
-        curr_model = model
-        if curr_endpoint == FALLBACK_OLLAMA_ENDPOINT:
-            curr_model = FALLBACK_EDGE_MODEL
-            
-        payload = {
-            "model": curr_model,
-            "prompt": prompt,
-            "system": "You are a precise, low-overhead edge AI energy assistant.",
-            "stream": True,
-            "options": {
-                "num_predict": 2048,
-                "num_ctx": 8192,
-                "temperature": 0.1
+    response = None
+    
+    for curr_endpoint in endpoints:
+        for curr_model in models_to_try:
+            payload = {
+                "model": curr_model,
+                "prompt": prompt,
+                "system": "You are a precise, low-overhead edge AI energy assistant.",
+                "stream": True,
+                "options": {
+                    "num_predict": 2048,
+                    "num_ctx": 8192,
+                    "temperature": 0.1
+                }
             }
-        }
-        data = json.dumps(payload).encode('utf-8')
-        req = urllib.request.Request(
-            curr_endpoint,
-            data=data,
-            headers={'Content-Type': 'application/json'}
-        )
-        try:
-            response = urllib.request.urlopen(req, timeout=300)
-            connected = True
+            data = json.dumps(payload).encode('utf-8')
+            req = urllib.request.Request(
+                curr_endpoint,
+                data=data,
+                headers={'Content-Type': 'application/json'}
+            )
+            try:
+                response = urllib.request.urlopen(req, timeout=90)
+                connected = True
+                break
+            except urllib.error.HTTPError as http_err:
+                last_err = http_err
+                if http_err.code == 404:
+                    logging.warning(f"Ollama model {curr_model} not found (404) at {curr_endpoint}. Trying fallback models...")
+                    continue
+                else:
+                    logging.error(f"Ollama server at {curr_endpoint} returned HTTP error {http_err.code}: {http_err.reason}")
+                    _failed_endpoints_cache[curr_endpoint] = time.time()
+                    break
+            except Exception as conn_err:
+                last_err = conn_err
+                _failed_endpoints_cache[curr_endpoint] = time.time()
+                logging.warning(f"Failed to connect to Ollama endpoint {curr_endpoint} with model {curr_model}: {conn_err}")
+                break
+        if connected:
             break
-        except Exception as e:
-            logging.error(f"Ollama stream API connection error at {curr_endpoint}: {e}")
-            last_err = e
-            if len(endpoints_to_try) > 1 and curr_endpoint == target_endpoint:
-                logging.warning(f"Attempting fallback stream connection to {FALLBACK_OLLAMA_ENDPOINT}...")
-                
+            
     if not connected:
         if last_err:
             raise last_err
@@ -2270,10 +2357,13 @@ def query_local_ollama_stream(prompt: str, model: str, endpoint: Optional[str] =
         with response:
             for line in response:
                 if line:
-                    chunk = json.loads(line.decode('utf-8'))
-                    token = chunk.get("response", "")
-                    if token:
-                        yield token
+                    try:
+                        line_data = json.loads(line.decode('utf-8'))
+                        chunk = line_data.get("response", "")
+                        if chunk:
+                            yield chunk
+                    except json.JSONDecodeError:
+                        continue
     except Exception as e:
         logging.error(f"Ollama stream read error: {e}")
         raise
