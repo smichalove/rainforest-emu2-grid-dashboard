@@ -477,5 +477,25 @@ During this session, we resolved the Chilicon PV real-time counter dropout and f
   3. Fixed endpoint ordering bugs in `stage_local_summary.py` and `repl_client.py` to ensure `nvagent` is always tried first in the priority order.
 
 
+---
+
+# Post-Mortem: Summary of Edge Model Configuration & Memory Failures (Session 2026-07-08)
+
+During this session, we resolved a CUDA OOM model loading crash on the dedicated GPU node and fixed network resource/timeout issues:
+
+### 1. CUDA Out-of-Memory (OOM) via OS Page Cache Fragmentation on Jetson
+* **Failure**: When attempting to run a newly corrected `LOCAL_EDGE_MODEL` name (`gemma2:2b`), the Ollama daemon on `nvagent` (`192.168.8.45`) crashed and returned `500 Internal Server Error`. The service log showed `llama-server reported out-of-memory: cudaMalloc failed`. This happened because the Linux page cache (`buff/cache`) had fragmented the unified memory pool, preventing the NVIDIA CUDA driver from finding the contiguous physical memory pages needed to map the new model's weights.
+* **Resolution**: Executed `sudo sync && sudo sysctl -w vm.drop_caches=3` and restarted the `ollama` service on `nvagent` to flush the OS page cache and free up contiguous memory blocks.
+
+### 2. Proposer Model Mismatch (2B VRAM Loading Conflict)
+* **Failure**: The `.env` configuration had a typo/placeholder `LOCAL_EDGE_MODEL="gemma2:2b"` (which is a Gemma 2 model). The user clarified that they are not running a 2B model at all on their edge servers. Trying to load the 2B model alongside the primary 5.1B model (`gemma4-it-q4:latest`) on the Orin Nano's 8 GB memory limit caused VRAM starvation.
+* **Resolution**: Updated `LOCAL_EDGE_MODEL` to `"gemma4-it-q4:latest"` in the `.env` configuration file. This forces the proposer-verifier pipeline to reuse the pre-loaded 5.1B model, preventing the stager from trying to load a second model, bypassing all 404 fallback loops, and ensuring clean GPU execution.
+
+### 3. Network Resource Saturation & Client Timeout Cutoff
+* **Failure**: The stager timed out trying to query `ubunto-giga` (`192.168.8.193`) as the primary LLM host because the node was fully occupied pulling a 7.4 GB model manifest (`gemma4:12b`) for the background photo cataloger. Because the stager spent 90 seconds waiting for the busy node before falling back to `nvagent`, the total query duration reached ~150+ seconds. Since the Pi kiosk's gRPC client timeout was set to `120` seconds, the Pi dropped the connection prematurely, displaying "Stager Unavailable" on the screen.
+* **Resolution**: Updated `timeout=300` in `grpc_client.py` to give the client plenty of head-room. The system now successfully failover-routes to `nvagent` and finishes streaming within the client window.
+
+
+
 
 

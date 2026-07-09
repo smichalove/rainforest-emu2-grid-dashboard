@@ -268,7 +268,7 @@ class GridTelemetryClient:
         )
 
         try:
-            stream_iter = self.stub.GetTelemetryAnalysisStream(request, timeout=120)
+            stream_iter = self.stub.GetTelemetryAnalysisStream(request, timeout=300)
             for chunk in stream_iter:
                 yield chunk
         except grpc.RpcError as e:
