@@ -1,0 +1,136 @@
+# Gemma Photo Cataloger - Server Topology
+
+![Gemma Photo Cataloger - Server Topology](topology.jpeg)
+
+This document details the system architecture and network topology utilized by the `gemma_cataloger` photo cataloging pipeline.
+
+The pipeline uses a hybrid orchestration model: it runs the core directory crawling and database writes on the orchestrating host (Windows Workstation or macOS developer client), while offloading heavy Vision-Language Model (VLM) image descriptions and text-based Ollama curation to dedicated GPU inference endpoints across the local area network (LAN).
+
+> [!TIP]
+> **Combined Network Curation Throughput (Live Measured)**: With the concurrent worker pool active (`FAST_OLLAMA_CONCURRENCY=2` per Ollama node, `VLM_CONCURRENCY=1` per VLM node), the multi-server network achieves **~15.8 folders/minute** (up from ~3.6 folders/min with the previous single-thread design). This equates to approximately **~9,500 tracks/hour** curated and committed to PostgreSQL.
+
+---
+
+## 1. Directory & Path Mapping Matrix
+
+Because target music and video assets are stored on external shares, paths must be resolved dynamically depending on which environment is orchestrating the run:
+
+| Drive/Volume | Windows Target | WSL2 Path | macOS Native Path |
+| :--- | :--- | :--- | :--- |
+| **H Drive (Project)** | `H:\Wan_project` | `/mnt/h/Wan_project` | `/Volumes/HDrive/Wan_project` |
+| **D Drive (Music)** | `D:\Users\steven\Music` | `/mnt/d/Users/steven/Music` | `/Volumes/i7office/Users/steven/Music` |
+
+---
+
+## 2. Core Nodes
+
+### Local Windows Workstation (Orchestrator & Database Host @ `192.168.8.82`)
+*   **Role**: Coordinates the WSL2 cataloging pipeline, scans local directories, reads EXIF data, and hosts the master database.
+*   **Hardware**: AMD Ryzen 9 5950X (16-Core / 32-Threads), 128GB RAM, NVIDIA GeForce RTX 5080 (16GB VRAM).
+*   **Verified Performance Limits (Session 2026-07-13)**: Fully stable under 100% concurrent CPU and GPU load (combined core power draw of **610W+**: CPU Package peaking at ~217.1W, GPU peaking at ~396W) with zero thermal throttling and stable clock speeds (~4.19–4.56 GHz).
+*   **Curation Performance**: **~120–135 seconds per batch** (running Local VLM inside WSL2 Docker container).
+*   **Key Services**:
+    *   **PostgreSQL Database**: Stores the canonical photo metadata in the local `photo_catalog` database.
+    *   **Crawler / Ingester (`crawl_and_ingest_all.py`)**: Indexes file paths and runs ExifTool to capture metadata in parallel.
+    *   **WSL2 SSH Access**: Programmatic and CLI access to the WSL2 environment is available via `ssh workbench@i7office` (or `ssh workbench@192.168.8.82`).
+
+### Remote VLM Inference Server ("Dell Server" @ `192.168.8.113`)
+*   **Role**: Primary remote GPU server providing high-throughput vision API endpoints.
+*   **Hostname**: `DellI7`
+*   **Hardware**: AMD Ryzen 9 5900X (12-Core / 24-Threads), 64GB RAM, NVIDIA GeForce RTX 4070 Ti SUPER (16GB VRAM).
+*   **Curation Performance**: **~45–60 seconds per batch** (using FastAPI Gemma 4 VLM).
+*   **Key Services**:
+    *   **FastAPI / Uvicorn API (`remote_server.py`)**: Port `8000` `/describe` and `/analyze` endpoints.
+    *   **Gemma 4 (12B IT) VLM**: Run in 4-bit NF4 quantization using BitsAndBytes.
+
+### Remote Curation Server ("Lenovo Server" @ `192.168.8.156` - Staging Sandbox)
+*   **Role**: Secondary offline schema testing and model benchmark sandbox.
+*   **Hostname**: `steven-len`
+*   **Hardware**: Intel Xeon W-2135, 64GB RAM, NVIDIA Quadro P1000 (4GB) + NVIDIA GeForce GTX 1050 Ti (4GB).
+*   **Network Interface**: Wi-Fi pinned to `192.168.8.156` via router static DHCP lease (MAC `a4:ae:11:11:26:38`).
+
+### New Workstation Node ("Lenovo Workstation" @ `192.168.8.51` - OS NVMe Migration)
+*   **Role**: High-speed database sync staging, edge Ollama model host, and primary file storage target.
+*   **Hostname**: `len-big` (alias `big-len`)
+*   **Hardware**: Intel Xeon W-2135, 64GB RAM, NVIDIA Quadro P1000 (4GB VRAM).
+*   **Storage**: 500GB Samsung NVMe SSD (Root OS) + 2TB SATA HDD (Mounted at `/mnt/storage` for overflow).
+*   **Network Interface**: Ethernet pinned to `192.168.8.51` via router static DHCP lease (MAC `a4:ae:11:1d:19:2c`).
+
+### Remote Ollama Server ("Giga Server" @ `192.168.8.193`)
+*   **Role**: Primary remote GPU server for text-based curation and Ollama models.
+*   **Hostname**: `ubunto-giga`
+*   **Hardware**: Ubuntu Linux, NVIDIA GeForce RTX 4060 (8GB VRAM).
+*   **Key Services**:
+    *   **Ollama Service**: Port `11434` running `gemma4-it-q4:latest` (or `gemma2:9b`).
+
+### Remote Ollama Server ("Mac Mini" @ `192.168.8.103`)
+*   **Role**: Apple Silicon curation node.
+*   **Hostname**: `Stevens-Mini-2` (resolves as `Stevens-Mini-2.local` / `Stevens-Mini-2.lan`)
+*   **Hardware**: Apple Mac Mini M4 (10-Core CPU, 16GB Unified Memory / UMA RAM).
+*   **Key Services**:
+    *   **Ollama Service**: Port `11434` running `gemma4:e4b` (for text curation). Vision models are bypassed here to avoid llama-server architecture bugs.
+
+### Remote Developer Node ("Mac Air" @ `192.168.8.71`)
+*   **Role**: Developer Node & Local Backup LLM server.
+*   **Hostname**: `Stevens-Air-2`
+*   **Hardware**: Apple MacBook Air (M-series UMA).
+*   **Key Services**:
+    *   **Ollama Service**: Port `11434` running `gemma4-it-q4`.
+
+---
+
+## 3. Cluster VRAM & Model Capacity Assessment
+
+The memory footprint and capacity assessment across active GPU inference nodes, incorporating the Lenovo workstation's 24GB capacity:
+
+| Node / Hardware | VRAM / Unified Memory | Max Practical Model Size (4-bit / Q4) | Capability Profile |
+| :--- | :--- | :--- | :--- |
+| **Lenovo Node** (Tesla P40) | **24 GB** (Dedicated) | **~30B - 34B Parameters** | Can comfortably host a 26B or 27B model (like Gemma 2 27B) with an 8K context window entirely in VRAM without paging to the system RAM. |
+| **Main Workstation** (RTX 5080) | **16 GB** (Dedicated) | **~12B - 14B Parameters** | Extremely fast generation speeds for mid-tier models (like Gemma 4 12B IT). Cannot fit a 26B model without offloading layers to system RAM. |
+| **Dell Server** (RTX 4070 Ti SUPER) | **16 GB** (Dedicated) | **~12B - 14B Parameters** | Handles the primary VLM endpoint workloads efficiently. Identical memory constraints to the RTX 5080. |
+| **Mac Mini M4** (Apple Silicon) | **16 GB** (UMA / Unified) | **~8B - 9B Parameters** | Once macOS and background services reserve memory, only ~12GB to 13GB remains wired for inference. Limited to smaller, highly quantized text models to avoid SSD paging. |
+| **Giga Server** (RTX 4060) | **8 GB** (Dedicated) | **~7B Parameters** | Strictly limited to smaller, specialized models. Cannot run heavy vision/VLM tasks effectively without severe slowdowns. |
+
+*By offloading the heavy 26B+ workloads to the Tesla P40, you preserve the speed and bandwidth of the 16GB RTX cards for rapid, concurrent processing of the smaller VLM and text-curation tasks in your pipeline.*
+
+---
+
+## 4. Platform Execution Workflows
+
+### A. WSL2 / Windows Execution
+To run curation from WSL2 on the workstation target:
+```bash
+./run_music_combined_pipeline.sh --dir "H:\\" --force-vlm
+```
+To sync database updates to JRiver XML sidecars:
+```bash
+./sync_jriver.sh
+```
+
+### B. macOS Native Execution
+First, ensure your SMB shares are mounted passwordlessly using the mount script:
+```bash
+/Users/treven/Desktop/mount_i7office.sh
+```
+*If `/Volumes/i7office` is missing, map it using a symbolic link:* `sudo ln -s /Volumes/D /Volumes/i7office`
+
+To run curation natively on the macOS client:
+```bash
+python3 clean_database_artists.py --dir "/Volumes/HDrive/Wan_project/wont_v1_vid" --force-vlm
+```
+To sync database updates to JRiver XML sidecars:
+```bash
+python3 sync_pg_to_jriver_xml.py
+```
+
+---
+
+## 5. Network Infrastructure & Routing (`192.168.8.1`)
+*   **Hardware**: GL.iNet Primary Router.
+*   **Key Configurations**:
+    *   **dnsmasq DHCP Daemon**: Configured with static host leases using GL.iNet option tag nicknames.
+    *   **Static Leases**:
+        *   `ubunto-giga` (MAC `e0:d5:5e:6c:03:47`) -> Pinned to `192.168.8.193`
+        *   `steven-len` (MAC `a4:ae:11:11:26:38`) -> Pinned to `192.168.8.156`
+        *   `Stevens-Mini-2` (MAC `6c:1f:f7:72:44:49`) -> Pinned to `192.168.8.103` (2.5 GbE Interface `en8`)
+    *   **Nginx Gateway**: Running `nginx/1.26.1` (audited secure against NGINX Rift rewrite rules).

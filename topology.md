@@ -9,18 +9,7 @@ This document maintains the official record of the network hosts, hardware confi
 ### 1.1 Jetson Orin Nano (Data & Math Node)
 *   **Hostname**: `nvjetson`
 *   **IP Address**: `192.168.8.68`
-*   **Role**: Primary telemetry ingestion aggregator, stager daemon host (`stage_local_summary.py`), and gRPC service manager.
-*   **Hardware**:
-    *   **CPU**: 6-core ARM Cortex-A78AE (Architecture: `aarch64`)
-    *   **Memory**: 8 GB LPDDR5 (7.4 GiB usable + 7.7 GiB swap on ZRAM)
-    *   **Storage**: 1 TB NVMe SSD (Model: `ORICO-J10`, Size: 953.9 GB)
-    *   **GPU**: 1024-core NVIDIA Ampere (integrated/shared system RAM)
-*   **OS**: Ubuntu Linux (JetPack)
-
-### 1.2 Jetson Orin Nano (Dedicated GPU AI Server)
-*   **Hostname**: `nvagent`
-*   **IP Address**: `192.168.8.45` (Currently Offline / Dead)
-*   **Role**: Primary edge AI generation host for stager summaries.
+*   **Role**: Primary telemetry ingestion aggregator, stager daemon host (`stage_local_summary.py`), gRPC service manager, and active edge AI host.
 *   **Hardware**:
     *   **CPU**: 6-core ARM Cortex-A78AE (Architecture: `aarch64`)
     *   **Memory**: 8 GB LPDDR5 (7.4 GiB usable + 7.7 GiB swap on ZRAM)
@@ -36,6 +25,19 @@ This document maintains the official record of the network hosts, hardware confi
     *   `gemma2:9b-instruct-q3_K_M` (4.8 GB)
     *   `gemma2:9b` (5.4 GB)
     *   `gemma2:2b` (1.6 GB)
+
+### 1.2 Jetson Orin Nano (Dedicated GPU AI Server)
+*   **Hostname**: `nvagent`
+*   **IP Address**: `192.168.8.45` (Currently Offline / Dead)
+*   **Role**: Primary edge AI generation host for stager summaries (Standby/Offline).
+*   **Hardware**:
+    *   **CPU**: 6-core ARM Cortex-A78AE (Architecture: `aarch64`)
+    *   **Memory**: 8 GB LPDDR5 (7.4 GiB usable + 7.7 GiB swap on ZRAM)
+    *   **Storage**: 1 TB NVMe SSD (Model: `ORICO-J10`, Size: 953.9 GB)
+    *   **GPU**: 1024-core NVIDIA Ampere (integrated/shared system RAM)
+*   **OS**: Ubuntu Linux (JetPack)
+*   **Active Ollama Models**:
+    *   None (Device Offline)
 
 ### 1.3 Ubuntu Dedicated AI Server (High-Performance Node)
 *   **Hostname**: `ubunto-giga`
@@ -131,6 +133,7 @@ This document maintains the official record of the network hosts, hardware confi
     *   **CPU**: Intel Xeon W-2135 (6 Cores / 12 Threads, Architecture: `x86_64`)
     *   **Memory**: 64 GB ECC DDR4
     *   **GPU**: NVIDIA Quadro P1000 (4 GB) + NVIDIA GeForce GTX 1050 Ti (4 GB)
+    *   **Storage**: 3 TB Seagate HDD (Model: `ST3000DM001-1CH166`, Root system filesystem with ~2.6 TB available)
 *   **OS**: Ubuntu Linux
 
 ### 3.2 Ubuntu GPU Workstation (New Workstation Build)
@@ -142,7 +145,19 @@ This document maintains the official record of the network hosts, hardware confi
     *   **CPU**: Intel Xeon W-2135 (6 Cores / 12 Threads, Architecture: `x86_64`)
     *   **Memory**: 64 GB RAM
     *   **Storage**: 500GB Samsung NVMe SSD (Root) + 2TB SATA HDD (Mounted at `/mnt/storage` for overflow)
-    *   **GPU**: NVIDIA Quadro P1000 (4 GB VRAM)
+    *   **GPU**: NVIDIA Tesla P40 (24 GB VRAM) + NVIDIA Quadro P1000 (4 GB VRAM)
+*   **OS**: Ubuntu 26.04 LTS (Kernel 7.0)
+
+### 3.3 Ubuntu NAS Node ("Lenovo NAS")
+*   **Hostname**: `520c`
+*   **IP Address**: `192.168.8.198`
+*   **MAC Address**: `f4:93:9f:ec:de:96`
+*   **Role**: Network-attached storage (NAS) and backup storage target.
+*   **Hardware**:
+    *   **CPU**: Intel Xeon W-2133 (6 Cores / 12 Threads, Architecture: `x86_64`)
+    *   **Memory**: 48 GB RAM (45 GiB usable)
+    *   **Storage**: 256 GB FIKWOT FX520 NVMe SSD (System Root) + 2x 3 TB SATA HDDs (Mounted at `/srv/nas/storage1` and `/srv/nas/storage2` separately, ext4)
+    *   **GPU**: NVIDIA GeForce GTX 750 Ti (2 GB VRAM) + NVIDIA Quadro P620 (2 GB VRAM)
 *   **OS**: Ubuntu 26.04 LTS (Kernel 7.0)
 
 ---
@@ -170,6 +185,14 @@ This document maintains the official record of the network hosts, hardware confi
     *   **Memory**: 1 GB RAM (1013 MB usable)
     *   **Storage**: 8 GB eMMC (7.2 GB overlay size)
 *   **OS**: OpenWrt (GL.iNet custom firmware based on 21.02-SNAPSHOT, Kernel 5.4.238)
+
+### 4.3 KVM-over-IP Management Device
+*   **Hostname**: `ONE KVM`
+*   **Model**: One-E3 (running BusyBox Linux with Dropbear SSH `2016.74`)
+*   **IP Address**: `192.168.8.188` (MAC Address: `12:35:2A:B1:F3:C8` on interface `eth0`)
+*   **Role**: Remote hardware diagnostics interface for server boot troubleshooting.
+*   **Security Restrictions**: Permanently blocked from outbound forwarding to the internet (WAN) or other local subnets via the router firewall rule `Block_KVM_All_Forwarding` on the `GL-MT6000_upstairs` gateway to prevent its built-in reverse proxy (FRP) and Tencent Cloud phone-home web socket from communicating.
+
 
 ---
 

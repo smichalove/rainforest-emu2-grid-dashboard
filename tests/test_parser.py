@@ -433,7 +433,7 @@ def test_run_analysis_workflow(mock_weather, mock_corr, mock_tod, mock_grid, moc
     import stage_local_summary
     
     orig_model = stage_local_summary.DEFAULT_MODEL
-    stage_local_summary.DEFAULT_MODEL = 'gemma2:2b'
+    stage_local_summary.DEFAULT_MODEL = 'gemma4-it-q4'
     try:
         mock_weather.return_value = (16.0, 50.0, "2026-05-30T05:15", "2026-05-30T21:30")
         mock_corr.return_value = 0.95

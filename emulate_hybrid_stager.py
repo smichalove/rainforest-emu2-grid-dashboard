@@ -284,12 +284,12 @@ Instructions:
     print("\n--- 2. Adapted Prompt Sent to Gemma 2B ---")
     print(formatted_prompt)
     
-    # 3. Query local Ollama Gemma 2B
-    print("\n--- 3. Local Model (Gemma 2B) Output ---")
+    # 3. Query local Ollama Gemma 4
+    print("\n--- 3. Local Model (Gemma 4) Output ---")
     try:
         url = os.environ.get("OLLAMA_HOST") or "http://localhost:11434/api/generate"
         payload = {
-            "model": "gemma2:2b",
+            "model": "gemma4-it-q4",
             "prompt": formatted_prompt,
             "system": "You are a precise grid monitor summarizer.",
             "stream": False

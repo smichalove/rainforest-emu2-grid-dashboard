@@ -27,12 +27,12 @@ else
 fi
 
 # 3. Pull the recommended local models
-# We pull both gemma2:2b (for ultra-fast low-memory tests) and gemma2:9b (for production accuracy)
-echo "Pulling Google Gemma 2 (2B quantized) model..."
-ollama pull gemma2:2b
+# We pull both gemma4-it-q4 (for standard text telemetry summaries) and gemma4-vision-q4 (for vision/plotting queries)
+echo "Pulling Google Gemma 4 (text-instruct quantized) model..."
+ollama pull gemma4-it-q4
 
-echo "Pulling Google Gemma 2 (9B quantized) model..."
-ollama pull gemma2:9b
+echo "Pulling Google Gemma 4 (vision quantized) model..."
+ollama pull gemma4-vision-q4
 
 # 4. Install Ollama Python library in our virtual environment
 echo "Installing Ollama Python libraries..."
@@ -45,5 +45,5 @@ fi
 
 echo "=========================================================="
 echo "Setup Complete!"
-echo "To test local inference run: ollama run gemma2:2b 'Hello, Orin!'"
+echo "To test local inference run: ollama run gemma4-it-q4 'Hello, Orin!'"
 echo "=========================================================="

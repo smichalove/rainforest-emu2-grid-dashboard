@@ -119,9 +119,9 @@ def get_repl_endpoints_and_models(model: str) -> Tuple[List[str], List[str]]:
     fallback_models = [
         "gemma4-it-q4:latest",
         "gemma4-it-q4",
-        "gemma2:2b",
-        "gemma2:9b",
-        "gemma2-edge:latest"
+        "gemma4-e2b-q4:latest",
+        "gemma4:12b",
+        "gemma4-vision-q4:latest"
     ]
     for fm in fallback_models:
         if fm not in models_to_try:
