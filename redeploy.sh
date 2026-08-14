@@ -16,13 +16,13 @@ ssh steven@rainforestpi "mkdir -p ~/rainforest-emu2-grid-dashboard/scratch ~/rai
 scp scratch/combined_logos_small.png steven@rainforestpi:~/rainforest-emu2-grid-dashboard/scratch/
 scp -r dashboard_modules steven@rainforestpi:~/rainforest-emu2-grid-dashboard/
 scp protos/grid_telemetry_pb2*.py steven@rainforestpi:~/rainforest-emu2-grid-dashboard/protos/
-scp dashboard.py repl_client.py stage_batch_summary.py snr_analysis.py *prompt.txt README.md run_dashboard_system.sh backup_to_jetson.sh .env requirements.txt steven@rainforestpi:~/rainforest-emu2-grid-dashboard/
+scp dashboard.py read_purple_air.py repl_client.py stage_batch_summary.py snr_analysis.py *prompt.txt README.md run_dashboard_system.sh backup_to_jetson.sh .env requirements.txt steven@rainforestpi:~/rainforest-emu2-grid-dashboard/
 ssh steven@rainforestpi "chmod +x ~/rainforest-emu2-grid-dashboard/backup_to_jetson.sh"
 
 echo "=== Copying AI staging code, stubs, and .env to the Jetson Orin Nano ==="
 ssh steven@nvjetson "mkdir -p ~/rainforest-emu2-grid-dashboard/protos"
 scp protos/grid_telemetry_pb2*.py steven@nvjetson:~/rainforest-emu2-grid-dashboard/protos/
-scp -r dashboard_modules repl_client.py stage_local_summary.py stage_batch_summary.py snr_analysis.py *prompt.txt .env requirements.txt steven@nvjetson:~/rainforest-emu2-grid-dashboard/
+scp -r dashboard_modules read_purple_air.py repl_client.py stage_local_summary.py stage_batch_summary.py snr_analysis.py *prompt.txt .env requirements.txt steven@nvjetson:~/rainforest-emu2-grid-dashboard/
 
 ssh steven@nvjetson "
   sudo cp -r ~/rainforest-emu2-grid-dashboard/dashboard_modules /home/grid_backup/ && \
@@ -40,7 +40,7 @@ ssh steven@nvjetson "
 "
 
 echo "=== Restarting the dashboard process on the Pi ==="
-ssh steven@rainforestpi "killall python || true"
-ssh steven@rainforestpi "nohup ~/rainforest-emu2-grid-dashboard/run_dashboard_system.sh < /dev/null > /dev/null 2>&1 &"
+ssh steven@rainforestpi "pkill -f 'dashboard.py' 2>/dev/null" || true
+ssh steven@rainforestpi "DISPLAY=:0 nohup ~/rainforest-emu2-grid-dashboard/run_dashboard_system.sh </dev/null >/dev/null 2>&1 &"
 
 echo "=== Redeployment complete! ==="

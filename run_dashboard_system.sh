@@ -22,6 +22,9 @@ if [ -n "$HDMI_PRIMARY" ] && [ -n "$HDMI_SECONDARY" ]; then
 elif [ -n "$HDMI_PRIMARY" ]; then
     DISPLAY=:0 xrandr --output "$HDMI_PRIMARY" --mode 1024x768 || true
 fi
+PYTHON_BIN=$(which python3)
+if [ -f "./venv/bin/python" ]; then
+    PYTHON_BIN="./venv/bin/python"
+fi
 
-DISPLAY=:0 ./venv/bin/python -u dashboard.py > dashboard_gui.log 2>&1
-
+DISPLAY=:0 $PYTHON_BIN -u dashboard.py > dashboard_gui.log 2>&1

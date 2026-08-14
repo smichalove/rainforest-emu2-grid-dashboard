@@ -132,7 +132,7 @@ This document maintains the official record of the network hosts, hardware confi
 *   **Hardware**:
     *   **CPU**: Intel Xeon W-2135 (6 Cores / 12 Threads, Architecture: `x86_64`)
     *   **Memory**: 64 GB ECC DDR4
-    *   **GPU**: NVIDIA Quadro P1000 (4 GB) + NVIDIA GeForce GTX 1050 Ti (4 GB)
+    *   **GPU**: NVIDIA Tesla P40 (24 GB VRAM) + NVIDIA Quadro P1000 (4 GB VRAM)
     *   **Storage**: 3 TB Seagate HDD (Model: `ST3000DM001-1CH166`, Root system filesystem with ~2.6 TB available)
 *   **OS**: Ubuntu Linux
 
@@ -189,7 +189,7 @@ This document maintains the official record of the network hosts, hardware confi
 ### 4.3 KVM-over-IP Management Device
 *   **Hostname**: `ONE KVM`
 *   **Model**: One-E3 (running BusyBox Linux with Dropbear SSH `2016.74`)
-*   **IP Address**: `192.168.8.188` (MAC Address: `12:35:2A:B1:F3:C8` on interface `eth0`)
+*   **IP Address**: `192.168.8.204` (MAC Address: `12:35:2A:B1:F3:C8` on interface `eth0`, SSH: `root`)
 *   **Role**: Remote hardware diagnostics interface for server boot troubleshooting.
 *   **Security Restrictions**: Permanently blocked from outbound forwarding to the internet (WAN) or other local subnets via the router firewall rule `Block_KVM_All_Forwarding` on the `GL-MT6000_upstairs` gateway to prevent its built-in reverse proxy (FRP) and Tencent Cloud phone-home web socket from communicating.
 

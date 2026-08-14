@@ -133,6 +133,7 @@ class GridDashboard(tk.Tk):
     chilicon_status_label: Optional[tk.Label] = None
     load_status_label: Optional[tk.Label] = None
     weather_label: Optional[tk.Label] = None
+    aqi_label: Optional[tk.Label] = None
     time_label: Optional[tk.Label] = None
     date_label: Optional[tk.Label] = None
 
@@ -633,50 +634,55 @@ class GridDashboard(tk.Tk):
         self.left_header.pack(side=tk.LEFT, anchor='nw')
 
         self.time_label = tk.Label(
-            self.left_header, text="00:00", font=('Helvetica', 32, 'bold'), bg='black', fg='deepskyblue', anchor='w'
+            self.left_header, text="00:00", font=('Helvetica', 24, 'bold'), bg='black', fg='deepskyblue', anchor='w'
         )
-        self.time_label.pack(anchor='w', pady=(0, 2))
+        self.time_label.pack(anchor='w', pady=(0, 1))
 
         self.date_label = tk.Label(
-            self.left_header, text="", font=('Helvetica', 12, 'bold'), bg='black', fg='#a0aec0', anchor='w'
+            self.left_header, text="", font=('Helvetica', 11, 'bold'), bg='black', fg='#a0aec0', anchor='w'
         )
-        self.date_label.pack(anchor='w', pady=(0, 2))
+        self.date_label.pack(anchor='w', pady=(0, 1))
 
         self.weather_label = tk.Label(
-            self.left_header, text="Weather: N/A", font=('Helvetica', 14, 'bold'), bg='black', fg='#fbbf24', anchor='w'
+            self.left_header, text="Weather: N/A", font=('Helvetica', 11, 'bold'), bg='black', fg='#fbbf24', anchor='w'
         )
-        self.weather_label.pack(anchor='w', pady=(0, 2))
+        self.weather_label.pack(anchor='w', pady=(0, 1))
+
+        self.aqi_label = tk.Label(
+            self.left_header, text="AQI: N/A", font=('Helvetica', 11, 'bold'), bg='black', fg='#22c55e', anchor='w'
+        )
+        self.aqi_label.pack(anchor='w', pady=(0, 1))
 
         # Right Column (Grid Demand & Inverter stats)
         self.right_header = tk.Frame(self.header_frame, bg='black')
         self.right_header.pack(side=tk.RIGHT, anchor='ne')
 
         self.status_label = tk.Label(
-            self.right_header, text="Waiting for data...", font=('Helvetica', config.STATUS_FONT_SIZE, 'bold'), bg='black', fg='white', anchor='e'
+            self.right_header, text="Waiting for data...", font=('Helvetica', 15, 'bold'), bg='black', fg='white', anchor='e'
         )
-        self.status_label.pack(anchor='e', pady=(0, 2))
+        self.status_label.pack(anchor='e', pady=(0, 1))
 
         self.sub_status_label = tk.Label(
-            self.right_header, text="", font=('Helvetica', 16, 'bold'), bg='black', fg='#fbbf24', anchor='e'
+            self.right_header, text="", font=('Helvetica', 12, 'bold'), bg='black', fg='#fbbf24', anchor='e'
         )
         if not self.solar_off:
-            self.sub_status_label.pack(anchor='e', pady=(0, 2))
+            self.sub_status_label.pack(anchor='e', pady=(0, 1))
             latest_pv = self.se_power[-1] if self.se_power else 0.0
             self.sub_status_label.config(text=f"SolarEdge PV: {latest_pv:.3f} kW")
 
         self.chilicon_status_label = tk.Label(
-            self.right_header, text="", font=('Helvetica', 16, 'bold'), bg='black', fg='#ffff00', anchor='e'
+            self.right_header, text="", font=('Helvetica', 12, 'bold'), bg='black', fg='#ffff00', anchor='e'
         )
         if not self.chilicon_off:
-            self.chilicon_status_label.pack(anchor='e', pady=(0, 2))
+            self.chilicon_status_label.pack(anchor='e', pady=(0, 1))
             latest_ch = self.chilicon_power[-1] if self.chilicon_power else 0.0
             self.chilicon_status_label.config(text=f"Chillicon PV: {latest_ch:.3f} kW")
 
         # House Load measurement widget
         self.load_status_label = tk.Label(
-            self.right_header, text="", font=('Helvetica', 16, 'bold'), bg='black', fg=config.CONSUMPTION_COLOR, anchor='e'
+            self.right_header, text="", font=('Helvetica', 12, 'bold'), bg='black', fg=config.CONSUMPTION_COLOR, anchor='e'
         )
-        self.load_status_label.pack(anchor='e', pady=(0, 2))
+        self.load_status_label.pack(anchor='e', pady=(0, 1))
         latest_load = self.se_load_power[-1] if self.se_load_power else 0.0
         self.load_status_label.config(text=f"House Load: {latest_load:.3f} kW")
 
@@ -1058,9 +1064,9 @@ class GridDashboard(tk.Tk):
         time_since_last_attempt = now_time - self.last_weather_attempt
         
         should_fetch = False
-        if self.cached_weather:
-            # Weather fetch interval matches Jetson stager local render cadence (15 minutes)
-            if time_since_last_fetch > 900.0:
+        if self.cached_weather and hasattr(self, 'cached_purple_air') and self.cached_purple_air:
+            # Weather and PurpleAir fetch interval (every 5 minutes)
+            if time_since_last_fetch > 300.0:
                 should_fetch = True
         else:
             if time_since_last_attempt > self.weather_backoff_delay:
@@ -1071,8 +1077,9 @@ class GridDashboard(tk.Tk):
             def bg_fetch():
                 try:
                     live_weather = weather.fetch_live_weather()
-                    if live_weather:  # Only update cache if we got a valid response
-                        self.ui_queue.put(lambda: self._apply_weather_update(live_weather, now_time))
+                    live_pa = weather.fetch_live_purple_air()
+                    if live_weather or live_pa:  # Only update cache if we got a valid response
+                        self.ui_queue.put(lambda: self._apply_weather_update(live_weather, live_pa, now_time))
                     else:
                         self.weather_backoff_delay = min(self.weather_backoff_delay * 2, 900.0)
                         logging.warning(f"Weather API returned empty in background. Backing off for {self.weather_backoff_delay:.1f}s.")
@@ -1127,11 +1134,36 @@ class GridDashboard(tk.Tk):
         if self.weather_label is not None:
             self.weather_label.config(text=f"{temp_str} | {sky_str}")
 
-    def _apply_weather_update(self, live_weather: Dict[str, Any], fetch_time: float) -> None:
-        """Applies cached weather update on the UI thread."""
-        self.cached_weather = live_weather
+        if self.aqi_label is not None:
+            pa_data = getattr(self, 'cached_purple_air', {})
+            if pa_data and "aqi" in pa_data:
+                aqi = pa_data.get("aqi", 0)
+                category = pa_data.get("category", "Good")
+                color = pa_data.get("color", "#22c55e")
+                self.aqi_label.config(
+                    text=f"AQI: {aqi} ({category})",
+                    fg=color
+                )
+            else:
+                self.aqi_label.config(text="AQI: N/A", fg="#a0aec0")
+
+    def _apply_weather_update(self, live_weather: Dict[str, Any], live_purple_air: Dict[str, Any], fetch_time: float) -> None:
+        """Applies cached weather and PurpleAir AQI update on the UI thread."""
+        if live_weather:
+            self.cached_weather = live_weather
+        if live_purple_air:
+            self.cached_purple_air = live_purple_air
         self.last_weather_fetch = fetch_time
         self.weather_backoff_delay = 10.0  # Reset backoff on success
+
+        if self.aqi_label is not None and live_purple_air and "aqi" in live_purple_air:
+            aqi = live_purple_air.get("aqi", 0)
+            category = live_purple_air.get("category", "Good")
+            color = live_purple_air.get("color", "#22c55e")
+            self.aqi_label.config(
+                text=f"AQI: {aqi} ({category})",
+                fg=color
+            )
 
     def update_chart(self, label_text: str, color: str) -> None:
         """Draws current line coordinates and stacked bars on the canvas.
@@ -1506,7 +1538,7 @@ class GridDashboard(tk.Tk):
             None.
         """
         if self.status_label is not None:
-            self.after(0, lambda: self.status_label.config(text=text))
+            self.ui_queue.put(lambda: self.status_label.config(text=text))
     def local_delta_loop(self) -> None:
         """Runs the 5-minute sync loop, performing SCP and hitting the Jetson server."""
         # Initial sleep for 15 seconds to allow dashboard startup to settle

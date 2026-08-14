@@ -42,6 +42,88 @@ def fetch_live_weather(lat: str = DEFAULT_LAT, lon: str = DEFAULT_LON) -> Dict[s
         return {}
 
 
+def calculate_epa_pm25_aqi(pm25: float) -> tuple[int, str, str]:
+    """Calculates official US EPA PM2.5 AQI, Category description, and Hex Color code."""
+    try:
+        c = round(float(pm25), 1)
+    except Exception:
+        return 0, "Unknown", "#a0aec0"
+
+    if c <= 12.0:
+        aqi = ((50 - 0) / (12.0 - 0.0)) * (c - 0.0) + 0
+        category = "Good"
+        color = "#22c55e"  # Green
+    elif c <= 35.4:
+        aqi = ((100 - 51) / (35.4 - 12.1)) * (c - 12.1) + 51
+        category = "Moderate"
+        color = "#eab308"  # Yellow
+    elif c <= 55.4:
+        aqi = ((150 - 101) / (55.4 - 35.5)) * (c - 35.5) + 101
+        category = "Unhealthy for Sensitive"
+        color = "#f97316"  # Orange
+    elif c <= 150.4:
+        aqi = ((200 - 151) / (150.4 - 55.5)) * (c - 55.5) + 151
+        category = "Unhealthy"
+        color = "#ef4444"  # Red
+    elif c <= 250.4:
+        aqi = ((300 - 201) / (250.4 - 150.5)) * (c - 150.5) + 201
+        category = "Very Unhealthy"
+        color = "#a855f7"  # Purple
+    else:
+        aqi = ((500 - 301) / (500.4 - 250.5)) * (c - 250.5) + 301
+        category = "Hazardous"
+        color = "#991b1b"  # Dark Red / Maroon
+
+    return round(aqi), category, color
+
+
+def fetch_live_purple_air(ip: str = "192.168.10.241", router_host: str = "root@192.168.8.1") -> Dict[str, Any]:
+    """Fetches live PurpleAir telemetry directly or via router SSH proxy.
+
+    Returns:
+        Dict with keys: "aqi", "category", "color", "pm25", "temp_f", "humidity"
+    """
+    url = f"http://{ip}/json"
+    data = None
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'Antigravity-Dashboard/1.0'})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            if resp.status == 200:
+                data = json.loads(resp.read().decode('utf-8'))
+    except Exception:
+        pass
+
+    if not data:
+        try:
+            import subprocess
+            cmd = ["ssh", "-o", "ConnectTimeout=4", "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", router_host, f"curl -s http://{ip}/json"]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+            if res.returncode == 0 and res.stdout.strip().startswith("{"):
+                data = json.loads(res.stdout)
+        except Exception as e:
+            logging.error(f"Error fetching PurpleAir from router proxy: {e}")
+
+    if data:
+        try:
+            pm25_a = float(data.get("pm2_5_atm", 0))
+            pm25_b = float(data.get("pm2_5_atm_b", 0))
+            pm25_avg = (pm25_a + pm25_b) / 2.0 if (pm25_a and pm25_b) else (pm25_a or pm25_b)
+            aqi, category, color = calculate_epa_pm25_aqi(pm25_avg)
+            return {
+                "aqi": aqi,
+                "category": category,
+                "color": color,
+                "pm25": pm25_avg,
+                "temp_f": data.get("current_temp_f"),
+                "humidity": data.get("current_humidity")
+            }
+        except Exception as e:
+            logging.error(f"Error parsing PurpleAir JSON payload: {e}")
+
+    return {}
+
+
+
 def fetch_historical_weather(lat: str = DEFAULT_LAT, lon: str = DEFAULT_LON) -> Dict[str, Dict[str, Any]]:
     """Fetches daily average cloud cover, sunrise, and sunset times from Open-Meteo API.
 
