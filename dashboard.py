@@ -1065,8 +1065,8 @@ class GridDashboard(tk.Tk):
         
         should_fetch = False
         if self.cached_weather and hasattr(self, 'cached_purple_air') and self.cached_purple_air:
-            # Weather and PurpleAir fetch interval (every 5 minutes)
-            if time_since_last_fetch > 300.0:
+            # Weather and PurpleAir fetch interval (every 90 seconds to match hardware upload rate)
+            if time_since_last_fetch > 90.0:
                 should_fetch = True
         else:
             if time_since_last_attempt > self.weather_backoff_delay:
