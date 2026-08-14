@@ -47,3 +47,20 @@
 * **Failure:** `gnome-session` on Ubuntu 26.04 uses systemd user units (`gnome-session@ubuntu.target`) and defaults to Wayland when launched from TTY. When Chrome Remote Desktop executed `exec /etc/X11/Xsession` or `exec /usr/bin/gnome-session`, `gnome-session` aborted with `A graphical session is already running! (core dumped)` because a physical login session was already active on `tty2`.
 * **Resolution:** Installed `xfce4-session` (`sudo apt install xfce4-session xfce4-panel xfce4-terminal -y`) and configured `~/.chrome-remote-desktop-session` to launch `exec xfce4-session`. `xfce4-session` runs cleanly in an isolated virtual framebuffer display, uses 0% idle CPU, and never conflicts with local GNOME or systemd user units.
 
+---
+
+# Post-Mortem: PurpleAir Integration & Kiosk Pi Node Deployment (Session 2026-08-13)
+
+### 1. PurpleAir Outbound NAT & Setup AP Fallback
+* **Failure:** PurpleAir sensor `67d1` (`f0:24:f9:c6:67:d1` / `192.168.10.241`) remained in setup AP mode because the `iot` firewall zone on the upstairs router (`192.168.8.1`) had MASQUERADE NAT disabled (`masq='0'`). Outbound HTTP uploads were emitted with private source IPs and dropped by the WAN, preventing the cloud handshake.
+* **Resolution:** Executed `uci set firewall.@zone[4].masq='1'` and committed firewall rules on `192.168.8.1`. The sensor completed HTTP cloud handshakes (`100% success`) and shut off its setup AP broadcast.
+
+### 2. Kiosk Node IP Target & Multi-Host Misconfiguration
+* **Failure:** `~/.ssh/config` and `redeploy.sh` were hardcoded to point `Host rainforestpi` to `192.168.8.122`. The active physical kiosk display and VNC session was running on **`192.168.8.213`**. Deployments were restarting an offline/secondary node while a legacy August 9th process (`PID 1181`) held the display on `192.168.8.213`.
+* **Resolution:** Corrected `~/.ssh/config` to point `rainforestpi` to `192.168.8.213`. Authorized `steven@Rainforestpi`'s public key in `/etc/dropbear/authorized_keys` on `192.168.8.1` for router proxying. Terminated stale processes and updated `redeploy.sh` with `pkill -f 'dashboard.py'`.
+
+### 3. Header Widget Layout & Display Font Bounds
+* **Failure:** Displaying the full string `Air Quality: AQI 76 (Moderate - 23.8 µg/m³)` on small touchscreen displays (`592x448` resolution) caused vertical and horizontal overflow, pushing the right-hand solar metrics off screen.
+* **Resolution:** Compacted the AQI widget text to `AQI: 76 (Moderate)` and adjusted header font scaling from 32/14pt to 24/11pt with 1px padding, ensuring crisp rendering across all display resolutions.
+
+
