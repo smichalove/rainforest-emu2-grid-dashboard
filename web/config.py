@@ -15,7 +15,7 @@ BATTERY_CSV = DATA_DIR / "solaredge_battery_history.csv"
 CHILICON_CSV = DATA_DIR / "chilicon_history.csv"
 
 # Remote Collector (Pi) Details
-PI_COLLECTOR_HOST = os.getenv("PI_COLLECTOR_HOST", "192.168.8.122")
+PI_COLLECTOR_HOST = os.getenv("PI_COLLECTOR_HOST", "192.168.8.213")
 PI_COLLECTOR_USER = os.getenv("PI_COLLECTOR_USER", "steven")
 PI_COLLECTOR_PATH = os.getenv("PI_COLLECTOR_PATH", "/home/steven/rainforest-emu2-grid-dashboard")
 
