@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>EMU-2 Grid Dashboard</title>
+    <link rel="stylesheet" href="/static/css/dashboard.css">
+    <script src="/static/js/vendor/chart.umd.min.js"></script>
+</head>
+<body class="kiosk-body">
+    <div id="kiosk-container">
+        <!-- Top Header Matching Physical VNC Capture -->
+        <header id="kiosk-header">
+            <!-- Left: Time, Date, Weather & AQI -->
+            <div class="header-col-left">
+                <div id="live-time" class="kiosk-time">18:22</div>
+                <div id="live-date" class="kiosk-date">Thursday, Aug 13, 2026</div>
+                <div id="live-weather" class="kiosk-weather">25.7°C | Clear (0%)</div>
+                <div id="live-aqi" class="kiosk-aqi">AQI: 76 (Moderate)</div>
+            </div>
+
+            <!-- Center: Logo Badge Pill & Slide Title -->
+            <div class="header-col-center">
+                <div class="logo-pill-wrap">
+                    <img src="/static/assets/combined_logos.png" alt="NVIDIA Jetson Pi Gemini" class="logos-img">
+                </div>
+                <h1 id="slide-heading" class="slide-heading slide-theme-cyan">24-Hour Period</h1>
+            </div>
+
+            <!-- Right: Real-time Power & Generation Metrics -->
+            <div class="header-col-right">
+                <div id="live-net-badge" class="net-status-line text-export">-0.006 kW | Solar Export</div>
+                <div class="metric-line text-solaredge">SolarEdge PV: <span id="val-se-pv">0.160</span> kW</div>
+                <div class="metric-line text-chillicon">Chillicon PV: <span id="val-ch-pv">1.240</span> kW</div>
+                <div class="metric-line text-house">House Load: <span id="val-house-load">1.290</span> kW</div>
+            </div>
+        </header>
+
+        <!-- Main Chart Viewport (Slide 1 & Slide 2) -->
+        <main id="kiosk-main">
+            <!-- Slide 1: 24-Hour Period (Time Domain) -->
+            <section id="slide-1" class="kiosk-slide active">
+                <div class="chart-wrapper">
+                    <canvas id="timeDomainChart"></canvas>
+                    <div id="ai-watermark-1" class="ai-watermark">
+                        <pre id="ai-text-1">Loading 24-hour telemetry analysis...</pre>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Slide 2: DFT Frequency Spectrum -->
+            <section id="slide-2" class="kiosk-slide">
+                <div class="chart-wrapper">
+                    <canvas id="freqDomainChart"></canvas>
+                    <div id="ai-watermark-2" class="ai-watermark">
+                        <pre id="ai-text-2">Loading DFT spectral analysis...</pre>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Minimal 2-Slide Touch Controller -->
+        <footer id="kiosk-controls">
+            <div class="slide-dots">
+                <button class="dot active" onclick="switchSlide(1)">Slide 1 (24h)</button>
+                <button class="dot" onclick="switchSlide(2)">Slide 2 (DFT)</button>
+            </div>
+            <div id="timer-tag" class="timer-badge">45s</div>
+        </footer>
+    </div>
+
+    <!-- Chart & App Logic -->
+    <script src="/static/js/charts.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

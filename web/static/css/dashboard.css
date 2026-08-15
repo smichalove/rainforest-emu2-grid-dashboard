@@ -1,0 +1,263 @@
+/* ==============================================================================
+   Rainforest EMU-2 Grid Dashboard - Exact VNC Physical Kiosk Theme
+   ============================================================================== */
+
+:root {
+    --bg-black: #000000;
+    --cyan-title: #00e5ff;
+    --cyan-watermark: #00c8e0;
+    --gold-se: #f59e0b;
+    --yellow-ch: #facc15;
+    --green-export: #22c55e;
+    --red-import: #ef4444;
+    --white-text: #ffffff;
+    --gray-sub: #94a3b8;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    user-select: none;
+}
+
+html, body {
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background-color: var(--bg-black);
+    color: var(--white-text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+}
+
+#kiosk-container {
+    display: flex;
+    flex-direction: column;
+    width: 100vw;
+    height: 100vh;
+    padding: 16px 24px;
+    background: var(--bg-black);
+    position: relative;
+}
+
+/* ==============================================================================
+   Header (Top 3 Columns)
+   ============================================================================== */
+#kiosk-header {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr 1.2fr;
+    align-items: flex-start;
+    padding-bottom: 8px;
+}
+
+/* Left Column */
+.header-col-left {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.kiosk-time {
+    font-size: 3.2rem;
+    font-weight: 800;
+    color: var(--cyan-title);
+    line-height: 1.0;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+}
+
+.kiosk-date {
+    font-size: 1.05rem;
+    font-weight: 600;
+    color: var(--gray-sub);
+    margin-top: 2px;
+}
+
+.kiosk-weather {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--gold-se);
+    margin-top: 1px;
+}
+
+.kiosk-aqi {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--gold-se);
+}
+
+/* Center Column */
+.header-col-center {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding-top: 4px;
+}
+
+.logo-pill-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 23, 42, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    padding: 3px 8px;
+}
+
+.logos-img {
+    height: 28px;
+    width: auto;
+    display: block;
+}
+
+.slide-heading {
+    font-size: 1.65rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    margin-top: 8px;
+}
+
+.slide-theme-cyan { color: var(--cyan-title); }
+.slide-theme-orange { color: #f59e0b; }
+.slide-theme-pink { color: #f472b6; }
+
+/* Right Column */
+.header-col-right {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 3px;
+}
+
+.net-status-line {
+    font-size: 1.85rem;
+    font-weight: 800;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+}
+
+.text-export { color: var(--green-export); }
+.text-import { color: var(--red-import); }
+
+.metric-line {
+    font-size: 1.15rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+}
+
+.text-solaredge { color: var(--gold-se); }
+.text-chillicon { color: var(--yellow-ch); }
+.text-house { color: var(--white-text); }
+
+/* ==============================================================================
+   Main Viewport
+   ============================================================================== */
+#kiosk-main {
+    flex: 1;
+    position: relative;
+    width: 100%;
+    margin-top: 6px;
+    overflow: hidden;
+}
+
+.kiosk-slide {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease-in-out;
+}
+
+.kiosk-slide.active {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.chart-wrapper {
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+
+canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* ==============================================================================
+   AI Watermark Overlay (Inside Graph)
+   ============================================================================== */
+.ai-watermark {
+    position: absolute;
+    top: 15px;
+    left: 45px;
+    right: 65px;
+    pointer-events: none;
+    z-index: 10;
+}
+
+.ai-watermark pre {
+    font-family: "Courier New", Courier, monospace, monospace;
+    font-size: 0.88rem;
+    font-weight: 600;
+    line-height: 1.4;
+    color: var(--cyan-watermark);
+    white-space: pre-wrap;
+    word-break: break-word;
+    text-shadow: 0 0 1px rgba(0, 0, 0, 0.9);
+}
+
+/* ==============================================================================
+   Controls & Footer
+   ============================================================================== */
+#kiosk-controls {
+    position: absolute;
+    bottom: 8px;
+    right: 24px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    z-index: 20;
+    opacity: 0.25;
+    transition: opacity 0.2s ease;
+}
+
+#kiosk-controls:hover {
+    opacity: 1.0;
+}
+
+.slide-dots {
+    display: flex;
+    gap: 4px;
+}
+
+.dot {
+    background: rgba(255, 255, 255, 0.15);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: #cbd5e1;
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.dot.active {
+    background: #0284c7;
+    color: #ffffff;
+    border-color: #38bdf8;
+}
+
+.timer-badge {
+    font-size: 0.65rem;
+    font-weight: 700;
+    color: #94a3b8;
+    background: rgba(0, 0, 0, 0.7);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
