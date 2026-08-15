@@ -12,6 +12,7 @@ SUMMARY_PATH = DATA_DIR / "gemini_summary.json"
 # CSV Data Paths
 SOLAREDGE_CSV = DATA_DIR / "solaredge_history.csv"
 BATTERY_CSV = DATA_DIR / "solaredge_battery_history.csv"
+FLOW_CSV = DATA_DIR / "solaredge_flow_history.csv"
 CHILICON_CSV = DATA_DIR / "chilicon_history.csv"
 
 # Remote Collector (Pi) Details

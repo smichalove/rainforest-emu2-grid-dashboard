@@ -74,7 +74,7 @@ async def get_live_telemetry():
     bat_soc = history_24h["battery"]["soc_percent"][-1] if history_24h["battery"]["soc_percent"] else 50.0
 
     net_grid_kw = round(latest_grid["kw"], 3)
-    house_load_kw = max(0.2, round(net_grid_kw + total_solar_kw + bat_kw, 3))
+    house_load_kw = history_24h["house_load"]["values"][-1] if history_24h["house_load"]["values"] else max(0.2, round(net_grid_kw + total_solar_kw + bat_kw, 3))
 
     purpleair = fetch_purpleair()
     awair = fetch_awair()

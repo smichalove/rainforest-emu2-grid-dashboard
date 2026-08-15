@@ -10,7 +10,7 @@ import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 
-from .config import DB_PATH, SUMMARY_PATH, SOLAREDGE_CSV, BATTERY_CSV, CHILICON_CSV
+from .config import DB_PATH, SUMMARY_PATH, SOLAREDGE_CSV, BATTERY_CSV, FLOW_CSV, CHILICON_CSV
 
 logger = logging.getLogger("rainforest.db_reader")
 
@@ -36,7 +36,7 @@ def get_readonly_connection(db_file: Path) -> Optional[sqlite3.Connection]:
 
 def generate_baseline_dataset(now: datetime.datetime, days: int = 1) -> Dict[str, Any]:
     """Generates a realistic baseline dataset when database records are sparse."""
-    num_points = 288 * days  # 5 min intervals
+    num_points = 288 * days
     timestamps: List[str] = []
     grid_kw: List[float] = []
     se_kw: List[float] = []
@@ -53,20 +53,16 @@ def generate_baseline_dataset(now: datetime.datetime, days: int = 1) -> Dict[str
         hour = dt.hour + (dt.minute / 60.0)
         day_offset = (dt.day % 5) * 0.15
 
-        # Solar Generation (peaks 10:00 to 17:00)
         solar_pot = max(0.0, math.sin(math.pi * (hour - 6.0) / 14.5)) if 6.0 <= hour <= 20.5 else 0.0
         weather_factor = 0.85 + 0.15 * math.sin(i * 0.05 + day_offset)
         se_val = round(solar_pot * 2.85 * weather_factor, 3)
         ch_val = round(solar_pot * 1.42 * weather_factor, 3)
         total_solar = se_val + ch_val
 
-        # Base Household Consumption
         base_load = round(1.1 + 0.4 * math.sin(math.pi * (hour - 12) / 8)**2 + (0.8 if 17.5 <= hour <= 21.5 else 0.0), 3)
         house_load_kw.append(base_load)
 
-        # Battery Operation
         if 17.0 <= hour <= 21.0 and (dt.day % 2 == 0):
-            # Flex event battery discharge
             bat_pwr_signed = round(min(2.5, base_load * 0.8), 3)
             soc = max(25.0, 90.0 - (hour - 17.0) * 15.0)
         elif total_solar > base_load:
@@ -113,7 +109,6 @@ def get_latest_reading() -> Dict[str, Any]:
             if conn:
                 conn.close()
 
-    # Fallback to simulated baseline
     baseline = generate_baseline_dataset(now, days=1)
     return {
         "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
@@ -149,30 +144,33 @@ def get_24h_history(cutoff_hours: int = 24) -> Dict[str, Any]:
             if conn:
                 conn.close()
 
-    # If DB has fewer than 10 points, provide clean realistic baseline
     if len(grid_kw) < 10:
         days = max(1, cutoff_hours // 24)
         return generate_baseline_dataset(now, days=days)
 
     solar_data = read_solar_history(cutoff_time)
     battery_data = read_battery_history(cutoff_time)
+    flow_data = read_flow_history(cutoff_time)
     chilicon_data = read_chilicon_history(cutoff_time)
 
-    # Compute house load
-    house_loads = []
-    for i, g_kw in enumerate(grid_kw):
-        s_kw = solar_data["values"][i] if i < len(solar_data["values"]) else 0.0
-        c_kw = chilicon_data["values"][i] if i < len(chilicon_data["values"]) else 0.0
-        b_kw = battery_data["power_kw"][i] if i < len(battery_data["power_kw"]) else 0.0
-        h_load = max(0.1, round(g_kw + s_kw + c_kw + b_kw, 3))
-        house_loads.append(h_load)
+    # Use exact SolarEdge direct Load readings if present; otherwise fallback to physics formula
+    if flow_data["load_power"]:
+        house_loads = flow_data["load_power"]
+    else:
+        house_loads = []
+        for i, g_kw in enumerate(grid_kw):
+            s_kw = solar_data["values"][i] if i < len(solar_data["values"]) else 0.0
+            c_kw = chilicon_data["values"][i] if i < len(chilicon_data["values"]) else 0.0
+            b_kw = battery_data["power_kw"][i] if i < len(battery_data["power_kw"]) else 0.0
+            h_load = max(0.1, round(g_kw + s_kw + c_kw + b_kw, 3))
+            house_loads.append(h_load)
 
     return {
         "reference_time": now.isoformat(),
         "grid": {"timestamps": grid_timestamps, "values": grid_kw},
         "solaredge": solar_data if solar_data["values"] else {"timestamps": grid_timestamps, "values": [0.0]*len(grid_timestamps)},
         "chilicon": chilicon_data if chilicon_data["values"] else {"timestamps": grid_timestamps, "values": [0.0]*len(grid_timestamps)},
-        "house_load": {"timestamps": grid_timestamps, "values": house_loads},
+        "house_load": {"timestamps": flow_data["timestamps"] if flow_data["timestamps"] else grid_timestamps, "values": house_loads},
         "battery": battery_data if battery_data["power_kw"] else {"timestamps": grid_timestamps, "power_kw": [0.0]*len(grid_timestamps), "soc_percent": [50.0]*len(grid_timestamps)}
     }
 
@@ -198,6 +196,29 @@ def read_solar_history(cutoff_time: datetime.datetime) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"Error reading {SOLAREDGE_CSV}: {e}")
     return {"timestamps": timestamps, "values": values}
+
+
+def read_flow_history(cutoff_time: datetime.datetime) -> Dict[str, Any]:
+    """Parses SolarEdge Flow history CSV (specifically direct load_power at index 2)."""
+    if not FLOW_CSV.exists():
+        return {"timestamps": [], "load_power": []}
+    timestamps: List[str] = []
+    load_power: List[float] = []
+    try:
+        with open(FLOW_CSV, "r", encoding="utf-8") as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if len(row) >= 3:
+                    try:
+                        ts_dt = datetime.datetime.fromisoformat(row[0].strip())
+                        if ts_dt >= cutoff_time:
+                            timestamps.append(row[0].strip())
+                            load_power.append(float(row[2].strip()))
+                    except (ValueError, TypeError):
+                        continue
+    except Exception as e:
+        logger.warning(f"Error reading {FLOW_CSV}: {e}")
+    return {"timestamps": timestamps, "load_power": load_power}
 
 
 def read_battery_history(cutoff_time: datetime.datetime) -> Dict[str, Any]:
@@ -252,40 +273,16 @@ def get_ai_summary(slide: int = 1) -> Dict[str, Any]:
     """Reads the AI summary JSON narrative customized for each slide view."""
     if not SUMMARY_PATH.exists():
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        if slide == 1:
-            summary_text = (
-                "Total Net Imported was 18.151 kWh, Total Net Exported was 14.418 kWh, SolarEdge Generated was 8.580 kWh, "
-                "Chillicon Generated Reported was 16.956 kWh, Battery Energy Charged was 0.181 kWh, Battery Energy Discharged was 0.000 kWh.\n\n"
-                "The system demonstrated strong generation from both solar and Chillicon sources. The net result shows a slight deficit "
-                "in energy balance, reflected by the negative Net Energy Credit. Peak grid demand reached 2.193 kW.\n"
-                f"[Live Local Delta (Jetson) | agent ran at {now_str}]: Net grid export was 14.21 kWh, indicating a net surplus of power output."
-            )
-        elif slide == 2:
-            summary_text = (
-                "Solar production totaled 492.35 kWh over 14 days.\n"
-                "The home appliance load averaged 480.66 kWh.\n"
-                "Total grid import was 304.55 kWh and export was 310.44 kWh. Peak grid demand reached 5.35 kW.\n\n"
-                "Battery metrics show a round-trip efficiency of 72.7 percent. The battery was charged 29.25 kWh and discharged 21.28 kWh. "
-                "Discharge occurred during 3 PSE Flex event days."
-            )
-        else:
-            summary_text = (
-                "Sunrise is at 05:14 and sunset is at 21:10 today. Your solar power production follows the daily sun cycle, "
-                "reaching its highest output around 14:20 in the afternoon. Household energy consumption shows distinct peaks, "
-                "with a major demand rush occurring around noon. The overall connection between solar production and grid usage is strong."
-            )
-
-        return {
-            "summary": summary_text,
-            "timestamp": now_str,
-            "model": "Gemma 4 Edge (Jetson)"
-        }
+        return {"summary": "Telemetry analysis active.", "timestamp": now_str, "model": "Edge"}
 
     try:
         with open(SUMMARY_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
+            summary_text = data.get("summary", "")
+            if isinstance(summary_text, dict):
+                summary_text = summary_text.get("summary", "")
             return {
-                "summary": data.get("summary", "Analysis active."),
+                "summary": summary_text or "Analysis active.",
                 "timestamp": data.get("timestamp"),
                 "model": data.get("model", "Gemini / Gemma")
             }
