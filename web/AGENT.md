@@ -68,3 +68,10 @@ curl -s http://127.0.0.1:8000/api/telemetry/live
 curl -s http://127.0.0.1:8000/api/telemetry/history
 curl -s http://127.0.0.1:8000/api/telemetry/spectrum
 ```
+
+---
+
+## 5. Backlog & TODOs
+
+- [ ] **Battery Flex Event Rendering:** Represent battery discharge during PSE Flex events as negative values (below the X-axis, `-kW`) with shaded blue area fill in the time domain charts (`charts.js`), matching the physical kiosk Matplotlib representation.
+
