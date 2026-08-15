@@ -8,8 +8,9 @@ This guide is for AI agents working within the `web/` directory of the Rainfores
 
 The `web/` package is the **Visualization Head** of the energy monitoring system:
 - **Zero Ingestion Risk:** This package **never** reads from serial ports, writes to production databases, or runs heavy LLM training.
-- **Read-Only Data Layer:** It queries `grid_history.db` exclusively via read-only SQLite connections (`file:?mode=ro`) and parses auxiliary CSVs (`solaredge_history.csv`, `chilicon_history.csv`, `solaredge_battery_history.csv`).
-- **Telemetry Sync:** `sync_service.py` pulls updated files from the Raspberry Pi Collector (`192.168.8.122`) to `data/` every 15 seconds.
+- **Read-Only Data Layer:** It queries `grid_history.db` exclusively via read-only SQLite connections (`file:?mode=ro`) and parses auxiliary CSVs (`solaredge_history.csv`, `solaredge_flow_history.csv`, `chilicon_history.csv`, `solaredge_battery_history.csv`).
+- **Telemetry Sync:** `sync_service.py` pulls updated files from the Raspberry Pi Collector (`192.168.8.213` - `Rainforestpi`) to `data/` every 15 seconds.
+
 
 ---
 

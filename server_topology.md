@@ -194,7 +194,14 @@ python3 sync_pg_to_jriver_xml.py
         *   `len-big` (MAC `20:e1:5d:8e:0b:5d`) -> Pinned to `192.168.8.51` (2.5 Gbps NIC)
         *   `Stevens-Mini-2` (MAC `6c:1f:f7:72:44:49`) -> Pinned to `192.168.8.103` (2.5 GbE Interface `en8`)
         *   `nvjetson` (MAC `4c:bb:47:7b:14:80`) -> Pinned to `192.168.8.68`
+        *   `Rainforestpi` (MAC `00:13:ef:40:07:58`) -> Pinned to `192.168.8.213` (EMU-2 Smart Meter Collector & Physical Kiosk)
+        *   `iTACH_AYRE` (MAC `88:a2:9e:05:02:c2`) -> Pinned to `192.168.8.122` (Audio Power Control Daemon `powerd.py`)
+        *   `PurpleAir` (MAC `f0:24:f9:c6:67:d1`) -> Pinned to `192.168.10.241` (Outdoor EPA PM2.5 AQI Sensor)
+        *   `Awair` (MAC `70:88:6b:12:35:80`) -> Pinned to `192.168.8.219` (Indoor Air Quality IAQ Sensor)
         *   `ONE KVM` (MAC `12:35:2A:B1:F3:C8`) -> Pinned to `192.168.8.204` (Isolated device, SSH: `root`)
+    *   **Decoupled Web Services**:
+        *   **Rainforest Web Kiosk (`520c` @ `192.168.8.181:8000`)**: High-performance FastAPI & HTML5/JS Web Head polling `Rainforestpi` (`192.168.8.213`) every 15s via automated SSH rsync.
     *   **Firewall Security**:
         *   **Rule `Block_KVM_All_Forwarding`**: Restricts the KVM (MAC `12:35:2A:B1:F3:C8`) from sending packets outside the LAN zone. Specifically, the rule targets `option src 'lan'`, `option dest '*'`, and `option target 'REJECT'` with `option proto 'all'`. This prevents the KVM's built-in Tencent Cloud reverse proxy/WebSocket backdoor from communicating with the internet.
     *   **Nginx Gateway**: Running `nginx/1.26.1` (audited secure against NGINX Rift rewrite rules).
+
