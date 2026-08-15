@@ -55,8 +55,8 @@ function initSlide1Chart() {
                     label: "Battery Storage",
                     data: [],
                     borderColor: "#3b82f6",
-                    backgroundColor: "rgba(30, 64, 175, 0.4)",
-                    fill: true,
+                    backgroundColor: "rgba(30, 64, 175, 0.45)",
+                    fill: { target: { value: -10.0 } },
                     borderWidth: 1.5,
                     pointRadius: 0,
                     tension: 0.1,
@@ -160,13 +160,14 @@ function initSlide2Chart() {
                 },
                 {
                     type: "line",
-                    label: "Battery Dispatch",
+                    label: "Battery Storage",
                     data: [],
                     borderColor: "#3b82f6",
-                    backgroundColor: "rgba(30, 64, 175, 0.4)",
-                    fill: true,
+                    backgroundColor: "rgba(30, 64, 175, 0.45)",
+                    fill: { target: { value: -10.0 } },
                     borderWidth: 1.5,
                     pointRadius: 0,
+                    tension: 0.1,
                     yAxisID: "yGrid"
                 }
             ]
@@ -288,7 +289,7 @@ function updateSlide1(historyData) {
     const se = historyData.solaredge || { values: [] };
     const ch = historyData.chilicon || { values: [] };
     const house = historyData.house_load || { values: [] };
-    const bat = historyData.battery || { power_kw: [] };
+    const bat = historyData.battery || { soc_percent: [] };
 
     // Format timestamps as "MM-DD HH" (e.g. "08-13 18")
     const labels = grid.timestamps.map(ts => {
@@ -306,11 +307,14 @@ function updateSlide1(historyData) {
     // Total Solar = SE + Chillicon
     const totalSolar = (se.values || []).map((v, idx) => v + (ch.values[idx] || 0));
 
+    // Convert Battery SoC (%) to Y-Axis Range (-10.0 to 0.0)
+    const batteryFill = (bat.soc_percent || []).map(soc => (parseFloat(soc || 0) * 0.1) - 10.0);
+
     chartSlide1.data.labels = labels;
     chartSlide1.data.datasets[0].data = totalSolar;
     chartSlide1.data.datasets[1].data = house.values || [];
     chartSlide1.data.datasets[2].data = grid.values || [];
-    chartSlide1.data.datasets[3].data = bat.power_kw || [];
+    chartSlide1.data.datasets[3].data = batteryFill;
     chartSlide1.update();
 }
 
@@ -322,7 +326,7 @@ function updateSlide2(history14d) {
     const se = history14d.solaredge || { values: [] };
     const ch = history14d.chilicon || { values: [] };
     const house = history14d.house_load || { values: [] };
-    const bat = history14d.battery || { power_kw: [] };
+    const bat = history14d.battery || { soc_percent: [] };
 
     const labels = grid.timestamps.map(ts => {
         try {
@@ -336,12 +340,13 @@ function updateSlide2(history14d) {
     });
 
     const totalSolar = (se.values || []).map((v, idx) => v + (ch.values[idx] || 0));
+    const batteryFill = (bat.soc_percent || []).map(soc => (parseFloat(soc || 0) * 0.1) - 10.0);
 
     chartSlide2.data.labels = labels;
     chartSlide2.data.datasets[0].data = totalSolar;
     chartSlide2.data.datasets[1].data = house.values || [];
     chartSlide2.data.datasets[2].data = grid.values || [];
-    chartSlide2.data.datasets[3].data = bat.power_kw || [];
+    chartSlide2.data.datasets[3].data = batteryFill;
     chartSlide2.update();
 }
 
