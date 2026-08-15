@@ -76,16 +76,19 @@ Because target music and video assets are stored on external shares, paths must 
 
 
 ### Remote NAS Node ("Lenovo NAS" @ `192.168.8.181`)
-*   **Role**: Network-attached storage (NAS) and backup storage target.
+*   **Role**: Network-attached storage (NAS), backup storage target, and live HTML5 Web Kiosk server host (`http://192.168.8.181:8000`).
 *   **Hostname**: `520c`
 *   **Hardware**: Intel Xeon W-2133 (6 Cores / 12 Threads), 48GB (45GB usable) RAM, NVIDIA GeForce GTX 1050 Ti (4GB VRAM).
 *   **Storage**: 256GB FIKWOT FX520 NVMe SSD (System Root) + 2x 3TB SATA HDDs (Mounted at `/srv/nas/storage1` and `/srv/nas/storage2` separately, ext4).
 *   **Network Interface**: Upgraded 2.5G PCIe NIC pinned to `192.168.8.181` (MAC `58:04:4f:c8:b2:3d`).
-*   **Empirical Benchmark Performance (Session 2026-08-05)**:
-    *   **Model**: `gemma4:26b` (25.8B MoE, `Q4_K_M`)
-    *   **Generation Speed**: **10.01 tokens/second** (128 tokens generated in 12.79s).
-    *   **Prompt Evaluation Speed**: **5.59 tokens/second** (38 tokens evaluated in 6.79s).
-    *   **VRAM Offload**: **1,885 MiB / 4,096 MiB** (GTX 1050 Ti active CUDA offload).
+*   **Key Services**:
+    *   **HTML5 Web Kiosk (`web/app.py`)**: Port `8000` FastAPI + WebSocket server running continuous 15s background telemetry sync from `192.168.8.213`.
+    *   **Ollama Service**: Port `11434` running `gemma4:26b`.
+
+### Primary Kiosk Hardware Node ("Rainforest Pi" @ `192.168.8.213`)
+*   **Role**: Active physical kiosk display and serial hardware collector reading EMU-2 serial port, SolarEdge, and Chillicon cloud APIs.
+*   **Hostname**: `rainforestpi` (`192.168.8.213`; note: `192.168.8.122` is reserved for the ITACH audio Pi node).
+*   **Hardware**: Raspberry Pi 4 (4GB LPDDR4), 64GB MicroSD, Broadcom BCM2711.
 
 ### Remote Ollama Server ("Giga Server" @ `192.168.8.193`)
 *   **Role**: Remote GPU server for edge Ollama model inference (recently upgraded).

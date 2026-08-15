@@ -54,15 +54,15 @@ This document maintains the official record of the network hosts, hardware confi
     *   `gemma4-it-q4:latest` (Default Fallback Model - 3.1 GB)
     *   `gemma2:9b` (High-Performance 9B Model - 5.4 GB)
 
-### 1.4 Raspberry Pi (Kiosk Display)
+### 1.4 Raspberry Pi (Kiosk Display & Serial Collector)
 *   **Hostname**: `rainforestpi`
-*   **IP Address**: `192.168.8.122` (DHCP updated; formerly `192.168.8.70`)
-*   **Role**: Kiosk frontend, rendering telemetry plots and streaming summaries from the stager daemon.
+*   **IP Address**: `192.168.8.213` (Active physical kiosk display & EMU-2 serial collector; note: `192.168.8.122` is the ITACH audio Pi node)
+*   **Role**: Physical kiosk frontend & hardware collector reading physical EMU-2 serial port, SolarEdge, and Chillicon APIs.
 *   **Hardware**:
     *   **CPU**: Broadcom BCM2711 / Quad-core ARM Cortex-A72 (Architecture: `aarch64`)
     *   **Memory**: 4 GB LPDDR4 (3.7 GiB usable)
     *   **Storage**: 64 GB MicroSD card (`/dev/mmcblk0p2`, 58 GB partition size)
-*   **OS**: Raspberry Pi OS (Debian)
+*   **OS**: Raspberry Pi OS (Debian 12 Bookworm)
 
 ---
 
@@ -150,14 +150,13 @@ This document maintains the official record of the network hosts, hardware confi
 
 ### 3.3 Ubuntu NAS Node ("Lenovo NAS")
 *   **Hostname**: `520c`
-*   **IP Address**: `192.168.8.198`
-*   **MAC Address**: `f4:93:9f:ec:de:96`
-*   **Role**: Network-attached storage (NAS) and backup storage target.
+*   **IP Address**: `192.168.8.181` (Pinned 2.5G PCIe NIC MAC `58:04:4f:c8:b2:3d`)
+*   **Role**: Network-attached storage (NAS), backup target, and HTML5 Web Kiosk host (`http://192.168.8.181:8000`).
 *   **Hardware**:
     *   **CPU**: Intel Xeon W-2133 (6 Cores / 12 Threads, Architecture: `x86_64`)
     *   **Memory**: 48 GB RAM (45 GiB usable)
     *   **Storage**: 256 GB FIKWOT FX520 NVMe SSD (System Root) + 2x 3 TB SATA HDDs (Mounted at `/srv/nas/storage1` and `/srv/nas/storage2` separately, ext4)
-    *   **GPU**: NVIDIA GeForce GTX 750 Ti (2 GB VRAM) + NVIDIA Quadro P620 (2 GB VRAM)
+    *   **GPU**: NVIDIA GeForce GTX 1050 Ti (4 GB VRAM)
 *   **OS**: Ubuntu 26.04 LTS (Kernel 7.0)
 
 ---
