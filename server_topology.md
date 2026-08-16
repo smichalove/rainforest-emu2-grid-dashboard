@@ -199,9 +199,11 @@ python3 sync_pg_to_jriver_xml.py
         *   `PurpleAir` (MAC `f0:24:f9:c6:67:d1`) -> Pinned to `192.168.10.241` (Outdoor EPA PM2.5 AQI Sensor)
         *   `Awair` (MAC `70:88:6b:12:35:80`) -> Pinned to `192.168.8.219` (Indoor Air Quality IAQ Sensor)
         *   `ONE KVM` (MAC `12:35:2A:B1:F3:C8`) -> Pinned to `192.168.8.204` (Isolated device, SSH: `root`)
-    *   **Decoupled Web Services**:
+    *   **Decoupled Web & Database Services**:
         *   **Rainforest Web Kiosk (`520c` @ `192.168.8.181:8000`)**: High-performance FastAPI & HTML5/JS Web Head polling `Rainforestpi` (`192.168.8.213`) every 15s via automated SSH rsync.
+        *   **Belmont Land Records Database (`520c` @ `/srv/nas/storage1/belmont_latest.db`)**: Canonical SQLite deed catalog (89,417 records) with Tailscale remote access (`100.109.142.78` for user `david`).
     *   **Firewall Security**:
         *   **Rule `Block_KVM_All_Forwarding`**: Restricts the KVM (MAC `12:35:2A:B1:F3:C8`) from sending packets outside the LAN zone. Specifically, the rule targets `option src 'lan'`, `option dest '*'`, and `option target 'REJECT'` with `option proto 'all'`. This prevents the KVM's built-in Tencent Cloud reverse proxy/WebSocket backdoor from communicating with the internet.
     *   **Nginx Gateway**: Running `nginx/1.26.1` (audited secure against NGINX Rift rewrite rules).
+
 
