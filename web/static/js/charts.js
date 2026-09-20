@@ -55,7 +55,7 @@ function initSlide1Chart() {
                     label: "Battery Storage",
                     data: [],
                     borderColor: "#3b82f6",
-                    backgroundColor: "rgba(30, 64, 175, 0.45)",
+                    backgroundColor: "rgba(59, 130, 246, 0.25)",
                     fill: { target: { value: -10.0 } },
                     borderWidth: 1.5,
                     pointRadius: 0,
@@ -163,7 +163,7 @@ function initSlide2Chart() {
                     label: "Battery Storage",
                     data: [],
                     borderColor: "#3b82f6",
-                    backgroundColor: "rgba(30, 64, 175, 0.45)",
+                    backgroundColor: "rgba(59, 130, 246, 0.25)",
                     fill: { target: { value: -10.0 } },
                     borderWidth: 1.5,
                     pointRadius: 0,
@@ -307,14 +307,14 @@ function updateSlide1(historyData) {
     // Total Solar = SE + Chillicon
     const totalSolar = (se.values || []).map((v, idx) => v + (ch.values[idx] || 0));
 
-    // Convert Battery SoC (%) to Y-Axis Range (-10.0 to 0.0)
+    // Convert Battery SoC (%) to Y-Axis Range (-10.0 to 0.0) - cup fill from -10.0 up to 0.0 baseline
     const batteryFill = (bat.soc_percent || []).map(soc => (parseFloat(soc || 0) * 0.1) - 10.0);
 
     chartSlide1.data.labels = labels;
     chartSlide1.data.datasets[0].data = totalSolar;
     chartSlide1.data.datasets[1].data = house.values || [];
     chartSlide1.data.datasets[2].data = grid.values || [];
-    chartSlide1.data.datasets[3].data = batteryFill;
+    chartSlide1.data.datasets[3].data = batteryFill.length > 0 ? batteryFill : (bat.power_kw || []);
     chartSlide1.update();
 }
 
@@ -326,7 +326,7 @@ function updateSlide2(history14d) {
     const se = history14d.solaredge || { values: [] };
     const ch = history14d.chilicon || { values: [] };
     const house = history14d.house_load || { values: [] };
-    const bat = history14d.battery || { soc_percent: [] };
+    const bat = history14d.battery || { power_kw: [], soc_percent: [] };
 
     const labels = grid.timestamps.map(ts => {
         try {
@@ -340,13 +340,13 @@ function updateSlide2(history14d) {
     });
 
     const totalSolar = (se.values || []).map((v, idx) => v + (ch.values[idx] || 0));
-    const batteryFill = (bat.soc_percent || []).map(soc => (parseFloat(soc || 0) * 0.1) - 10.0);
+    const batteryFill14d = (bat.soc_percent || []).map(soc => (parseFloat(soc || 0) * 0.1) - 10.0);
 
     chartSlide2.data.labels = labels;
     chartSlide2.data.datasets[0].data = totalSolar;
     chartSlide2.data.datasets[1].data = house.values || [];
     chartSlide2.data.datasets[2].data = grid.values || [];
-    chartSlide2.data.datasets[3].data = batteryFill;
+    chartSlide2.data.datasets[3].data = batteryFill14d.length > 0 ? batteryFill14d : (bat.power_kw || []);
     chartSlide2.update();
 }
 
