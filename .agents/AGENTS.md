@@ -66,6 +66,26 @@
 
 ---
 
+# Post-Mortem: Rainforest EMU-2 Web Kiosk & Decoupled Architecture (Session 2026-08-15)
+
+### 1. Dual-Pi Node Disambiguation (`192.168.8.213` vs `192.168.8.122`)
+* **Failure:** Background telemetry sync on `520c` was initially pointed at `192.168.8.122`. `192.168.8.122` is the AYRE / iTACH audio power daemon Pi (`powerd.py`), which contained a stale copy of `grid_history.db` from August 13 and no solar CSVs. The active physical kiosk and EMU-2 serial logger runs on **`192.168.8.213`** (`Rainforestpi`).
+* **Resolution:** Established SSH trust between `520c` (`192.168.8.181`), `len-big` (`192.168.8.51`), and `Rainforestpi` (`192.168.8.213`). Updated `PI_COLLECTOR_HOST = "192.168.8.213"` in `web/config.py`.
+
+### 2. House Load Computation vs Direct SolarEdge Flow Meter
+* **Failure:** The web dashboard initially estimated House Load using the energy conservation formula (`Net Grid + Total Solar + Battery`), which reported `4.651 kW` while the physical kiosk reported `1.890 kW` (a ~2.76 kW discrepancy).
+* **Resolution:** Added direct parsing of `solaredge_flow_history.csv` (column index 2 `load_power`) to `web/db_reader.py` and `web/app.py`. The web frontend now displays the exact same consumption meter reading as the physical kiosk.
+
+### 3. Battery "Cup Filling with Water" Negative Floor Mapping
+* **Design:** Replicated the physical Matplotlib kiosk's battery visualization in Chart.js (`charts.js`). Battery State of Charge ($0–100\%$) is mathematically mapped into the negative quadrant ($-10.0$ to $0.0\text{ kW}$):
+  `const batteryFill = (bat.soc_percent || []).map(soc => (parseFloat(soc || 0) * 0.1) - 10.0);`
+  Configured `fill: { target: { value: -10.0 } }` with translucent blue shading (`rgba(30, 64, 175, 0.45)`) so the volume fills from the $-10.0\text{ kW}$ floor up to the zero baseline as the battery charges, avoiding positive-axis clutter.
+
+### 4. Zero-CDN Offline Asset Vendoring
+* **Design:** Bundled Chart.js v4.4.7 directly into `web/static/js/vendor/chart.umd.min.js`. All scripts and stylesheets are served locally from `520c`, enabling reliable offline rendering across air-gapped or isolated LAN subnets.
+
+---
+
 # Post-Mortem: macOS Apple Silicon Touch ID, iMessage Attestation & Password Invalidation (Session 2026-09-01)
 
 ### 1. Apple Account Password Change & Hardware Attestation Bottleneck
@@ -108,8 +128,6 @@
 ### 2. Display Bounds & Typography Verification
 * **Check:** Verified the kiosk's physical screen geometry on `rainforestpi` (`192.168.8.213`) using `DISPLAY=:0`. Confirmed native resolution is `1024x768` (well above the older 592px inner subframe bounds), ensuring zero horizontal overflow or collision with the right-column solar PV and grid metrics.
 * **Deployment:** Synced updated `dashboard.py` to `steven@rainforestpi:~/rainforest-emu2-grid-dashboard/` and verified process restart with serial hardware lock on `/dev/ttyACM0`.
-
-
 
 
 

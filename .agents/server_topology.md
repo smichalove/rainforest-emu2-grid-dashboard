@@ -20,7 +20,7 @@ This document details the master system architecture, hardware specifications, I
 ---------------------------------------------------------------------------------------------------------------------------------------
  mac-m3-max    | 192.168.8.31    | stevemic   | Apple M3 Max (16C CPU)    | 🚀 40-Core Metal GPU (64GB UMA)  | Top Throughput Mac, 4 Streams
 ---------------------------------------------------------------------------------------------------------------------------------------
- mac-m1-max    | 192.168.8.237   | stevemic   | Apple M1 Max (10C CPU)    | 🚀 32-Core Metal GPU (32GB UMA)  | High-Speed Mac, 2 Streams
+ mac-m1-max    | 192.168.8.22    | stevemic   | Apple M1 Max (10C CPU)    | 🚀 32-Core Metal GPU (32GB UMA)  | High-Speed Mac, 2 Streams
 ---------------------------------------------------------------------------------------------------------------------------------------
  mac-m1-pro    | 192.168.8.81    | stevemic   | Apple M1 Pro (10C CPU)    | 🚀 16-Core Metal GPU (32GB UMA)  | Python/MPS Server (WAN Isolated)
 ---------------------------------------------------------------------------------------------------------------------------------------
@@ -138,7 +138,7 @@ graph TD
   * **4-Slot Hardware Batching:** `OLLAMA_NUM_PARALLEL=4` holding 4 concurrent KV-cache contexts in unified RAM.
 * **Active Configuration:** `threads: 4`, `batch_size: 2`, running `gemma4:26b` @ **~718 pages / hour** (18.5s latency).
 
-### E. Apple Silicon High-Bandwidth Node (`mac-m1-max` @ `192.168.8.237`)
+### E. Apple Silicon High-Bandwidth Node (`mac-m1-max` @ `192.168.8.22`)
 * **Role:** High-speed Apple Silicon GPU inference server.
 * **CPU:** Apple M1 Max (10-Core CPU: 8 Performance + 2 Efficiency cores).
 * **RAM:** 32 GB Unified LPDDR5 Memory (400 GB/s bandwidth).
@@ -194,4 +194,29 @@ graph TD
  Uptime Monitoring        | Background 30s NodeWatchdog with instant push alerts via ntfy.sh
  Online Backup Schedule   | Automated every 15 minutes (96 rolling snapshots, 24-hr point-in-time recovery)
 =============================================================================================================
-```
+---
+
+## 5. Network Infrastructure & Routing (`192.168.8.1`)
+*   **Hardware**: GL.iNet Primary Router & 2.5 Gbps High-Speed Backplane Switch.
+*   **2.5 Gbps Backplane Network Upgrade**:
+    *   All Ubuntu server nodes (`520c`, `steven-len`, `big-len`) and `Stevens-Mini-2` Mac Mini are running on dedicated **2.5 Gbps PCIe NIC interfaces** operating at 2500 Mb/s Full Duplex over the high-speed backplane network. Only `ubunto-giga` remains on 1 Gbps Ethernet.
+*   **Key Configurations**:
+    *   **dnsmasq DHCP Daemon**: Configured with static host leases using GL.iNet option tag nicknames.
+    *   **Static Leases**:
+        *   `ubunto-giga` (MAC `74:56:3c:6b:70:45`) -> Pinned to `192.168.8.193` (1 Gbps enp4s0)
+        *   `steven-len` (MAC `58:04:4f:c8:b1:a6`) -> Pinned to `192.168.8.28` (2.5 Gbps NIC `enp2s0`)
+        *   `520c` (MAC `58:04:4f:c8:b2:3d`) -> Pinned to `192.168.8.181` (2.5 Gbps NIC `enp2s0`)
+        *   `len-big` (MAC `20:e1:5d:8e:0b:5d`) -> Pinned to `192.168.8.51` (2.5 Gbps NIC)
+        *   `Stevens-Mini-2` (MAC `6c:1f:f7:72:44:49`) -> Pinned to `192.168.8.103` (2.5 GbE Interface `en8`)
+        *   `nvjetson` (MAC `4c:bb:47:7b:14:80`) -> Pinned to `192.168.8.68`
+        *   `Rainforestpi` (MAC `00:13:ef:40:07:58`) -> Pinned to `192.168.8.213` (EMU-2 Smart Meter Collector & Physical Kiosk)
+        *   `iTACH_AYRE` (MAC `88:a2:9e:05:02:c2`) -> Pinned to `192.168.8.122` (Audio Power Control Daemon `powerd.py`)
+        *   `PurpleAir` (MAC `f0:24:f9:c6:67:d1`) -> Pinned to `192.168.10.241` (Outdoor EPA PM2.5 AQI Sensor)
+        *   `Awair` (MAC `70:88:6b:12:35:80`) -> Pinned to `192.168.8.219` (Indoor Air Quality IAQ Sensor)
+        *   `ONE KVM` (MAC `12:35:2A:B1:F3:C8`) -> Pinned to `192.168.8.204` (Isolated device, SSH: `root`)
+    *   **Decoupled Web & Database Services**:
+        *   **Rainforest Web Kiosk (`520c` @ `192.168.8.181:8000`)**: High-performance FastAPI & HTML5/JS Web Head polling `Rainforestpi` (`192.168.8.213`) every 15s via automated SSH rsync.
+        *   **Belmont Land Records Database (`520c` @ `/srv/nas/storage1/belmont_latest.db`)**: Canonical SQLite deed catalog (89,417 records) with Tailscale remote access (`100.109.142.78` for user `david`).
+    *   **Firewall Security**:
+        *   **Rule `Block_KVM_All_Forwarding`**: Restricts the KVM (MAC `12:35:2A:B1:F3:C8`) from sending packets outside the LAN zone. Specifically, the rule targets `option src 'lan'`, `option dest '*'`, and `option target 'REJECT'` with `option proto 'all'`. This prevents the KVM's built-in Tencent Cloud reverse proxy/WebSocket backdoor from communicating with the internet.
+    *   **Nginx Gateway**: Running `nginx/1.26.1` (audited secure against NGINX Rift rewrite rules).
