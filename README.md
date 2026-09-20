@@ -28,6 +28,7 @@ Because the monitor reads data directly from the Zigbee wireless network inside 
 - **Chillicon Cloud API Integration**: Polls actual microinverter solar generation (production power in kW and cumulative lifetime generation in Wh) from Chillicon Cloud every 15 minutes using persistent session cookie authentication.
 - **Stacked Solar PV Chart**: Stacks the actual Chillicon generation (plotted as a bright neon yellow cap) on top of the SolarEdge PV bars (warm gold base) on a unified 10-minute grid, displaying your total combined solar output on the secondary Y-axis.
 - **Hands-Free Kiosk Mode**: Configured to boot completely headless and automatically launch into fullscreen without sleeping.
+- **Hybrid Weather & PurpleAir Environmental Telemetry**: Fetches regional forecast metrics from Open-Meteo while integrating on-premise particulate matter (EPA PM2.5 AQI) and actual local ambient temperature (`(Actual: XX°F)`) polled directly from a local PurpleAir sensor (`192.168.10.241`).
 - **AI Background Summaries**: Renders a narrative, statistical, and mathematical analysis summary directly on the graph background, formatted with smart 80-character line wrapping. Supports both Google Cloud Vertex AI and fully local Nvidia Jetson-based edge models (Ollama/Gemma 4).
 
 ---
@@ -530,12 +531,13 @@ The dashboard architecture has been completely refactored from a monolithic scri
 * **`io.py`**: A dedicated, thread-safe file handling layer. It features null-byte stripping for corrupted CSV lines and uses atomic swap-files for JSON caches to completely eliminate file corruption during sudden power losses.
 * **`telemetry.py`**: Handles raw serial polling, XML parsing, and database history operations for the Rainforest EMU-2 hardware.
 * **`solar.py`**: Manages API clients, session cookies, and authentication for SolarEdge and Chillicon external endpoints.
-* **`weather.py`**: Performs asynchronous requests to Open-Meteo for cloud cover and sunrise/sunset metrics.
+* **`weather.py`**: Performs asynchronous requests to Open-Meteo for forecast cloud cover and ambient temperature, while extracting live EPA PM2.5 AQI and actual ambient temperature from local PurpleAir sensors.
 * **`spectral.py`**: A pure, headless mathematical library executing Discrete Fourier Transforms (DFT), signal gap interpolations, and SNR noise floor calculations.
 * **`ai.py`**: Integrates the `google-genai` SDK, Vertex AI Batch upload pipelines, and local Ollama interactions.
 
 ### 2. UI & Daemon Entry Points
 * **`dashboard.py`**: The main Tkinter Kiosk GUI application. It acts as a supervisor, launching the headless data acquisition threads and rendering Matplotlib canvases. It includes a built-in watchdog that detects API timeouts or serial crashes and safely heals/restarts the threads.
+* **`read_purple_air.py`**: Standalone CLI diagnostic and fetch tool that reads local PurpleAir sensor JSON feeds directly or through router gateway SSH proxies.
 * **`render_local_plot.py`**: A mock emulator that generates static PNGs of the dashboard using offline history databases and CSVs, allowing developers to test UI layout changes without physical hardware.
 * **`stage_batch_summary.py`**: Background cron job that feeds bulk arrays of telemetry to Google Cloud Vertex AI to cache high-fidelity baseline LLM summaries.
 * **`stage_local_summary.py`**: Lightweight HTTP daemon built for Nvidia Jetson servers to receive telemetry arrays, perform frequency-domain spectral math, and run fast local LLM inferences (`gemma4-it-q4`) on live deltas.

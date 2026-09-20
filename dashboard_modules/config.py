@@ -134,9 +134,35 @@ def load_env_credentials() -> Tuple[Dict[str, Optional[str]], Dict[str, Optional
                         chilicon_credentials["password"] = data.get("password")
                     if not chilicon_credentials["installation_hash"]:
                         chilicon_credentials["installation_hash"] = data.get("installation_hash")
-                    logging.info(f"Loaded Chillicon credentials from: {path}")
                     break
             except Exception as e:
                 logging.warning(f"Could not parse Chillicon credentials file {path}: {e}")
 
-    return solaredge_credentials, chilicon_credentials
+    # Load Emporia config
+
+    emporia_credentials = {
+        "username": os.environ.get("EMPORIA_USERNAME", "smichalove@gmail.com"),
+        "token_file": os.environ.get("EMPORIA_TOKEN_FILE", "Auth/emporia_tokens.json"),
+    }
+    emporia_paths = [
+        os.path.join(script_dir, "Auth/emporia_config.json"),
+        os.path.join(script_dir, "auth/emporia_config.json"),
+        os.path.join(home_dir, "Auth/emporia_config.json"),
+        os.path.join(home_dir, "auth/emporia_config.json")
+    ]
+    for path in emporia_paths:
+        if os.path.exists(path):
+            try:
+                with open(path, 'r') as f:
+                    data = json.load(f)
+                    if data.get("username"):
+                        emporia_credentials["username"] = data.get("username")
+                    if data.get("token_file"):
+                        emporia_credentials["token_file"] = data.get("token_file")
+                    logging.info(f"Loaded Emporia config from: {path}")
+                    break
+            except Exception as e:
+                logging.warning(f"Could not parse Emporia credentials file {path}: {e}")
+
+    return solaredge_credentials, chilicon_credentials, emporia_credentials
+

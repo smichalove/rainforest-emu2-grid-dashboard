@@ -338,12 +338,16 @@ class GridDashboard(tk.Tk):
     def load_credentials(self) -> None:
         """Loads configuration maps and sets system credentials (delegate)."""
         try:
-            se_creds, ch_creds = config.load_env_credentials()
-            self.solaredge_api_key = se_creds["api_key"]
-            self.solaredge_site_id = se_creds["site_id"]
-            self.chilicon_username = ch_creds["username"]
-            self.chilicon_password = ch_creds["password"]
-            self.chilicon_installation_hash = ch_creds["installation_hash"]
+            creds = config.load_env_credentials()
+            if len(creds) >= 2:
+                se_creds, ch_creds = creds[0], creds[1]
+                self.solaredge_api_key = se_creds.get("api_key")
+                self.solaredge_site_id = se_creds.get("site_id")
+                self.chilicon_username = ch_creds.get("username")
+                self.chilicon_password = ch_creds.get("password")
+                self.chilicon_installation_hash = ch_creds.get("installation_hash")
+            if len(creds) >= 3:
+                self.emporia_credentials = creds[2]
         except Exception as e:
             logging.error(f"Resilient fallback error in load_credentials: {e}")
 
@@ -1110,12 +1114,28 @@ class GridDashboard(tk.Tk):
             self.last_valid_temp = None
         if not hasattr(self, 'last_valid_sky_str'):
             self.last_valid_sky_str = None
+        if not hasattr(self, 'last_valid_sensor_temp'):
+            self.last_valid_sensor_temp = None
 
         if temp is not None:
             temp_str = f"{temp:.1f}°C"
             self.last_valid_temp = temp_str
         else:
             temp_str = self.last_valid_temp if self.last_valid_temp is not None else "N/A"
+
+        pa_data = getattr(self, 'cached_purple_air', {})
+        sensor_temp_f = pa_data.get("temp_f") if pa_data else None
+        if sensor_temp_f is not None:
+            self.last_valid_sensor_temp = sensor_temp_f
+        else:
+            sensor_temp_f = self.last_valid_sensor_temp
+
+        actual_str = ""
+        if sensor_temp_f is not None:
+            try:
+                actual_str = f" (Actual: {int(round(float(sensor_temp_f)))}°F)"
+            except (ValueError, TypeError):
+                pass
             
         if wcode is not None:
             sky_map = {
@@ -1132,10 +1152,9 @@ class GridDashboard(tk.Tk):
             sky_str = self.last_valid_sky_str if self.last_valid_sky_str is not None else "N/A"
             
         if self.weather_label is not None:
-            self.weather_label.config(text=f"{temp_str} | {sky_str}")
+            self.weather_label.config(text=f"{temp_str}{actual_str} | {sky_str}")
 
         if self.aqi_label is not None:
-            pa_data = getattr(self, 'cached_purple_air', {})
             if pa_data and "aqi" in pa_data:
                 aqi = pa_data.get("aqi", 0)
                 category = pa_data.get("category", "Good")
@@ -1156,14 +1175,7 @@ class GridDashboard(tk.Tk):
         self.last_weather_fetch = fetch_time
         self.weather_backoff_delay = 10.0  # Reset backoff on success
 
-        if self.aqi_label is not None and live_purple_air and "aqi" in live_purple_air:
-            aqi = live_purple_air.get("aqi", 0)
-            category = live_purple_air.get("category", "Good")
-            color = live_purple_air.get("color", "#22c55e")
-            self.aqi_label.config(
-                text=f"AQI: {aqi} ({category})",
-                fg=color
-            )
+        self.update_weather_display()
 
     def update_chart(self, label_text: str, color: str) -> None:
         """Draws current line coordinates and stacked bars on the canvas.

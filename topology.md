@@ -20,16 +20,11 @@ This document maintains the official record of the network hosts, hardware confi
     *   `gemma4-vision-q4:latest` (VLM - 4.1 GB)
     *   `gemma4-it-q4:latest` (Default Edge Model - 3.1 GB)
     *   `gemma4-e2b-q4:latest` (Edge 2B - 3.4 GB)
-    *   `gemma2-edge:latest` (1.7 GB)
-    *   `gemma2:2b-instruct-q4_K_M` (1.7 GB)
-    *   `gemma2:9b-instruct-q3_K_M` (4.8 GB)
-    *   `gemma2:9b` (5.4 GB)
-    *   `gemma2:2b` (1.6 GB)
 
 ### 1.2 Jetson Orin Nano (Dedicated GPU AI Server)
 *   **Hostname**: `nvagent`
-*   **IP Address**: `192.168.8.45` (Currently Offline / Dead)
-*   **Role**: Primary edge AI generation host for stager summaries (Standby/Offline).
+*   **IP Address**: `192.168.8.45`
+*   **Role**: Primary edge AI generation host for stager summaries.
 *   **Hardware**:
     *   **CPU**: 6-core ARM Cortex-A78AE (Architecture: `aarch64`)
     *   **Memory**: 8 GB LPDDR5 (7.4 GiB usable + 7.7 GiB swap on ZRAM)
@@ -37,7 +32,9 @@ This document maintains the official record of the network hosts, hardware confi
     *   **GPU**: 1024-core NVIDIA Ampere (integrated/shared system RAM)
 *   **OS**: Ubuntu Linux (JetPack)
 *   **Active Ollama Models**:
-    *   None (Device Offline)
+    *   `gemma4-vision-q4:latest` (VLM - 4.1 GB)
+    *   `gemma4-it-q4:latest` (Default Edge Model - 3.1 GB)
+    *   `gemma4-e2b-q4:latest` (Edge 2B - 3.4 GB)
 
 ### 1.3 Ubuntu Dedicated AI Server (High-Performance Node)
 *   **Hostname**: `ubunto-giga`

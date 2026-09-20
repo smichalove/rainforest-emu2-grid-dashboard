@@ -3,5 +3,6 @@
 set timeout 10
 spawn ssh -o StrictHostKeyChecking=no root@192.168.8.204
 expect "password:"
-send "Tr1llE0036k\r"
+set password $env(KVM_PASSWORD)
+send "$password\r"
 interact

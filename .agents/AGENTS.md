@@ -4,6 +4,7 @@
   > [!IMPORTANT]
   > *   Never write to, modify, or rewrite router network configurations, DNS settings, DHCP client/server leases, or wireless interface settings without explicit user permission.
   > *   **Do not remove or bypass the `Block_KVM_All_Forwarding` firewall rule** on the gateway router (`192.168.8.1`) for the KVM device (`12:35:2A:B1:F3:C8` / `192.168.8.204`). This device contains active phone-home reverse-proxy backdoors to Tencent Cloud and must remain completely isolated from the WAN.
+  > *   **Do not remove or bypass the `Block_8_81_IP_Forwarding` or `Block_MacM1Pro_MAC_Forwarding` firewall rules** on the gateway router (`192.168.8.1`) for `mac-m1-pro` (`f8:e4:3b:c7:1e:e7` / `192.168.8.81`). This host is permanently quarantined from outbound WAN/Internet access and is strictly confined to intra-LAN cluster communication.
   > *   **Never store or write plain-text passwords** or sensitive system credentials in any markdown (`.md`) or documentation files in this repository.
 
 - **Startup Context & Topology Awareness:**
@@ -62,5 +63,53 @@
 ### 3. Header Widget Layout & Display Font Bounds
 * **Failure:** Displaying the full string `Air Quality: AQI 76 (Moderate - 23.8 µg/m³)` on small touchscreen displays (`592x448` resolution) caused vertical and horizontal overflow, pushing the right-hand solar metrics off screen.
 * **Resolution:** Compacted the AQI widget text to `AQI: 76 (Moderate)` and adjusted header font scaling from 32/14pt to 24/11pt with 1px padding, ensuring crisp rendering across all display resolutions.
+
+---
+
+# Post-Mortem: macOS Apple Silicon Touch ID, iMessage Attestation & Password Invalidation (Session 2026-09-01)
+
+### 1. Apple Account Password Change & Hardware Attestation Bottleneck
+* **Trigger:** The Apple Account password was changed on August 29, 2026, invalidating all pre-existing master OAuth session tokens, refresh tokens, and CloudKit Keychains (CKKS) across local daemon sessions.
+* **Failure:** Because third-party kernel extensions (`com.iboysoft.BitLockerVolume` and `com.paragon-software.filesystems.extfs`) required setting the host to **"Reduced Security"**, the standalone Messages app failed initial cryptographic hardware attestation challenges with Apple's servers (`akd: Attestation map does not contain the cert attestation` -> `AKAuthenticationError Code=-7034`), resulting in the red UI error *"An unknown error occurred"*.
+* **Collateral Biometrics Failure:** Token invalidation and local keybag desynchronization crashed `securityd` and corrupted OpenDirectory user record mapping (`opendirectoryd: Code 4200`), causing `biometrickitd` to return `err:0x105 (userUUIDs: null)` and purge enrolled Touch ID fingerprint templates.
+* **Resolution:** 
+  1. Restarted directory and biometric daemons (`sudo killall biometrickitd opendirectoryd`).
+  2. Purged stale biometric template caches (`bioutil -p` and `sudo bioutil -p -s`).
+  3. Re-enrolled the primary fingerprint (`Finger 1`) in **System Settings -> Touch ID & Password**.
+  4. Renewed the master Apple Account authentication token directly through **System Settings -> Apple Account** rather than the standalone Messages splash screen, re-establishing valid session tokens across all daemons.
+* **Reference Runbook:** Documented complete diagnostic steps and recovery workflows in [`macos_touchid_troubleshooting_runbook.md`](file:///Users/treven/macos_touchid_troubleshooting_runbook.md).
+
+---
+
+# Post-Mortem: MDM-Managed Mac M1 Pro (8.81) WAN Isolation & Firewall Policy (Session 2026-09-02)
+
+### 1. Host Quarantining & Traffic Containment
+* **Objective:** Prevent `mac-m1-pro` (`192.168.8.81` / MAC `f8:e4:3b:c7:1e:e7`), an MDM-managed Apple Silicon node, from leaking telemetry, corporate VPN, or sending any outbound traffic outside the local network, while keeping its local inference API accessible to the cluster.
+* **Resolution:** Configured two complementary firewall rules on the OpenWrt gateway router (`192.168.8.1`):
+  1. `Block_8_81_IP_Forwarding`: Matches `src='lan'`, `dest='*'`, `src_ip='192.168.8.81'`, `target='REJECT'`.
+  2. `Block_MacM1Pro_MAC_Forwarding`: Matches `src='lan'`, `dest='*'`, `src_mac='f8:e4:3b:c7:1e:e7'`, `target='REJECT'`.
+* **Kernel & Architecture Verification:**
+  * In iptables, both rules populate `zone_lan_forward` with `-j reject`, dropping any forwarded packet attempting to reach `wan`, `guest`, `iot`, or external zones.
+  * Because intra-LAN traffic on `192.168.8.0/24` traverses the Linux bridge (`br-lan`) at Layer 2 and `net.bridge.bridge-nf-call-iptables = 0`, local cluster API calls (e.g. from `len-big` or `i7office` to `8.81` on port 8000) remain completely uninhibited (0.0% packet loss, ~3.6ms latency).
+  * Confirmed that `Block_KVM_All_Forwarding` (`192.168.8.204`) was preserved untouched.
+
+---
+
+# Post-Mortem: Hybrid Weather & PurpleAir Sensor Temperature Integration (Session 2026-09-20)
+
+### 1. Dual Temperature Telemetry & Header Layout
+* **Requirement:** The dashboard header previously rendered only Open-Meteo API ambient temperature (`temperature_2m` in °C) and cloud cover. The user requested displaying the on-premise local temperature measured by the PurpleAir sensor (`192.168.10.241`) alongside the API forecast on the same line.
+* **Resolution:** 
+  * Extracted `temp_f` from `cached_purple_air` in [`dashboard.py`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard.py#L1126-L1139).
+  * Appended the sensor reading using the format ` (Actual: <temp>°F)`, producing a unified header display: `18.9°C (Actual: 66°F) | Partly Cloudy`.
+  * Added `self.last_valid_sensor_temp` state caching to prevent UI regressions to `"N/A"` during transient network or router proxy timeouts.
+  * Connected `_apply_weather_update()` to trigger `self.update_weather_display()` immediately when background telemetry arrives.
+
+### 2. Display Bounds & Typography Verification
+* **Check:** Verified the kiosk's physical screen geometry on `rainforestpi` (`192.168.8.213`) using `DISPLAY=:0`. Confirmed native resolution is `1024x768` (well above the older 592px inner subframe bounds), ensuring zero horizontal overflow or collision with the right-column solar PV and grid metrics.
+* **Deployment:** Synced updated `dashboard.py` to `steven@rainforestpi:~/rainforest-emu2-grid-dashboard/` and verified process restart with serial hardware lock on `/dev/ttyACM0`.
+
+
+
 
 
