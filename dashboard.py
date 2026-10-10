@@ -23,10 +23,16 @@ import logging
 import os
 import queue
 import signal
-import urllib.request
 import sys
 import threading
 import time
+import urllib.request
+urllib.request.getproxies = lambda: {}
+os.environ.setdefault("NO_PROXY", "*")
+os.environ.setdefault("no_proxy", "*")
+os.environ.setdefault("AWS_EC2_METADATA_DISABLED", "true")
+os.environ.setdefault("AWS_DEFAULT_REGION", "us-east-1")
+os.environ.setdefault("GRPC_ENABLE_FORK_SUPPORT", "0")
 from typing import Any, Dict, List, Optional, Tuple
 
 # Third-party libraries
@@ -47,7 +53,11 @@ import tkinter as tk
 
 # Modular Package Imports
 from dashboard_modules import config, io, telemetry, solar, weather, spectral, ai
-from dashboard_modules.grpc_client import GridTelemetryClient, timestamp_to_datetime
+try:
+    from dashboard_modules.grpc_client import GridTelemetryClient, timestamp_to_datetime
+except Exception:
+    GridTelemetryClient = None
+    timestamp_to_datetime = None
 
 # Setup logging
 home_dir: str = os.path.expanduser('~')
@@ -161,10 +171,17 @@ class GridDashboard(tk.Tk):
         self.title("EMU-2 Grid Monitor")
         
         # Kiosk mode settings
-        self.attributes("-fullscreen", True)
+        is_windowed = os.environ.get("KIOSK_WINDOWED", "0") == "1"
+        if is_windowed:
+            self.attributes("-fullscreen", False)
+            self.geometry("1024x768")
+            self.resizable(False, False)
+        else:
+            self.attributes("-fullscreen", True)
+            self.bind("<Button-1>", lambda e: self.destroy())
+
         self.configure(bg='black')
         self.bind("<Escape>", lambda e: self.destroy())
-        self.bind("<Button-1>", lambda e: self.destroy())
 
         # Thread synchronization lock
         self._data_lock_inst = threading.Lock()
@@ -208,13 +225,31 @@ class GridDashboard(tk.Tk):
         self.latest_status_text = "Waiting for data..."
         self.latest_status_color = "white"
         self.solar_bars_dirty = True
-        self.current_slide = 1
+        self.current_slide = int(os.environ.get("INITIAL_SLIDE", "1"))
+        for i, arg in enumerate(sys.argv):
+            if arg.startswith("--slide="):
+                try:
+                    self.current_slide = int(arg.split("=")[1])
+                except ValueError:
+                    pass
+            elif arg == "--slide" and i + 1 < len(sys.argv):
+                try:
+                    self.current_slide = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
         self.local_time_text = "Awaiting AI Analysis..."
         self.local_history_text = "Awaiting 14-day history summary..."
         self.local_dft_text = "Awaiting Frequency Domain Analysis..."
         self.baseline_text = ""
         self.local_delta_text = ""
         self.cached_full_history_spectrum: Dict[str, Any] = {}
+
+        # Emporia Vue circuit telemetry state
+        self.circuit_telemetry = []
+        self.last_circuit_fetch_time = 0.0
+        self.use_simulated_circuits = os.environ.get("EMPORIA_SIMULATE", "0") == "1"
+        self.emporia_thread = None
+        self.peak_loads_label = None
 
         # Resolve paths
         # Prioritize loading from Mac sync service directory if present
@@ -297,6 +332,8 @@ class GridDashboard(tk.Tk):
         self.start_watchdog_loop()
 
         # slide rotation loop (initially Slide 1)
+        if self.current_slide != 1:
+            self.update_slide_visibility()
         self.after(config.SLIDE_1_DURATION_MS, self.rotate_slides)
 
         # Start visual refreshing
@@ -690,6 +727,12 @@ class GridDashboard(tk.Tk):
         latest_load = self.se_load_power[-1] if self.se_load_power else 0.0
         self.load_status_label.config(text=f"House Load: {latest_load:.3f} kW")
 
+        # Peak loads measurement widget
+        self.peak_loads_label = tk.Label(
+            self.right_header, text="⚡ Top: Awaiting Telemetry...", font=('Helvetica', 10, 'bold'), bg='black', fg='#38bdf8', anchor='e'
+        )
+        self.peak_loads_label.pack(anchor='e', pady=(0, 1))
+
         # Hardware logos küçük banner
         if self.logo_image_tk:
             self.logo_label = tk.Label(self, image=self.logo_image_tk, bg='black')
@@ -750,8 +793,9 @@ class GridDashboard(tk.Tk):
         self.battery_rate_line, = self.ax.plot([], [], color=config.EXPORT_COLOR, label='Battery Discharge Rate (kW)', linewidth=1.5, alpha=0.8, zorder=2.0)
         self.battery_fill = None
 
-        # Slide 2 Axis (Frequency Domain)
-        self.ax_freq = self.fig.add_axes(rect, facecolor='black')
+        # Slide 3 Axis (Circuit & Device Breakdown)
+        rect_freq = [0.18, 0.12, 0.78, 0.82]
+        self.ax_freq = self.fig.add_axes(rect_freq, facecolor='black')
         self.ax_freq.tick_params(colors='white')
         self.ax_freq.spines['bottom'].set_color('white')
         self.ax_freq.spines['left'].set_color('white')
@@ -799,6 +843,37 @@ class GridDashboard(tk.Tk):
             self.local_delta_thread = threading.Thread(target=self.local_delta_loop, name="LocalDeltaThread", daemon=True)
             self.local_delta_thread.start()
 
+        # 6. Emporia Vue Circuit Telemetry Poller
+        self.start_emporia_loop()
+
+    def start_emporia_loop(self) -> None:
+        """Launches background poller for Emporia Vue circuit & smart plug telemetry."""
+        self.emporia_thread = threading.Thread(target=self.emporia_loop, name="EmporiaLoopThread", daemon=True)
+        self.emporia_thread.start()
+
+    def emporia_loop(self) -> None:
+        """Continuously pulls circuit and smart plug telemetry (live or simulated)."""
+        from dashboard_modules.emporia_vue import EmporiaVueClient, get_top_active_loads
+        client = EmporiaVueClient()
+        while self.running:
+            try:
+                circuits = client.get_circuit_telemetry(use_simulator=self.use_simulated_circuits)
+                now = time.time()
+                with self._data_lock_inst:
+                    self.circuit_telemetry = circuits
+                    self.last_circuit_fetch_time = now
+
+                top_text, _ = get_top_active_loads(circuits, n=3, last_update_ts=now)
+                if hasattr(self, 'peak_loads_label') and self.peak_loads_label is not None:
+                    self.ui_queue.put(lambda t=top_text: self.peak_loads_label.config(text=t))
+            except Exception as e:
+                logging.warning(f"Error in Emporia circuit loop: {e}")
+
+            for _ in range(15):
+                if not self.running:
+                    break
+                time.sleep(1)
+
     def start_watchdog_loop(self) -> None:
         """Launches a thread watcher to restart crashed daemon loops."""
         self.watchdog_thread = threading.Thread(target=self.watchdog_loop, name="WatchdogThread", daemon=True)
@@ -842,6 +917,9 @@ class GridDashboard(tk.Tk):
                 self.ser = serial.Serial(port_to_use, config.BAUD, timeout=1)
                 logging.info(f"Successfully opened {port_to_use} at {config.BAUD} baud.")
             except Exception as e:
+                if os.environ.get("KIOSK_WINDOWED") == "1" or not os.path.exists(port_to_use):
+                    time.sleep(10)
+                    continue
                 logging.error(f"Failed to open port {port_to_use}: {e}. Retrying in 5s...")
                 self.update_ui_text("Hardware disconnected.\nRetrying...")
                 time.sleep(5)
@@ -992,11 +1070,14 @@ class GridDashboard(tk.Tk):
         prompt_path = os.path.join(script_dir, prompt_file)
 
         logging.info("Calling model to fetch grid summary...")
+        ollama_endpoint = os.environ.get("OLLAMA_HOST", "http://192.168.8.103:11434/api/generate")
+        ollama_model = os.environ.get("EDGE_MODEL", os.environ.get("OLLAMA_MODEL", "gemma4-it-q4:latest"))
         response = ai.fetch_gemini_summary(
             prompt_template_path=prompt_path,
             context_data=context,
             local_llm=self.local_llm,
-            ollama_model=os.environ.get("EDGE_MODEL", "gemma4-it-q4"),
+            ollama_endpoint=ollama_endpoint,
+            ollama_model=ollama_model,
             gcp_project_id=os.environ.get("GCP_PROJECT")
         )
 
@@ -1047,7 +1128,7 @@ class GridDashboard(tk.Tk):
                 self.ax_bar.set_visible(False)
             self.ax_freq.set_visible(True)
             if hasattr(self, 'slide_title_label') and self.slide_title_label is not None:
-                self.slide_title_label.config(text="DFT Frequency Spectrum", fg='violet')
+                self.slide_title_label.config(text="Real-Time Circuit & Device Breakdown", fg='turquoise')
             
         self.update_summary_display()
         self.solar_bars_dirty = True
@@ -1405,59 +1486,133 @@ class GridDashboard(tk.Tk):
         elif self.current_slide == 3:
             self.ax_freq.clear()
             self.ax_freq.set_facecolor('black')
-            self.ax_freq.tick_params(colors='white')
+            self.ax_freq.tick_params(colors='white', labelsize=8)
             self.ax_freq.spines['bottom'].set_color('white')
             self.ax_freq.spines['left'].set_color('white')
             self.ax_freq.spines['right'].set_color('none')
             self.ax_freq.spines['top'].set_color('none')
-            self.ax_freq.set_xlabel('Frequency (Cycles per Day)', color='white', fontsize=9)
-            self.ax_freq.set_ylabel('Spectral Amplitude (kW)', color='white', fontsize=9)
+            self.ax_freq.set_xlabel('Power Draw (Watts)', color='white', fontsize=9)
 
-            freqs, grid_amp, solar_amp, expected_solar_amp, consumption_amp = self.align_and_compute_spectrum()
+            with self._data_lock_inst:
+                circuits_snapshot = list(self.circuit_telemetry)
+                last_ts = self.last_circuit_fetch_time
 
-            if freqs:
-                self.ax_freq.plot(freqs, grid_amp, color=config.IMPORT_COLOR, label='Grid Spectrum', linewidth=1.5)
-                self.ax_freq.plot(freqs, solar_amp, color='#fbbf24', label='Solar Spectrum (Actual)', linewidth=1.5)
-                self.ax_freq.plot(freqs, expected_solar_amp, color=config.EXPECTED_SOLAR_COLOR, linestyle='--', label='Expected Solar (Weather Modulated)', linewidth=1.3)
-                self.ax_freq.plot(freqs, consumption_amp, color=config.CONSUMPTION_COLOR, label='Household Consumption (Load)', linewidth=1.5)
-                self.ax_freq.axvline(1.0, color='deepskyblue', linestyle='--', alpha=0.5, label='24h Diurnal')
-                self.ax_freq.axvline(2.0, color='violet', linestyle='--', alpha=0.5, label='12h Semi-Diurnal')
-                self.ax_freq.set_xlim(0.1, 4.0)
-                self.ax_freq.grid(color='gray', linestyle=':', alpha=0.3)
-                
-                # Fetch SNR dB values
-                snr_metrics = spectral.calculate_snr_metrics(freqs, grid_amp, solar_amp, consumption_amp)
-                grid_diurnal_snr = snr_metrics.get("grid_24h_snr_db", 0.0)
-                solar_diurnal_snr = snr_metrics.get("solar_24h_snr_db", 0.0)
-                consumption_diurnal_snr = snr_metrics.get("consumption_24h_snr_db", 0.0)
-                
-                # Render calculated SNR values in the legend
+            if not circuits_snapshot:
+                from dashboard_modules.emporia_vue import generate_simulated_telemetry
+                circuits_snapshot = generate_simulated_telemetry()
+                last_ts = time.time()
+
+            # Separate Main and Balance if present
+            main_item = next((c for c in circuits_snapshot if c.get('type') == 'main'), None)
+            balance_item = next((c for c in circuits_snapshot if c.get('type') in ('balance', 'residual')), None)
+
+            # Active branch circuits & plugs (> 5W)
+            branch_candidates = [
+                c for c in circuits_snapshot
+                if c.get('type') not in ('main', 'balance', 'residual', 'total') and c.get('watts', 0.0) > 5.0
+            ]
+            # Pick top 8 active individual consumer loads
+            branch_candidates.sort(key=lambda c: c.get('watts', 0.0), reverse=True)
+            selected_branches = branch_candidates[:8]
+
+            # Assemble chart items: branches + balance, sorted ascending for barh
+            chart_items = list(selected_branches)
+            if balance_item and balance_item.get('watts', 0.0) > 0.0:
+                chart_items.append(balance_item)
+
+            chart_items.sort(key=lambda c: c.get('watts', 0.0))
+
+            # Pin Whole-Home Main at the very top of the horizontal bar chart
+            if main_item:
+                chart_items.append(main_item)
+
+            if chart_items:
+                names = [c['name'] for c in chart_items]
+                watts = [c['watts'] for c in chart_items]
+                colors = [c['color'] for c in chart_items]
+
+                # Shorten long display names
+                display_names = []
+                for n in names:
+                    sn = (
+                        n.replace("1 family room -office", "Office (Panel)")
+                        .replace("music room right main (Ch 10)", "Music Right Main")
+                        .replace("9 Music room Left", "Music Left Main")
+                        .replace("music room left", "Music Left Main")
+                        .replace("16 music room", "16 Music Room (Panel)")
+                        .replace("8 Kitchen lights & plugs", "Kitchen Lights/Plugs")
+                        .replace("7 kitchen plugs", "Kitchen Counter Plugs")
+                        .replace("big-len UPS", "Big-Len UPS (Plug)")
+                        .replace("giga and lem", "Giga & Lem (Plug)")
+                        .replace("A/C (Ch 6 & 13)", "A/C (Panel)")
+                        .replace("bedroom ups", "Bedroom UPS (Plug)")
+                        .replace("avm 60", "Anthem AVM 60 (Plug)")
+                        .replace("kitchen tv", "Kitchen TV (Plug)")
+                        .replace("200A Mains (Total)", "200A Mains")
+                        .replace("Residual (Unmonitored)", "Balance")
+                        .replace("Residual", "Balance")
+                    )
+                    display_names.append(sn)
+
+                y_pos = list(range(len(chart_items)))
+                bars = self.ax_freq.barh(y_pos, watts, color=colors, height=0.65, edgecolor='none', alpha=0.9)
+                self.ax_freq.set_yticks(y_pos)
+                self.ax_freq.set_yticklabels(display_names, color='white', fontsize=8)
+
+                # Reference whole-home power baseline for percentage calculation
+                if main_item and main_item.get('watts', 0.0) > 0:
+                    total_ref_w = main_item['watts']
+                elif self.se_load_power and self.se_load_power[-1] > 0:
+                    total_ref_w = self.se_load_power[-1] * 1000.0
+                else:
+                    total_ref_w = sum(c.get('watts', 0.0) for c in chart_items if c.get('type') != 'main')
+
+                if total_ref_w <= 0:
+                    total_ref_w = max(watts) if watts else 1000.0
+
+                max_w = max(watts) if watts else 100.0
+                for bar, w in zip(bars, watts):
+                    pct = (w / total_ref_w * 100.0) if total_ref_w > 0 else 0.0
+                    label_str = f" {int(round(w))} W ({pct:.1f}%)"
+                    self.ax_freq.text(
+                        bar.get_width() + (max_w * 0.01), bar.get_y() + bar.get_height() / 2,
+                        label_str,
+                        va='center', ha='left', color='white', fontsize=8, weight='bold'
+                    )
+
+                self.ax_freq.set_xlim(0, max_w * 1.38)
+                self.ax_freq.grid(axis='x', color='gray', linestyle=':', alpha=0.3)
+
+                # Category Legend
+                from matplotlib.patches import Patch
+                legend_elements = [
+                    Patch(facecolor='#c084fc', label='Main & Grid'),
+                    Patch(facecolor='#38bdf8', label='Compute & Lab'),
+                    Patch(facecolor='#4ade80', label='Audio & Entertainment'),
+                    Patch(facecolor='#f87171', label='Major Appliances'),
+                    Patch(facecolor='#facc15', label='General Household'),
+                    Patch(facecolor='#94a3b8', label='Balance'),
+                ]
                 self.ax_freq.legend(
-                    [
-                        f'Grid Spectrum (Diurnal SNR: {grid_diurnal_snr:.1f} dB)',
-                        f'Solar Spectrum (Diurnal SNR: {solar_diurnal_snr:.1f} dB)',
-                        'Expected Solar (Weather Modulated)',
-                        f'Household Consumption (Diurnal SNR: {consumption_diurnal_snr:.1f} dB)',
-                        '24h Diurnal',
-                        '12h Semi-Diurnal'
-                    ],
-                    facecolor='black', edgecolor='white', labelcolor='white', fontsize=8,
-                    loc='lower right'
+                    handles=legend_elements,
+                    loc='lower right',
+                    facecolor='black', edgecolor='white', labelcolor='white', fontsize=7.5,
+                    ncol=2
                 )
-                
-                max_amp = max(max(grid_amp), max(solar_amp), max(expected_solar_amp), max(consumption_amp)) if grid_amp else 1.0
-                self.ax_freq.set_ylim(0, max_amp * 1.85)
 
-            # Recreate watermark
+            # Subtitle badge with relative age
+            elapsed = int(time.time() - last_ts) if last_ts > 0 else 0
+            time_str = time.strftime('%H:%M:%S', time.localtime(last_ts)) if last_ts > 0 else "N/A"
+            badge_text = f"Telemetry Snapshot: {time_str} ({elapsed}s ago) | Monitored: {len(circuits_snapshot)} Circuits & Plugs"
             self.summary_text_obj_freq = self.ax_freq.text(
-                0.02, 1.02, self.wrap_text(self.local_dft_text),
-                transform=self.ax_freq.transAxes, ha='left', va='top',
-                fontsize=config.SUMMARY_FONT_SIZE, color=config.SUMMARY_COLOR, alpha=config.SUMMARY_ALPHA,
+                0.02, 1.03, badge_text,
+                transform=self.ax_freq.transAxes, ha='left', va='bottom',
+                fontsize=9, color='#38bdf8', alpha=0.9,
                 fontfamily='monospace', weight='bold', zorder=10
             )
 
             self.canvas.draw()
-            logging.info(f"Canvas draw took {(time.perf_counter() - t0)*1000:.2f} ms (Slide 2)")
+            logging.info(f"Canvas draw took {(time.perf_counter() - t0)*1000:.2f} ms (Slide 3 - Circuits)")
 
     def start_fast_render_loop(self) -> None:
         """Periodic 2-second GUI repaint loop."""
@@ -1476,8 +1631,13 @@ class GridDashboard(tk.Tk):
                 self.date_label.config(text=now_dt.strftime("%A, %b %d, %Y"))
             self.update_weather_display()
 
-            if self.current_slide == 1:
+            if self.current_slide in [1, 2, 3]:
                 self.update_chart(self.latest_status_text, self.latest_status_color)
+
+            if hasattr(self, 'peak_loads_label') and self.peak_loads_label is not None and self.circuit_telemetry:
+                from dashboard_modules.emporia_vue import get_top_active_loads
+                top_text, _ = get_top_active_loads(self.circuit_telemetry, n=3, last_update_ts=self.last_circuit_fetch_time)
+                self.peak_loads_label.config(text=top_text)
         except Exception as e:
             logging.error(f"Error in fast_render_loop: {e}")
             

@@ -551,15 +551,40 @@ class GridTelemetryService(pb2_grpc.GridTelemetryServiceServicer if pb2_grpc els
             except Exception as e:
                 logging.error(f"Error streaming Slide 1 summary: {e}")
 
-            logging.info("Streaming Slide 2 history summary tokens...")
+            logging.info("Running Agentic 14-day SQL Tool Loop for Slide 2 (Stevens-Mini-2)...")
+            agent_narrative_generated = False
             try:
-                for token in self.query_ollama_stream_fn(
-                    verify_history_prompt, model_name
-                ):
-                    history_text_accum.append(token)
-                    yield pb2.AnalysisStreamResponse(history_token_chunk=token)
-            except Exception as e:
-                logging.error(f"Error streaming Slide 2 history summary: {e}")
+                from dashboard_modules.agent_loop import run_14day_agentic_history_loop
+                narrative = run_14day_agentic_history_loop(
+                    db_path=self.db_path,
+                    raw_metrics=analysis_data,
+                    analysis_db_path=self.analysis_db_path,
+                    model=model_name,
+                    max_iterations=5,
+                    remaining_lines=remaining_lines
+                )
+                if narrative and len(narrative) > 20:
+                    import re
+                    # Stream tokens in small natural word/whitespace chunks
+                    chunks = re.findall(r'\S+|\s+', narrative)
+                    for c in chunks:
+                        history_text_accum.append(c)
+                        yield pb2.AnalysisStreamResponse(history_token_chunk=c)
+                    agent_narrative_generated = True
+                    logging.info("Successfully streamed agentic 14-day history narrative.")
+            except Exception as agent_err:
+                logging.error(f"Agentic 14-day loop error: {agent_err}. Falling back to standard prompt stream.")
+
+            if not agent_narrative_generated:
+                logging.info("Streaming Slide 2 history summary tokens (fallback stream)...")
+                try:
+                    for token in self.query_ollama_stream_fn(
+                        verify_history_prompt, model_name
+                    ):
+                        history_text_accum.append(token)
+                        yield pb2.AnalysisStreamResponse(history_token_chunk=token)
+                except Exception as e:
+                    logging.error(f"Error streaming Slide 2 history summary: {e}")
 
             logging.info("Streaming Slide 3 DFT explanation tokens...")
             try:

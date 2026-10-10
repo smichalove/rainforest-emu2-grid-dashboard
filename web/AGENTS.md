@@ -11,6 +11,7 @@ The `web/` package is the **Visualization Head** of the energy monitoring system
 - **Read-Only Data Layer:** It queries `grid_history.db` exclusively via read-only SQLite connections (`file:?mode=ro`) and parses auxiliary CSVs (`solaredge_history.csv`, `solaredge_flow_history.csv`, `chilicon_history.csv`, `solaredge_battery_history.csv`).
 - **Telemetry Sync:** `sync_service.py` pulls updated files from the Raspberry Pi Collector (`192.168.8.213` - `Rainforestpi`) to `data/` every 15 seconds.
 
+
 ---
 
 ## 2. Architecture & File Roles
@@ -28,14 +29,14 @@ web/
 ├── launch_kiosk.sh      # Chromium fullscreen launcher for Raspberry Pi
 │
 └── static/              # Pure Vanilla Frontend (No build tools / no Node.js required)
-    ├── index.html       # 2-Slide DOM structure matching physical VNC kiosk
+    ├── index.html       # 3-Slide DOM structure matching physical VNC kiosk
     ├── assets/
     │   └── combined_logos.png  # Header logos badge (NVIDIA | Jetson | Pi | Gemini)
     ├── css/
     │   └── dashboard.css# High-contrast solid black theme (#000000)
     └── js/
-        ├── app.js       # WebSocket client, clock, live metrics & 2-slide auto-cycle
-        ├── charts.js    # Slide 1 (24h Time Domain) & Slide 2 (DFT Spectrum) Chart.js
+        ├── app.js       # WebSocket client, clock, live metrics & 3-slide auto-cycle
+        ├── charts.js    # Slide 1 (24h), Slide 2 (14d History), Slide 3 (DFT Spectrum) Chart.js
         └── vendor/
             └── chart.umd.min.js # Local offline Chart.js v4.4.7 bundle
 ```

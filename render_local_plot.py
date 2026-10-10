@@ -1,19 +1,18 @@
-"""Offline Matplotlib local plot renderer for local verification.
+import sys
+import time
 
-Loads historical telemetry data, computes DFT spectra, and generates screen exports.
-Uses the shared dashboard_modules configuration and computations.
-"""
+print("[1/5] Initializing Python runtime...", flush=True)
+_t0 = time.perf_counter()
 
 import datetime
 import bisect
 import logging
 import os
-import sys
 import threading
-import time
 import tkinter as tk
 from typing import Any, Dict, List, Optional, Tuple
 
+print("[2/5] Loading Matplotlib and UI graphics engines...", flush=True)
 # Third-party libraries
 from PIL import Image, ImageTk
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
@@ -21,8 +20,9 @@ from matplotlib.collections import LineCollection
 import matplotlib.dates as mdates
 from matplotlib.figure import Figure
 
+print("[3/5] Loading telemetry and circuit data modules...", flush=True)
 # Modular imports
-from dashboard_modules import config, io, telemetry, solar, weather, spectral, ai
+from dashboard_modules import config, io, telemetry, solar, weather, spectral, ai, emporia_vue
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -52,12 +52,25 @@ class OfflineViewer(tk.Tk):
         self.configure(bg='black')
         self.geometry("1024x768")
         
+        # Bring window to front on macOS desktop
+        self.lift()
+        self.attributes("-topmost", True)
+        self.after(500, lambda: self.attributes("-topmost", False))
+        self.focus_force()
+        
         self.live_mode: bool = "--live" in sys.argv
         self.chilicon_off: bool = "--chiliconoff" in sys.argv
+        self.running: bool = True
 
-        self.bind("<Escape>", lambda e: self.destroy())
-        if not self.live_mode:
-            self.bind("<Button-1>", lambda e: self.destroy())
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.bind("<Escape>", self.on_close)
+        if not self.live_mode and "--close-on-click" in sys.argv:
+            self.bind("<Button-1>", self.on_close)
+
+        import signal
+        signal.signal(signal.SIGINT, lambda s, f: self.on_close())
+        signal.signal(signal.SIGTERM, lambda s, f: self.on_close())
+        self.check_signals()
 
         self._data_lock = threading.Lock()
         self.usage: List[float] = []
@@ -72,6 +85,11 @@ class OfflineViewer(tk.Tk):
         self.chilicon_power: List[float] = []
         self.chilicon_timestamps: List[datetime.datetime] = []
         self.chilicon_energy: List[float] = []
+
+        # Circuit telemetry state
+        self.circuit_telemetry = []
+        self.last_circuit_fetch_time = 0.0
+        self.use_simulated_circuits = "--live-emporia" not in sys.argv
 
         # Prioritize loading from Mac sync service directory if present
         sync_dir = "/Users/treven/rainforest_db"
@@ -104,8 +122,8 @@ class OfflineViewer(tk.Tk):
                 self.cutoff_hours = 999999
 
         # Load historical data
+        print("[4/5] Reading telemetry databases and calculating circuits...", flush=True)
         self.load_history_files(self.cutoff_hours)
-
 
         # Small banner hardware logos banner
         self.logo_image_tk: Optional[ImageTk.PhotoImage] = None
@@ -115,7 +133,7 @@ class OfflineViewer(tk.Tk):
                 img = Image.open(logo_path)
                 self.logo_image_tk = ImageTk.PhotoImage(img)
         except Exception as e:
-            print(f"Failed to load logo banner image: {e}")
+            pass
 
         # Setup GUI Widgets
         self.setup_widgets()
@@ -125,6 +143,18 @@ class OfflineViewer(tk.Tk):
 
         # Initial state variables
         self.current_slide: int = 1
+        for i, arg in enumerate(sys.argv):
+            if arg.startswith("--slide="):
+                try:
+                    self.current_slide = int(arg.split("=")[1])
+                except ValueError:
+                    pass
+            elif arg == "--slide" and i + 1 < len(sys.argv):
+                try:
+                    self.current_slide = int(sys.argv[i + 1])
+                except ValueError:
+                    pass
+
         self.local_time_text: str = "Awaiting AI Analysis..."
         self.local_history_text: str = "Awaiting 14-day history summary..."
         self.local_dft_text: str = "Awaiting Frequency Domain Analysis..."
@@ -134,6 +164,22 @@ class OfflineViewer(tk.Tk):
 
         # Load cached summaries
         self.load_cached_summary()
+
+        # Load Emporia Vue circuit telemetry
+        if self.use_simulated_circuits:
+            self.circuit_telemetry = emporia_vue.generate_simulated_telemetry()
+            self.last_circuit_fetch_time = time.time()
+        else:
+            client = emporia_vue.EmporiaVueClient()
+            self.circuit_telemetry = client.get_circuit_telemetry(use_simulator=False)
+            self.last_circuit_fetch_time = time.time()
+
+        print(f"      Calculated {len(self.circuit_telemetry)} circuits & plugs (Mains, Balance, Devices)", flush=True)
+        print(f"[5/5] Building GUI layout and rendering Slide {self.current_slide}...", flush=True)
+
+        if hasattr(self, 'peak_loads_label') and self.peak_loads_label is not None:
+            top_pill, _ = emporia_vue.get_top_active_loads(self.circuit_telemetry, last_update_ts=self.last_circuit_fetch_time)
+            self.peak_loads_label.config(text=top_pill)
 
         # Initialize time, date, and weather displays
         init_dt = self.timestamps[-1] if self.timestamps else datetime.datetime.now()
@@ -147,8 +193,26 @@ class OfflineViewer(tk.Tk):
             self.start_live_sync_daemon()
             self.start_gui_repaint_loop()
         else:
-            # Render and take screenshot immediately in batch headless mode
+            # Render immediately in preview mode
             self.update_slide_visibility()
+
+        print(f"✔ Ready! Displaying Slide {self.current_slide} window (1024x768).", flush=True)
+        print("  Controls: Press <Escape> or close window to exit.", flush=True)
+        print("=" * 60, flush=True)
+
+    def check_signals(self) -> None:
+        """Returns control briefly to Python to allow POSIX signals in Tk event loop."""
+        if getattr(self, 'running', True):
+            self.after(200, self.check_signals)
+
+    def on_close(self, *args: Any) -> None:
+        """Immediately and cleanly terminates the process."""
+        self.running = False
+        try:
+            self.destroy()
+        except Exception:
+            pass
+        os._exit(0)
 
     @property
     def data_lock(self) -> threading.Lock:
@@ -168,8 +232,14 @@ class OfflineViewer(tk.Tk):
         ch_client = solar.ChilliconClient("", "", "", self.chilicon_history_file)
         self.chilicon_timestamps, self.chilicon_power, self.chilicon_energy = ch_client.load_history(cutoff_hours=cutoff_hours)
 
-        # Weather defaults
-        self.weather_map = weather.fetch_historical_weather()
+        # Weather defaults (skip external API in preview mode for instantaneous startup)
+        if self.live_mode:
+            try:
+                self.weather_map = weather.fetch_historical_weather()
+            except Exception:
+                self.weather_map = {}
+        else:
+            self.weather_map = {}
 
     def setup_widgets(self) -> None:
         """Draws Tkinter headers and labels."""
@@ -238,6 +308,12 @@ class OfflineViewer(tk.Tk):
         )
         self.load_status_label.pack(anchor='e', pady=(0, 2))
 
+        # Peak loads measurement widget
+        self.peak_loads_label = tk.Label(
+            self.right_header, text="⚡ Top: Awaiting Telemetry...", font=('Helvetica', 10, 'bold'), bg='black', fg='#38bdf8', anchor='e'
+        )
+        self.peak_loads_label.pack(anchor='e', pady=(0, 2))
+
         if self.logo_image_tk:
             self.logo_label = tk.Label(self, image=self.logo_image_tk, bg='black')
             self.logo_label.pack(side=tk.TOP, anchor='center', pady=(5, 5))
@@ -290,8 +366,9 @@ class OfflineViewer(tk.Tk):
         self.battery_rate_line, = self.ax.plot([], [], color=config.EXPORT_COLOR, label='Battery Discharge Rate (kW)', linewidth=1.5, alpha=0.8, zorder=2.0)
         self.battery_fill = None
 
-        # Slide 2 Axis
-        self.ax_freq = self.fig.add_axes(rect, facecolor='black')
+        # Slide 3 Axis (Circuit & Device Breakdown)
+        rect_freq = [0.18, 0.12, 0.78, 0.82]
+        self.ax_freq = self.fig.add_axes(rect_freq, facecolor='black')
         self.ax_freq.tick_params(colors='white')
         self.ax_freq.spines['bottom'].set_color('white')
         self.ax_freq.spines['left'].set_color('white')
@@ -358,7 +435,7 @@ class OfflineViewer(tk.Tk):
         elif self.current_slide == 2:
             self.summary_text_obj.set_text(self.wrap_text(self.local_history_text).replace('$', '\\$'))
         else:
-            self.summary_text_obj_freq.set_text(self.wrap_text(self.local_dft_text).replace('$', '\\$'))
+            pass  # Badge is dynamically drawn by update_chart for Slide 3
             
         # Redraw canvas if initialized
         if hasattr(self, 'canvas') and self.canvas is not None:
@@ -398,7 +475,7 @@ class OfflineViewer(tk.Tk):
             self.ax_bar.set_visible(False)
             self.ax_freq.set_visible(True)
             if hasattr(self, 'slide_title_label') and self.slide_title_label is not None:
-                self.slide_title_label.config(text="DFT Frequency Spectrum", fg='violet')
+                self.slide_title_label.config(text="Real-Time Circuit & Device Breakdown", fg='turquoise')
             
         self.update_summary_display()
         self.update_chart()
@@ -693,69 +770,124 @@ class OfflineViewer(tk.Tk):
         elif self.current_slide == 3:
             self.ax_freq.clear()
             self.ax_freq.set_facecolor('black')
-            self.ax_freq.tick_params(colors='white')
+            self.ax_freq.tick_params(colors='white', labelsize=8)
             self.ax_freq.spines['bottom'].set_color('white')
             self.ax_freq.spines['left'].set_color('white')
             self.ax_freq.spines['right'].set_color('none')
             self.ax_freq.spines['top'].set_color('none')
-            self.ax_freq.set_xlabel('Frequency (Cycles per Day)', color='white', fontsize=9)
-            self.ax_freq.set_ylabel('Spectral Amplitude (kW)', color='white', fontsize=9)
+            self.ax_freq.set_xlabel('Power Draw (Watts)', color='white', fontsize=9)
 
-            # If we have precomputed full-history spectrum from Jetson, use it!
-            if self.cached_full_history_spectrum and "freqs" in self.cached_full_history_spectrum:
-                spec = self.cached_full_history_spectrum
-                freqs = spec["freqs"]
-                grid_amp = spec["grid_amp"]
-                solar_amp = spec["solar_amp"]
-                expected_solar_amp = spec["expected_solar_amp"]
-                consumption_amp = spec["consumption_amp"]
-            else:
-                with self.data_lock:
-                    grid_u = list(self.usage)
-                    grid_ts = list(self.timestamps)
-                    se_ts = list(self.se_timestamps)
-                    se_p = list(self.se_power)
-                    ch_ts = list(self.chilicon_timestamps)
-                    ch_p = list(self.chilicon_power)
+            with self.data_lock:
+                circuits_snapshot = list(getattr(self, 'circuit_telemetry', []))
+                last_ts = getattr(self, 'last_circuit_fetch_time', 0.0)
 
-                freqs, grid_amp, solar_amp, expected_solar_amp, consumption_amp = spectral.align_and_compute_spectra(
-                    grid_ts, grid_u, se_ts, se_p, ch_ts, ch_p, self.weather_map, self.chilicon_off
-                )
+            if not circuits_snapshot:
+                circuits_snapshot = emporia_vue.generate_simulated_telemetry()
+                last_ts = time.time()
 
-            if freqs:
-                self.ax_freq.plot(freqs, grid_amp, color=config.IMPORT_COLOR, label='Grid Spectrum', linewidth=1.5)
-                self.ax_freq.plot(freqs, solar_amp, color='#fbbf24', label='Solar Spectrum (Actual)', linewidth=1.5)
-                self.ax_freq.plot(freqs, expected_solar_amp, color=config.EXPECTED_SOLAR_COLOR, linestyle='--', label='Expected Solar (Weather Modulated)', linewidth=1.3)
-                self.ax_freq.plot(freqs, consumption_amp, color=config.CONSUMPTION_COLOR, label='Household Consumption (Load)', linewidth=1.5)
-                self.ax_freq.axvline(1.0, color='deepskyblue', linestyle='--', alpha=0.5, label='24h Diurnal')
-                self.ax_freq.axvline(2.0, color='violet', linestyle='--', alpha=0.5, label='12h Semi-Diurnal')
-                self.ax_freq.set_xlim(0.1, 4.0)
-                self.ax_freq.grid(color='gray', linestyle=':', alpha=0.3)
+            # Separate Main and Balance if present
+            main_item = next((c for c in circuits_snapshot if c.get('type') == 'main'), None)
+            balance_item = next((c for c in circuits_snapshot if c.get('type') in ('balance', 'residual')), None)
 
-                snr_metrics = spectral.calculate_snr_metrics(freqs, grid_amp, solar_amp, consumption_amp)
-                grid_diurnal_snr = snr_metrics.get("grid_24h_snr_db", 0.0)
-                solar_diurnal_snr = snr_metrics.get("solar_24h_snr_db", 0.0)
-                consumption_diurnal_snr = snr_metrics.get("consumption_24h_snr_db", 0.0)
+            # Active branch circuits & plugs (> 5W)
+            branch_candidates = [
+                c for c in circuits_snapshot
+                if c.get('type') not in ('main', 'balance', 'residual', 'total') and c.get('watts', 0.0) > 5.0
+            ]
+            # Pick top 8 active individual consumer loads
+            branch_candidates.sort(key=lambda c: c.get('watts', 0.0), reverse=True)
+            selected_branches = branch_candidates[:8]
 
+            # Assemble chart items: branches + balance, sorted ascending for barh
+            chart_items = list(selected_branches)
+            if balance_item and balance_item.get('watts', 0.0) > 0.0:
+                chart_items.append(balance_item)
+
+            chart_items.sort(key=lambda c: c.get('watts', 0.0))
+
+            # Pin Whole-Home Main at the very top of the horizontal bar chart
+            if main_item:
+                chart_items.append(main_item)
+
+            if chart_items:
+                names = [c['name'] for c in chart_items]
+                watts = [c['watts'] for c in chart_items]
+                colors = [c['color'] for c in chart_items]
+
+                display_names = []
+                for n in names:
+                    sn = (
+                        n.replace("1 family room -office", "Office (Panel)")
+                        .replace("music room right main (Ch 10)", "Music Right Main")
+                        .replace("9 Music room Left", "Music Left Main")
+                        .replace("music room left", "Music Left Main")
+                        .replace("16 music room", "16 Music Room (Panel)")
+                        .replace("8 Kitchen lights & plugs", "Kitchen Lights/Plugs")
+                        .replace("7 kitchen plugs", "Kitchen Counter Plugs")
+                        .replace("big-len UPS", "Big-Len UPS (Plug)")
+                        .replace("giga and lem", "Giga & Lem (Plug)")
+                        .replace("A/C (Ch 6 & 13)", "A/C (Panel)")
+                        .replace("bedroom ups", "Bedroom UPS (Plug)")
+                        .replace("avm 60", "Anthem AVM 60 (Plug)")
+                        .replace("kitchen tv", "Kitchen TV (Plug)")
+                        .replace("200A Mains (Total)", "200A Mains")
+                        .replace("Residual (Unmonitored)", "Balance")
+                        .replace("Residual", "Balance")
+                    )
+                    display_names.append(sn)
+
+                y_pos = list(range(len(chart_items)))
+                bars = self.ax_freq.barh(y_pos, watts, color=colors, height=0.65, edgecolor='none', alpha=0.9)
+                self.ax_freq.set_yticks(y_pos)
+                self.ax_freq.set_yticklabels(display_names, color='white', fontsize=8)
+
+                # Reference whole-home power baseline for percentage calculation
+                if main_item and main_item.get('watts', 0.0) > 0:
+                    total_ref_w = main_item['watts']
+                elif self.se_load_power and self.se_load_power[-1] > 0:
+                    total_ref_w = self.se_load_power[-1] * 1000.0
+                else:
+                    total_ref_w = sum(c.get('watts', 0.0) for c in chart_items if c.get('type') != 'main')
+
+                if total_ref_w <= 0:
+                    total_ref_w = max(watts) if watts else 1000.0
+
+                max_w = max(watts) if watts else 100.0
+                for bar, w in zip(bars, watts):
+                    pct = (w / total_ref_w * 100.0) if total_ref_w > 0 else 0.0
+                    label_str = f" {int(round(w))} W ({pct:.1f}%)"
+                    self.ax_freq.text(
+                        bar.get_width() + (max_w * 0.01), bar.get_y() + bar.get_height() / 2,
+                        label_str,
+                        va='center', ha='left', color='white', fontsize=8, weight='bold'
+                    )
+
+                self.ax_freq.set_xlim(0, max_w * 1.38)
+                self.ax_freq.grid(axis='x', color='gray', linestyle=':', alpha=0.3)
+
+                from matplotlib.patches import Patch
+                legend_elements = [
+                    Patch(facecolor='#c084fc', label='Main & Grid'),
+                    Patch(facecolor='#38bdf8', label='Compute & Lab'),
+                    Patch(facecolor='#4ade80', label='Audio & Entertainment'),
+                    Patch(facecolor='#f87171', label='Major Appliances'),
+                    Patch(facecolor='#facc15', label='General Household'),
+                    Patch(facecolor='#94a3b8', label='Balance'),
+                ]
                 self.ax_freq.legend(
-                    [
-                        f'Grid Spectrum (Diurnal SNR: {grid_diurnal_snr:.1f} dB)',
-                        f'Solar Spectrum (Diurnal SNR: {solar_diurnal_snr:.1f} dB)',
-                        'Expected Solar (Weather Modulated)',
-                        f'Household Consumption (Diurnal SNR: {consumption_diurnal_snr:.1f} dB)',
-                        '24h Diurnal',
-                        '12h Semi-Diurnal'
-                    ],
-                    facecolor='black', edgecolor='white', labelcolor='white', fontsize=8,
-                    loc='lower right'
+                    handles=legend_elements,
+                    loc='lower right',
+                    facecolor='black', edgecolor='white', labelcolor='white', fontsize=7.5,
+                    ncol=2
                 )
-                max_amp = max(max(grid_amp), max(solar_amp), max(expected_solar_amp), max(consumption_amp)) if grid_amp else 1.0
-                self.ax_freq.set_ylim(0, max_amp * 1.85)
 
+            elapsed = int(time.time() - last_ts) if last_ts > 0 else 0
+            time_str = time.strftime('%H:%M:%S', time.localtime(last_ts)) if last_ts > 0 else "N/A"
+            badge_text = f"Telemetry Snapshot: {time_str} ({elapsed}s ago) | Monitored: {len(circuits_snapshot)} Circuits & Plugs"
             self.summary_text_obj_freq = self.ax_freq.text(
-                0.02, 1.02, self.wrap_text(self.local_dft_text),
-                transform=self.ax_freq.transAxes, ha='left', va='top',
-                fontsize=config.SUMMARY_FONT_SIZE, color=config.SUMMARY_COLOR, alpha=config.SUMMARY_ALPHA,
+                0.02, 1.03, badge_text,
+                transform=self.ax_freq.transAxes, ha='left', va='bottom',
+                fontsize=9, color='#38bdf8', alpha=0.9,
                 fontfamily='monospace', weight='bold', zorder=10
             )
             self.canvas.draw()
@@ -871,9 +1003,10 @@ class OfflineViewer(tk.Tk):
 
 
 if __name__ == "__main__":
-    viewer = OfflineViewer()
     if "--screenshot" in sys.argv:
+        viewer = OfflineViewer()
         viewer.save_screenshot()
-        viewer.destroy()
+        viewer.on_close()
     else:
+        viewer = OfflineViewer()
         viewer.mainloop()

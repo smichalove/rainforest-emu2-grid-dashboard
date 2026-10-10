@@ -36,7 +36,7 @@
             </div>
         </header>
 
-        <!-- Main Chart Viewport (Slide 1 & Slide 2) -->
+        <!-- Main Chart Viewport (Slide 1, Slide 2, & Slide 3) -->
         <main id="kiosk-main">
             <!-- Slide 1: 24-Hour Period (Time Domain) -->
             <section id="slide-1" class="kiosk-slide active">
@@ -48,22 +48,33 @@
                 </div>
             </section>
 
-            <!-- Slide 2: DFT Frequency Spectrum -->
+            <!-- Slide 2: Zoom - 14-Day History -->
             <section id="slide-2" class="kiosk-slide">
                 <div class="chart-wrapper">
-                    <canvas id="freqDomainChart"></canvas>
+                    <canvas id="history14dChart"></canvas>
                     <div id="ai-watermark-2" class="ai-watermark">
-                        <pre id="ai-text-2">Loading DFT spectral analysis...</pre>
+                        <pre id="ai-text-2">Loading 14-day history analysis...</pre>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Slide 3: DFT Frequency Spectrum -->
+            <section id="slide-3" class="kiosk-slide">
+                <div class="chart-wrapper">
+                    <canvas id="freqDomainChart"></canvas>
+                    <div id="ai-watermark-3" class="ai-watermark">
+                        <pre id="ai-text-3">Loading DFT spectral analysis...</pre>
                     </div>
                 </div>
             </section>
         </main>
 
-        <!-- Minimal 2-Slide Touch Controller -->
+        <!-- 3-Slide Touch Controller -->
         <footer id="kiosk-controls">
             <div class="slide-dots">
                 <button class="dot active" onclick="switchSlide(1)">Slide 1 (24h)</button>
-                <button class="dot" onclick="switchSlide(2)">Slide 2 (DFT)</button>
+                <button class="dot" onclick="switchSlide(2)">Slide 2 (14d)</button>
+                <button class="dot" onclick="switchSlide(3)">Slide 3 (DFT)</button>
             </div>
             <div id="timer-tag" class="timer-badge">45s</div>
         </footer>

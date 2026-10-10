@@ -191,8 +191,8 @@ def fetch_gemini_summary(
     prompt_template_path: str,
     context_data: Dict[str, Any],
     local_llm: bool = False,
-    ollama_endpoint: str = "http://localhost:11434/api/generate",
-    ollama_model: str = "gemma4-it-q4",
+    ollama_endpoint: Optional[str] = None,
+    ollama_model: Optional[str] = None,
     gcp_project_id: Optional[str] = None
 ) -> str:
     """Executes a text summary query against Google GenAI (Gemini) or local Ollama.
@@ -205,6 +205,10 @@ def fetch_gemini_summary(
     Returns:
         The text response from the model.
     """
+    if ollama_endpoint is None:
+        ollama_endpoint = os.environ.get("OLLAMA_HOST", "http://192.168.8.103:11434/api/generate")
+    if ollama_model is None:
+        ollama_model = os.environ.get("EDGE_MODEL", os.environ.get("OLLAMA_MODEL", "gemma4-it-q4:latest"))
     try:
         with open(prompt_template_path, 'r', encoding='utf-8') as f:
             template = f.read()

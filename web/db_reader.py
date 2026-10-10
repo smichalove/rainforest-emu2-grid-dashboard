@@ -278,7 +278,15 @@ def get_ai_summary(slide: int = 1) -> Dict[str, Any]:
     try:
         with open(SUMMARY_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
-            summary_text = data.get("summary", "")
+            
+            # Select narrative field corresponding to the requested slide
+            if slide == 2:
+                summary_text = data.get("history_explanation", "") or data.get("summary", "")
+            elif slide == 3:
+                summary_text = data.get("dft_explanation", "") or data.get("summary", "")
+            else:
+                summary_text = data.get("summary", "")
+
             if isinstance(summary_text, dict):
                 summary_text = summary_text.get("summary", "")
             return {

@@ -21,7 +21,8 @@ ROOT_DIR: str = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 sys.path.insert(0, ROOT_DIR)
 sys.path.insert(0, os.path.join(ROOT_DIR, "protos"))
 
-import grpc
+import pytest
+grpc = pytest.importorskip("grpc")
 from google.protobuf.timestamp_pb2 import Timestamp
 
 try:

@@ -39,9 +39,9 @@ BATTERY_ENERGY_COLOR: str = 'dodgerblue'   # Neon blue/cyan for battery stored e
 BATTERY_RATE_COLOR: str = 'dodgerblue'     # Neon blue/cyan for battery charge/discharge rate (kW)
 
 # Slide Rotation Interval Settings (in milliseconds)
-SLIDE_1_DURATION_MS: int = 90000       # 1.5 minutes
-SLIDE_2_DURATION_MS: int = 90000       # 1.5 minutes (Zoom / Full History)
-SLIDE_3_DURATION_MS: int = 15000       # 15 seconds (DFT Spectrum)
+SLIDE_1_DURATION_MS: int = int(os.environ.get("SLIDE_1_DURATION_MS", "90000"))       # 1.5 minutes
+SLIDE_2_DURATION_MS: int = int(os.environ.get("SLIDE_2_DURATION_MS", "90000"))       # 1.5 minutes (Zoom / Full History)
+SLIDE_3_DURATION_MS: int = int(os.environ.get("SLIDE_3_DURATION_MS", "45000"))       # 45 seconds (Circuit & Device Breakdown)
 
 # Historical window settings
 HISTORY_HOURS: int = 336               # 14 days of telemetry

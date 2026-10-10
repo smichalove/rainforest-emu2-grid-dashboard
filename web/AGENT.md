@@ -29,14 +29,14 @@ web/
 ├── launch_kiosk.sh      # Chromium fullscreen launcher for Raspberry Pi
 │
 └── static/              # Pure Vanilla Frontend (No build tools / no Node.js required)
-    ├── index.html       # 2-Slide DOM structure matching physical VNC kiosk
+    ├── index.html       # 3-Slide DOM structure matching physical VNC kiosk
     ├── assets/
     │   └── combined_logos.png  # Header logos badge (NVIDIA | Jetson | Pi | Gemini)
     ├── css/
     │   └── dashboard.css# High-contrast solid black theme (#000000)
     └── js/
-        ├── app.js       # WebSocket client, clock, live metrics & 2-slide auto-cycle
-        ├── charts.js    # Slide 1 (24h Time Domain) & Slide 2 (DFT Spectrum) Chart.js
+        ├── app.js       # WebSocket client, clock, live metrics & 3-slide auto-cycle
+        ├── charts.js    # Slide 1 (24h), Slide 2 (14d History), Slide 3 (DFT Spectrum) Chart.js
         └── vendor/
             └── chart.umd.min.js # Local offline Chart.js v4.4.7 bundle
 ```
@@ -67,7 +67,9 @@ cd web
 # Test REST endpoints
 curl -s http://127.0.0.1:8000/api/telemetry/live
 curl -s http://127.0.0.1:8000/api/telemetry/history
+curl -s http://127.0.0.1:8000/api/telemetry/history14d
 curl -s http://127.0.0.1:8000/api/telemetry/spectrum
+curl -s "http://127.0.0.1:8000/api/summary?slide=2"
 ```
 
 ---

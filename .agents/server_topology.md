@@ -207,7 +207,7 @@ graph TD
         *   `steven-len` (MAC `58:04:4f:c8:b1:a6`) -> Pinned to `192.168.8.28` (2.5 Gbps NIC `enp2s0`)
         *   `520c` (MAC `58:04:4f:c8:b2:3d`) -> Pinned to `192.168.8.181` (2.5 Gbps NIC `enp2s0`)
         *   `len-big` (MAC `20:e1:5d:8e:0b:5d`) -> Pinned to `192.168.8.51` (2.5 Gbps NIC)
-        *   `Stevens-Mini-2` (MAC `6c:1f:f7:72:44:49`) -> Pinned to `192.168.8.103` (2.5 GbE Interface `en8`)
+        *   `Stevens-Mini-2` (MAC `6c:1f:f7:72:44:49`) -> Pinned to `192.168.8.103` (2.5 GbE Interface `en8`, User: `stevenmichalove`)
         *   `nvjetson` (MAC `4c:bb:47:7b:14:80`) -> Pinned to `192.168.8.68`
         *   `Rainforestpi` (MAC `00:13:ef:40:07:58`) -> Pinned to `192.168.8.213` (EMU-2 Smart Meter Collector & Physical Kiosk)
         *   `iTACH_AYRE` (MAC `88:a2:9e:05:02:c2`) -> Pinned to `192.168.8.122` (Audio Power Control Daemon `powerd.py`)

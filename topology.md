@@ -107,6 +107,7 @@ This document maintains the official record of the network hosts, hardware confi
 ### 2.4 Remote macOS Workstation (Curation Node)
 *   **Hostname**: `Stevens-Mini-2` (Mac Mini M4)
 *   **IP Address**: `192.168.8.103` (2.5 GbE Interface `en8`)
+*   **User Account**: `stevenmichalove`
 *   **Role**: High-performance Apple Silicon curation node.
 *   **Hardware**:
     *   **CPU**: Apple M4 (10-Core CPU, Architecture: `arm64`)

@@ -129,5 +129,84 @@
 * **Check:** Verified the kiosk's physical screen geometry on `rainforestpi` (`192.168.8.213`) using `DISPLAY=:0`. Confirmed native resolution is `1024x768` (well above the older 592px inner subframe bounds), ensuring zero horizontal overflow or collision with the right-column solar PV and grid metrics.
 * **Deployment:** Synced updated `dashboard.py` to `steven@rainforestpi:~/rainforest-emu2-grid-dashboard/` and verified process restart with serial hardware lock on `/dev/ttyACM0`.
 
+---
+
+# System Architecture: Audio Power Management Pi (192.168.8.122) & Emporia Vue Telemetry (Session 2026-09-23)
+
+### 1. Power Management Node Identity & Cluster Disambiguation
+* **Host Identity:** `192.168.8.122` (`steven@raspberrypi`, static lease `iTACH_AYRE`, MAC `88:a2:9e:05:02:c2`).
+* **Active Service:** Runs `/usr/bin/python3 /home/steven/iTACH_AYRE/powerd.py` continuously in the background (15-second evaluation loop).
+* **Role Disambiguation:**
+  * **`192.168.8.122` (`iTACH_AYRE`):** Dedicated audio power sequencing and thermal safety daemon (`powerd.py`).
+  * **`192.168.8.213` (`Rainforestpi`):** Dedicated physical touchscreen kiosk display (`dashboard.py`) and Rainforest EMU-2 smart meter USB reader (`/dev/ttyACM0`).
+
+### 2. Local Hardware vs. Cloud API Architecture
+* **Local LAN Protocols (Zero Internet Dependency):**
+  * **Global Caché iTach WF2IR/IP2IR (`192.168.8.125:4998`):** Raw TCP socket connection.
+    * Port 2: Physical contact closure sensor querying `getstate,1:2` to track Anthem processor power state (`0` = OFF, `1` = ON).
+    * Port 1: Infrared transmitter emitting 36kHz toggle pulses for Ayre V-1xe power amplifier.
+    * Port 3: Infrared transmitter emitting discrete 38kHz ON / 36kHz OFF for Ayre AX-7 integrated amplifier.
+  * **Global Caché iTach IP2CC (`192.168.8.128:4998`):** Raw TCP socket connection pulsing contact closure relay 1 (0.5s pause) for power sequencing.
+  * **TP-Link Kasa Smart Plug (`192.168.8.36`):** Local asyncio TCP/KLAP protocol via `python-kasa` controlling equipment rack cooling fans.
+  * **Music Server Wake-on-LAN:** UDP magic packets broadcast to `192.168.86.255` on Anthem power-up transition.
+* **Cloud API (Emporia Vue Gen 2):**
+  * **No Local API:** Factory stock Emporia Vue firmware possesses NO local HTTP/TCP endpoint or on-premise REST API.
+  * **Authentication:** Queries AWS Cognito session tokens cached on disk in `Auth/emporia_tokens.json` via the `pyemvue` library.
+  * **Thermal Safety Guard:** Monitors Channel 10 (`music room right main`, GID `100920`). If power draw exceeds 600.0 Watts during standalone amplifier playback (even with Anthem OFF), cooling fans remain ON.
+  * **Fail-Safe Policy:** If Emporia cloud requests time out or fail, `powerd.py` strictly defaults fans to **ON** to prevent equipment rack thermal damage.
+
+### 3. Full-Panel Circuit Telemetry & Smart Plug Enumeration
+* **Batch Telemetry Capability:** A single batched call (`vue.get_device_list_usage`) with cached tokens retrieves real-time 1-second power draw across all electrical circuits and connected smart devices simultaneously:
+  * **Main Electrical Panel (Vue Gen 2 - GID `100920`):**
+    * `Channel 1,2,3`: Whole-Home 200A Mains
+    * `Channel 1`: `1 family room -office`
+    * `Channel 2`: `2 studio 2`
+    * `Channel 3`: `3 master bathroom 3`
+    * `Channel 4`: `4 garage 4`
+    * `Channel 5`: `5 unknown`
+    * `Channel 6 & 13`: `A/C`
+    * `Channel 7`: `7 kitchen plugs`
+    * `Channel 8`: `8 Kitchen 8 lights and plugs`
+    * `Channel 9`: `9 furnace`
+    * `Channel 10`: `music room right main` (Monitored by `powerd.py`)
+    * `Channel 12`: `bedroom floor heat`
+    * `Channel 15`: `dryer`
+    * `Channel 16`: `16 music room`
+  * **13 Connected Smart Plugs (Model `SSO001`):**
+    * `music room fan dining room` (`448343`), `big-len UPS` (`455750`), `dining room fan` (`455754`), `kitchen tv` (`455763`), `bedroom ups` (`455768`), `MacBook` (`461168`), `zoo spotlight` (`463191`), `kettle emporia` (`466190`), `downstairs fan` (`466192`), `kitchen fan` (`482342`), `coffee maker light` (`482353`), `giga and lem` (`484653`), `avm 60` (`488187`).
+* **Integration Asset:** Reusable client module is implemented in [`dashboard_modules/emporia_vue.py`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard_modules/emporia_vue.py) (`EmporiaVueClient`), ready for dashboard visualization on `520c` (`192.168.8.181:8000`).
+
+---
+
+# System Architecture: 14-Day ReAct Agent Loop, 16GB Apple Silicon Migration & Ollama Failover (Session 2026-10-09)
+
+### 1. 14-Day Historical Analysis Upgrade (Slide 2)
+* **Problem:** Slide 2 on the physical kiosk and web interface historically utilized single-shot completions with terse, robotic prompts (`gemma_history_prompt.txt` / `gemma_verify_history_prompt.txt`), resulting in dry mechanical metric regurgitations rather than an interactive diagnostic narrative.
+* **Resolution:** Implemented `run_14day_agentic_history_loop()` in [`dashboard_modules/agent_loop.py`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard_modules/agent_loop.py) and wired it directly into the gRPC edge streaming pipeline ([`dashboard_modules/grpc_server.py`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard_modules/grpc_server.py)). The agent executes an interactive ReAct loop allowing up to 5 iterations of read-only SQLite tool calls (`query_db`) across `analysis_history` and `grid_history`.
+
+### 2. Exploiting 16GB Unified Memory Headroom (M4 Mac Mini)
+* **Context Expansion:** Migrated primary inference off constrained Jetson Orin Nano hardware to `Stevens-Mini-2` (`192.168.8.103:11434` - Apple M4 Mac Mini, 16GB Unified Memory). With `gemma4-it-q4:latest` consuming ~3.1 GB weights, over 12GB of unified RAM is available.
+  * Increased `num_ctx` from 4,096 / 8,192 to **16,384** tokens across all stagers and clients.
+  * Increased `num_predict` to **2,048** tokens with temperature set to `0.25`.
+  * Expanded SQL query result truncation limit from 50 to **300** records.
+* **Telemetry Matrix Pre-Injection:** `get_14day_daily_breakdown_table()` queries `analysis_history` to pre-populate a 14-day daily performance table directly into the prompt (Date, Day of Week, Net Import/Export, Solar PV, Battery Charge/Discharge, Peak kW, House Load, and ⚡ PSE Flex Event flags).
+* **Diurnal & Seasonal Context Engine:** `get_seasonality_context()` dynamically computes Pacific Northwest solar elevation and daylight hours (e.g. October sunrise 07:18 / sunset 18:31, 11.2h daylight), pairing it with diurnal profiles (Morning Ramp, Midday Solar Soak, Evening Peak / Flex window, Overnight Baseload) to ground narratives in seasonal transitions.
+
+### 3. Ollama Sequential Rotation & Tool-Call Reliability
+* **Topology Rebalancing:**
+  * **`mac-m3-max` (`192.168.8.31`):** Identified as running a non-standard Ollama service lacking reliable tool-calling support. Omitted from the ReAct tool-call rotation chain.
+  * **Verified Standard Tool Endpoints:**
+    1. `Stevens-Mini-2` (`192.168.8.103:11434` - Apple M4 Mac Mini 16GB, Primary)
+    2. `mac-m1-max` (`192.168.8.22:11434` - Apple Silicon M1 Max 32GB, Secondary)
+    3. `520c` (`192.168.8.181:11434` - Intel Xeon + RTX 4060 8GB, Tertiary)
+    4. `ubunto-giga` (`192.168.8.193:11434` - Secondary GPU host, Auxiliary)
+    5. `i7office` (`192.168.8.82:11434` - Windows host, Fallback)
+
+### 4. Web Kiosk 3-Slide Mirror Alignment (`520c` @ `192.168.8.181:8000`)
+* **Backend:** Updated `get_ai_summary()` in [`web/db_reader.py`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/web/db_reader.py) to return `history_explanation` for `slide=2` and `dft_explanation` for `slide=3`.
+* **Frontend:** Updated [`web/static/index.html`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/web/static/index.html) and [`web/static/js/app.js`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/web/static/js/app.js) to render all 3 slides (Slide 1: 24h Time Domain, Slide 2: Zoom - 14-Day History, Slide 3: DFT Spectrum), matching the physical kiosk layout.
+
+
+
 
 

@@ -27,4 +27,4 @@ if [ -f "./venv/bin/python" ]; then
     PYTHON_BIN="./venv/bin/python"
 fi
 
-DISPLAY=:0 $PYTHON_BIN -u dashboard.py > dashboard_gui.log 2>&1
+DISPLAY=:0 $PYTHON_BIN -u dashboard.py "$@" > dashboard_gui.log 2>&1

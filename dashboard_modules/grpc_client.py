@@ -17,8 +17,12 @@ SCRIPT_DIR: str = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR: str = os.path.dirname(SCRIPT_DIR)
 sys.path.insert(0, os.path.join(ROOT_DIR, "protos"))
 
-import grpc
-from google.protobuf.timestamp_pb2 import Timestamp
+try:
+    import grpc
+    from google.protobuf.timestamp_pb2 import Timestamp
+except ImportError:
+    grpc = None
+    Timestamp = None
 
 # import stub files that will be compiled
 try:

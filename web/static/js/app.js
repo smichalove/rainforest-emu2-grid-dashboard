@@ -1,5 +1,5 @@
 /**
- * Primary Kiosk Orchestrator - 2-Slide Physical Kiosk Port.
+ * Primary Kiosk Orchestrator - 3-Slide Physical Kiosk Mirror.
  */
 
 let currentSlide = 1;
@@ -10,13 +10,15 @@ let ws = null;
 
 const SLIDE_DURATIONS = {
     1: 45,  // 24-Hour Period (Time Domain)
-    2: 20   // DFT Frequency Spectrum
+    2: 45,  // Zoom - 14-Day History
+    3: 20   // DFT Frequency Spectrum
 };
 
 document.addEventListener("DOMContentLoaded", () => {
     initClock();
     initSlide1Chart();
-    initSlide3Chart(); // Slide 2 in this mode is DFT
+    initSlide2Chart();
+    initSlide3Chart();
 
     connectWebSocket();
     fetchAllDatasets();
@@ -133,20 +135,25 @@ function updateHeaderMetrics(data) {
    ============================================================================== */
 async function fetchAllDatasets() {
     try {
-        const [r1, r2, s1, s2] = await Promise.all([
+        const [r1, r2, r3, s1, s2, s3] = await Promise.all([
             fetch("/api/telemetry/history?hours=24").then(r => r.json()),
+            fetch("/api/telemetry/history14d").then(r => r.json()),
             fetch("/api/telemetry/spectrum").then(r => r.json()),
             fetch("/api/summary?slide=1").then(r => r.json()),
+            fetch("/api/summary?slide=2").then(r => r.json()),
             fetch("/api/summary?slide=3").then(r => r.json())
         ]);
 
         updateSlide1(r1);
-        updateSlide3(r2);
+        updateSlide2(r2);
+        updateSlide3(r3);
 
         const ai1 = document.getElementById("ai-text-1");
         const ai2 = document.getElementById("ai-text-2");
+        const ai3 = document.getElementById("ai-text-3");
         if (ai1 && s1.summary) ai1.innerText = s1.summary;
         if (ai2 && s2.summary) ai2.innerText = s2.summary;
+        if (ai3 && s3.summary) ai3.innerText = s3.summary;
 
     } catch (e) {
         console.error("Error loading datasets:", e);
@@ -160,7 +167,7 @@ function switchSlide(slideNum) {
     currentSlide = slideNum;
     slideTimerSecs = SLIDE_DURATIONS[currentSlide] || 30;
 
-    for (let i = 1; i <= 2; i++) {
+    for (let i = 1; i <= 3; i++) {
         const slideEl = document.getElementById(`slide-${i}`);
         if (slideEl) {
             slideEl.classList.toggle("active", i === currentSlide);
@@ -179,6 +186,9 @@ function switchSlide(slideNum) {
         if (currentSlide === 1) {
             headingEl.innerText = "24-Hour Period";
             headingEl.className = "slide-heading slide-theme-cyan";
+        } else if (currentSlide === 2) {
+            headingEl.innerText = "Zoom - 14-Day History";
+            headingEl.className = "slide-heading slide-theme-orange";
         } else {
             headingEl.innerText = "DFT Frequency Spectrum";
             headingEl.className = "slide-heading slide-theme-pink";
@@ -198,7 +208,7 @@ function startSlideCycle() {
         if (timerTag) timerTag.innerText = `${slideTimerSecs}s`;
 
         if (slideTimerSecs <= 0) {
-            let next = currentSlide === 1 ? 2 : 1;
+            let next = currentSlide >= 3 ? 1 : currentSlide + 1;
             switchSlide(next);
         }
     }, 1000);

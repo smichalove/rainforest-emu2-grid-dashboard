@@ -28,8 +28,13 @@ Because the monitor reads data directly from the Zigbee wireless network inside 
 - **Chillicon Cloud API Integration**: Polls actual microinverter solar generation (production power in kW and cumulative lifetime generation in Wh) from Chillicon Cloud every 15 minutes using persistent session cookie authentication.
 - **Stacked Solar PV Chart**: Stacks the actual Chillicon generation (plotted as a bright neon yellow cap) on top of the SolarEdge PV bars (warm gold base) on a unified 10-minute grid, displaying your total combined solar output on the secondary Y-axis.
 - **Hands-Free Kiosk Mode**: Configured to boot completely headless and automatically launch into fullscreen without sleeping.
+- **3-Slide Touch Kiosk & Web Mirror**: Features an automated rotating carousel (45s / 45s / 20s) across both the physical Pi touchscreen and the FastAPI Web Kiosk (`520c` @ `192.168.8.181:8000`):
+  * **Slide 1 (24-Hour Period)**: High-resolution time-domain net grid kW, house load, solar generation bars, and battery SoC water floor with real-time local delta narrative overlay.
+  * **Slide 2 (Zoom - 14-Day History)**: Multi-day energy progression with an interactive ReAct AI agent narrative analyzing seasonal sun shifts, solar vs load balance, and battery economics.
+  * **Slide 3 (Circuit Breakdown & DFT Spectrum)**: Real-time whole-home circuit telemetry (Emporia Vue 200A mains, sub-panels, smart plugs) and frequency-domain harmonic analysis.
+- **Interactive 14-Day ReAct AI History Agent**: Powered by local edge LLMs (Apple Silicon M4 Mac Mini `Stevens-Mini-2` @ `192.168.8.103:11434` with 16GB unified memory headroom). Uses a multi-turn ReAct loop (up to 5 iterations) with direct read-only SQLite tool calling (`query_db`), pre-injected daily performance matrices, diurnal load profiles, and seasonal sun cycles (sunrise, sunset, daylight duration, PNW heating/solar shifts).
 - **Hybrid Weather & PurpleAir Environmental Telemetry**: Fetches regional forecast metrics from Open-Meteo while integrating on-premise particulate matter (EPA PM2.5 AQI) and actual local ambient temperature (`(Actual: XX°F)`) polled directly from a local PurpleAir sensor (`192.168.10.241`).
-- **AI Background Summaries**: Renders a narrative, statistical, and mathematical analysis summary directly on the graph background, formatted with smart 80-character line wrapping. Supports both Google Cloud Vertex AI and fully local Nvidia Jetson-based edge models (Ollama/Gemma 4).
+- **AI Background Summaries**: Renders narrative, statistical, and mathematical analysis summaries directly on the graph background, formatted with smart line wrapping. Supports both Google Cloud Vertex AI and fully local edge models (Ollama/Gemma 4).
 
 ---
 
@@ -52,9 +57,12 @@ The architecture supports both cloud-based LLM APIs and local edge inference, de
 * **`gemini-2.5-flash`** (Default): Primary model used for compiling large 24-hour historical baselines. Runs via high-speed direct API or cost-optimized GCS batch jobs (with a 50% discount per token).
 * **`gemini-2.5-pro`** (Optional): Can be configured for deeper qualitative microgrid reports or complex utility policy reasoning.
 
-#### 2. Local Edge Models (NVIDIA Jetson Ollama)
-* **`gemma4-it-q4`** (Default): A custom edge-optimized 5.1B Instruct model (using `Q4_K_M` GGUF quantization). Fits in **1.6 GB** of active VRAM, offering extremely fast, low-latency delta and DFT summary predictions on constrained edge hardware.
-* **`gemma4-vision-q4`** (Optional): Compiled using the `F16` multimodal projector adapter. Allows the local stager to perform visual analysis of the generated dashboard plots.
+#### 2. Local Edge Models (Apple Silicon & Multi-Node Ollama Cluster)
+* **`Stevens-Mini-2` (`192.168.8.103:11434`) - Primary Master Inference**: Runs on an Apple Silicon M4 Mac Mini with **16GB Unified Memory** (~120 GB/s bandwidth). Executes the `gemma4-it-q4:latest` model with an expanded **16,384-token context window (`num_ctx: 16384`)**, enabling multi-turn ReAct SQL loops, pre-injected 14-day telemetry matrices, and multi-step reasoning with zero memory contention.
+* **`mac-m1-max` (`192.168.8.22:11434`) - Secondary High-Capacity Failover**: Apple Silicon M1 Max (32GB Unified Memory) hosting standard Ollama with native tool-calling and thinking support (`gemma4-it-q4:latest`, `gemma4:e4b`, `gemma4:26b`).
+* **`520c` (`192.168.8.181:11434`) - Tertiary Accelerated Failover**: Intel Xeon workstation with an NVIDIA RTX 4060 GPU (8GB GDDR6) running standard Ollama services.
+* **`ubunto-giga` (`192.168.8.193:11434`) & `i7office` (`192.168.8.82:11434`)**: Auxiliary and desktop workstation Ollama completion hosts.
+* **`gemma4-vision-q4`** (Optional): Multimodal projector adapter allowing the local stager to perform computer vision analysis of the generated dashboard plots.
 
 ### Authentication Setup
 The dashboard automatically authenticates using Vertex AI on Google Cloud:
@@ -118,28 +126,29 @@ For local Edge AI deployments (Nvidia Jetson Orin), the communication protocol i
 
 ```mermaid
 flowchart TD
-    subgraph Pi [Raspberry Pi Kiosk]
+    subgraph Pi [Raspberry Pi Kiosk: Rainforestpi @ 192.168.8.213]
         GUI[dashboard.py / Tkinter GUI]
         Client[grpc_client.py]
     end
-    subgraph Jetson1 [Jetson #1: nvjetson (Data & Math Node)]
+    subgraph Jetson [Edge Stager: nvjetson @ 192.168.8.68]
         Server[grpc_server.py: port 50051]
         DB[(backups/grid_history.db)]
-        OllamaLocal[Local Proposer Model: gemma:2b]
     end
-    subgraph Jetson2 [Jetson #2: nvagent (Dedicated GPU AI Server)]
-        OllamaRemote[Verifier & Critic Model: gemma4-it-q4]
+    subgraph InferenceCluster [Local Ollama AI Inference Cluster]
+        MacMini[Primary Master: Stevens-Mini-2 @ 192.168.8.103<br/>M4 Mac Mini 16GB / 16k ctx / ReAct Loop]
+        M1Max[Secondary Failover: mac-m1-max @ 192.168.8.22<br/>M1 Max 32GB / Standard Tools]
+        XeonNode[Tertiary Failover: 520c @ 192.168.8.181<br/>Xeon + RTX 4060 / Web Kiosk Mirror]
     end
 
     GUI -->|1. Request telemetry update| Client
     Client -->|2. Secure gRPC stream (port 50051)| Server
     Server -->|3. Query historical records| DB
-    Server -->|4. Query local proposer for initial drafts| OllamaLocal
-    OllamaLocal -->|5. Return Slide 1 & Slide 3 drafts| Server
-    Server -->|6. Query verifier with drafts & raw metrics| OllamaRemote
-    OllamaRemote -->|7. Stream verified & corrected tokens| Server
-    Server -->|8. Secure gRPC stream response| Client
-    Client -->|9. Render Slide 1 & Slide 3 on the fly| GUI
+    Server -->|4. Interactive ReAct SQL tool loop / Narrative stream| MacMini
+    MacMini -.->|Failover if busy/offline| M1Max
+    M1Max -.->|Failover| XeonNode
+    MacMini -->|5. Stream verified tokens| Server
+    Server -->|6. Stream response chunks| Client
+    Client -->|7. Render Slide 1, Slide 2 & Slide 3| GUI
 ```
 
 ### 2. Core System Classes

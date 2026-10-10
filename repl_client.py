@@ -51,9 +51,9 @@ def load_env_file(dotenv_path: str = ".env") -> None:
 load_env_file()
 
 # Global configuration constants
-SERVER_URL: str = os.getenv("LOCAL_SERVER_URL", "http://192.168.8.45:11434/api/chat")
+SERVER_URL: str = os.getenv("LOCAL_SERVER_URL", "http://192.168.8.103:11434/api/chat")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "gemma4-it-q4:latest")
-FALLBACK_SERVER_URL: str = os.getenv("FALLBACK_SERVER_URL", "http://192.168.8.193:11434/api/chat")
+FALLBACK_SERVER_URL: str = os.getenv("FALLBACK_SERVER_URL", "http://192.168.8.22:11434/api/chat")
 FALLBACK_OLLAMA_MODEL: str = os.getenv("FALLBACK_OLLAMA_MODEL", "gemma4-it-q4:latest")
 OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "131072"))
 SYNC_DIR: str = os.getenv("RAINFOREST_SYNC_DIR", "/Users/treven/rainforest_db")
@@ -78,10 +78,11 @@ def get_repl_endpoints_and_models(model: str) -> Tuple[List[str], List[str]]:
             return False
 
     endpoints = [
-        "http://192.168.8.45:11434/api/chat",  # 1. nvagent (Primary dedicated GPU)
-        "http://192.168.8.193:11434/api/chat", # 2. ubunto-giga (Secondary GPU)
-        "http://192.168.8.68:11434/api/chat",  # 3. nvjetson (Data/Math Node)
-        "http://192.168.8.82:11434/api/chat"   # 4. i7office (Windows DB Host)
+        "http://192.168.8.103:11434/api/chat", # 1. Stevens-Mini-2 (M4 Mac mini 16GB)
+        "http://192.168.8.22:11434/api/chat",  # 2. mac-m1-max (Apple Silicon M1 Max 32GB)
+        "http://192.168.8.181:11434/api/chat", # 3. 520c (Intel Xeon + RTX 4060 8GB)
+        "http://192.168.8.193:11434/api/chat", # 4. ubunto-giga (Auxiliary GPU)
+        "http://192.168.8.82:11434/api/chat"   # 5. i7office (Windows Host)
     ]
     
     # Add env configurations dynamically if different

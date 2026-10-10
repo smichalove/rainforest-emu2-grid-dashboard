@@ -1067,12 +1067,13 @@ def _get_fallback_endpoints_and_models(model: str, custom_endpoint: Optional[str
         except Exception:
             return False
 
-    # Base list of endpoints
+    # Base list of endpoints with standard Ollama tool-call support
     endpoints = [
-        "http://192.168.8.45:11434/api/generate",  # 1. nvagent (Primary dedicated GPU)
-        "http://192.168.8.193:11434/api/generate", # 2. ubunto-giga (Secondary GPU)
-        "http://192.168.8.68:11434/api/generate",  # 3. nvjetson (Data/Math Node)
-        "http://192.168.8.82:11434/api/generate"   # 4. i7office (Windows DB Host)
+        "http://192.168.8.103:11434/api/generate", # 1. Stevens-Mini-2 (M4 Mac mini 16GB)
+        "http://192.168.8.22:11434/api/generate",  # 2. mac-m1-max (Apple Silicon M1 Max 32GB)
+        "http://192.168.8.181:11434/api/generate", # 3. 520c (Intel Xeon + RTX 4060 8GB)
+        "http://192.168.8.193:11434/api/generate", # 4. ubunto-giga (Auxiliary GPU)
+        "http://192.168.8.82:11434/api/generate"   # 5. i7office (Windows Host)
     ]
     
     # Prepend target custom endpoint if provided
@@ -1141,12 +1142,12 @@ def query_local_ollama(prompt: str, model: str, endpoint: Optional[str] = None) 
             payload = {
                 "model": curr_model,
                 "prompt": prompt,
-                "system": "You are a precise, low-overhead edge AI energy assistant.",
+                "system": "You are an expert home microgrid AI energy analyst with deep understanding of Pacific Northwest seasonal power dynamics, solar PV generation, battery energy storage systems, and utility rate optimization.",
                 "stream": False,
                 "options": {
                     "num_predict": 2048,
-                    "num_ctx": 8192,
-                    "temperature": 0.1
+                    "num_ctx": 16384,
+                    "temperature": 0.2
                 }
             }
             data = json.dumps(payload).encode('utf-8')
@@ -2199,8 +2200,20 @@ def _run_analysis_workflow_inner(
         logging.info(f"Submitting Slide 3 verifier/critic query to remote model {verifier_model_name}...")
         dft_response = query_local_ollama(verify_dft_prompt, verifier_model_name)
 
-        logging.info(f"Submitting Slide 2 verifier/critic query to remote model {verifier_model_name}...")
-        history_response = query_local_ollama(verify_history_prompt, verifier_model_name)
+        logging.info(f"Running Agentic 14-day SQL Tool Loop for Slide 2 (model: {verifier_model_name})...")
+        try:
+            from dashboard_modules.agent_loop import run_14day_agentic_history_loop
+            history_response = run_14day_agentic_history_loop(
+                db_path=GRID_DB,
+                raw_metrics=analysis_data,
+                analysis_db_path=ANALYSIS_DB,
+                model=verifier_model_name,
+                max_iterations=4,
+                remaining_lines=remaining_lines
+            )
+        except Exception as ae:
+            logging.warning(f"Agentic 14-day loop failed: {ae}. Falling back to standard prompt.")
+            history_response = query_local_ollama(verify_history_prompt, verifier_model_name)
     else:
         # Single-pass fallback: query the verifier model directly with the proposer's standard prompts
         logging.info(f"Submitting Slide 1 summary query (fallback) to remote model {verifier_model_name}...")
@@ -2209,8 +2222,20 @@ def _run_analysis_workflow_inner(
         logging.info(f"Submitting Slide 3 DFT explanation query (fallback) to remote model {verifier_model_name}...")
         dft_response = query_local_ollama(analysis_data["formatted_dft_prompt"], verifier_model_name)
 
-        logging.info(f"Submitting Slide 2 history explanation query (fallback) to remote model {verifier_model_name}...")
-        history_response = query_local_ollama(analysis_data["formatted_history_prompt"], verifier_model_name)
+        logging.info(f"Running Agentic 14-day SQL Tool Loop for Slide 2 (model: {verifier_model_name})...")
+        try:
+            from dashboard_modules.agent_loop import run_14day_agentic_history_loop
+            history_response = run_14day_agentic_history_loop(
+                db_path=GRID_DB,
+                raw_metrics=analysis_data,
+                analysis_db_path=ANALYSIS_DB,
+                model=verifier_model_name,
+                max_iterations=4,
+                remaining_lines=remaining_lines
+            )
+        except Exception as ae:
+            logging.warning(f"Agentic 14-day loop failed: {ae}. Falling back to standard prompt.")
+            history_response = query_local_ollama(analysis_data["formatted_history_prompt"], verifier_model_name)
 
     # Construct and insert history record
     record: Dict[str, Any] = {
@@ -2313,12 +2338,12 @@ def query_local_ollama_stream(prompt: str, model: str, endpoint: Optional[str] =
             payload = {
                 "model": curr_model,
                 "prompt": prompt,
-                "system": "You are a precise, low-overhead edge AI energy assistant.",
+                "system": "You are an expert home microgrid AI energy analyst with deep understanding of Pacific Northwest seasonal power dynamics, solar PV generation, battery energy storage systems, and utility rate optimization.",
                 "stream": True,
                 "options": {
                     "num_predict": 2048,
-                    "num_ctx": 8192,
-                    "temperature": 0.1
+                    "num_ctx": 16384,
+                    "temperature": 0.2
                 }
             }
             data = json.dumps(payload).encode('utf-8')
