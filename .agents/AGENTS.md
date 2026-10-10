@@ -206,6 +206,30 @@
 * **Backend:** Updated `get_ai_summary()` in [`web/db_reader.py`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/web/db_reader.py) to return `history_explanation` for `slide=2` and `dft_explanation` for `slide=3`.
 * **Frontend:** Updated [`web/static/index.html`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/web/static/index.html) and [`web/static/js/app.js`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/web/static/js/app.js) to render all 3 slides (Slide 1: 24h Time Domain, Slide 2: Zoom - 14-Day History, Slide 3: DFT Spectrum), matching the physical kiosk layout.
 
+---
+
+# System Architecture: Mobile Responsive UI Wrapper & Touch Controls (Session 2026-10-10)
+
+### 1. Viewport Adaptation & Safe Area Insets
+* **Problem:** Accessing the FastAPI web kiosk (`520c @ 192.168.8.181:8000`) on smartphones resulted in horizontal clipping, cramped 3-column headers, and unreadable AI text watermarks overlaying the charts.
+* **Resolution:** Implemented CSS media queries (`@media (max-width: 768px)`) in [`web/static/css/dashboard.css`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/web/static/css/dashboard.css) and updated [`web/static/index.html`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/web/static/index.html) with `viewport-fit=cover`.
+  * **Scrolling:** Enabled smooth vertical touch scrolling (`overflow-y: auto`, `-webkit-overflow-scrolling: touch`) while maintaining the fixed $100\text{vw} \times 100\text{vh}$ kiosk mode on screens $\ge 769\text{px}$.
+  * **Header Layout:** Restructured the header into a clean mobile flow:
+    1. Top row: Live Time, Date, Weather & AQI.
+    2. Status line: Centered Net Grid Import/Export badge.
+    3. Quick metrics: 3-column touch cards for SolarEdge PV, Chillicon PV, and House Load.
+
+### 2. Dedicated AI Narrative Card & Chart Aspect Ratio
+* **Decoupling Watermark from Canvas:** On desktop, the AI narrative renders as a floating watermark inside the chart. On mobile devices ($\le 768\text{px}$), the `.ai-watermark` container transforms into a dedicated glassmorphism card positioned beneath the chart canvas:
+  * Features `background: rgba(15, 23, 42, 0.85)` with a cyan glowing border, backdrop blur (`12px`), and an `⚡ AI Microgrid Analyst` badge header.
+  * Formatted with high-contrast text (`#f1f5f9`), 1.55 line-height, and word wrapping for comfortable reading on small screens.
+* **Chart Height & Geometry Recalculation:** Configured canvas height to `280px` on mobile and hooked `switchSlide()` and `window.resize` listeners in [`web/static/js/app.js`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/web/static/js/app.js) to trigger `chart.resize()` on hidden slide transitions.
+
+### 3. Thumb-Friendly Dock & Auto-Cycle Pause
+* **Navigation Bar:** Fixed bottom touch dock (`padding-bottom: max(10px, env(safe-area-inset-bottom))`) with 44px minimum touch targets for Slide 1 (24h), Slide 2 (14d), and Slide 3 (DFT).
+* **Pause/Resume Control:** Added `toggleAutoCycle()` on the countdown timer pill (`#timer-tag`) allowing users to tap the pill to freeze the auto-cycle while reading detailed AI narratives or inspecting charts.
+
+
 
 
 

@@ -30,14 +30,14 @@ web/
 ├── launch_kiosk.sh           # Chromium fullscreen launcher for Raspberry Pi
 │
 └── static/                   # Pure Vanilla Kiosk Frontend
-    ├── index.html            # 2-Slide Kiosk DOM structure
+    ├── index.html            # 3-Slide Kiosk DOM structure with mobile safe areas
     ├── assets/
     │   └── combined_logos.png# NVIDIA / Jetson / Pi / Gemini badge pill
     ├── css/
-    │   └── dashboard.css     # High-contrast solid black theme (100vw/100vh)
+    │   └── dashboard.css     # High-contrast solid black theme & mobile media queries
     └── js/
-        ├── app.js            # WebSocket client, live tiles & 2-slide rotation
-        ├── charts.js         # Slide 1 (24h) and Slide 2 (DFT) Chart.js logic
+        ├── app.js            # WebSocket client, live tiles & 3-slide rotation
+        ├── charts.js         # Slide 1 (24h), Slide 2 (14d), Slide 3 (DFT) Chart.js
         └── vendor/
             └── chart.umd.min.js # Local offline Chart.js bundle
 ```
