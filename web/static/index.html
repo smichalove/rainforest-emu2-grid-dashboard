@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>EMU-2 Grid Dashboard</title>
     <link rel="stylesheet" href="/static/css/dashboard.css">
     <script src="/static/js/vendor/chart.umd.min.js"></script>
@@ -30,9 +30,11 @@
             <!-- Right: Real-time Power & Generation Metrics -->
             <div class="header-col-right">
                 <div id="live-net-badge" class="net-status-line text-export">-0.006 kW | Solar Export</div>
-                <div class="metric-line text-solaredge">SolarEdge PV: <span id="val-se-pv">0.160</span> kW</div>
-                <div class="metric-line text-chillicon">Chillicon PV: <span id="val-ch-pv">1.240</span> kW</div>
-                <div class="metric-line text-house">House Load: <span id="val-house-load">1.290</span> kW</div>
+                <div class="metrics-subgrid">
+                    <div class="metric-line text-solaredge"><span class="metric-label">SolarEdge PV: </span><span class="metric-val"><span id="val-se-pv">0.160</span> kW</span></div>
+                    <div class="metric-line text-chillicon"><span class="metric-label">Chillicon PV: </span><span class="metric-val"><span id="val-ch-pv">1.240</span> kW</span></div>
+                    <div class="metric-line text-house"><span class="metric-label">House Load: </span><span class="metric-val"><span id="val-house-load">1.290</span> kW</span></div>
+                </div>
             </div>
         </header>
 
@@ -76,7 +78,7 @@
                 <button class="dot" onclick="switchSlide(2)">Slide 2 (14d)</button>
                 <button class="dot" onclick="switchSlide(3)">Slide 3 (DFT)</button>
             </div>
-            <div id="timer-tag" class="timer-badge">45s</div>
+            <div id="timer-tag" class="timer-badge" onclick="toggleAutoCycle()" title="Tap to pause or resume auto-cycle" role="button" tabindex="0">45s</div>
         </footer>
     </div>
 

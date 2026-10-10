@@ -141,10 +141,21 @@ html, body {
 .text-export { color: var(--green-export); }
 .text-import { color: var(--red-import); }
 
+.metrics-subgrid {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 3px;
+}
+
 .metric-line {
     font-size: 1.15rem;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
+}
+
+.metric-label, .metric-val {
+    display: inline;
 }
 
 .text-solaredge { color: var(--gold-se); }
@@ -260,4 +271,307 @@ canvas {
     background: rgba(0, 0, 0, 0.7);
     padding: 2px 6px;
     border-radius: 4px;
+}
+
+/* ==============================================================================
+   Mobile & Responsive Viewport Adaptations (Phones & Touch Devices < 768px)
+   ============================================================================== */
+@media (max-width: 768px) {
+    html, body {
+        height: auto;
+        min-height: 100vh;
+        overflow-x: hidden;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    #kiosk-container {
+        width: 100%;
+        height: auto;
+        min-height: 100vh;
+        padding: 12px 14px 84px 14px;
+        overflow: visible;
+    }
+
+    /* Header: Stacked & Organized for Touch */
+    #kiosk-header {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        width: 100%;
+        padding-bottom: 12px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    /* Row 1: Time, Date, Weather & AQI */
+    .header-col-left {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        grid-template-rows: auto auto;
+        align-items: baseline;
+        column-gap: 12px;
+        row-gap: 2px;
+        width: 100%;
+    }
+
+    .kiosk-time {
+        font-size: 2.2rem;
+        font-weight: 800;
+        grid-row: 1;
+        grid-column: 1;
+        line-height: 1.0;
+    }
+
+    .kiosk-date {
+        font-size: 0.85rem;
+        grid-row: 2;
+        grid-column: 1;
+        margin-top: 0;
+    }
+
+    .kiosk-weather {
+        font-size: 0.82rem;
+        grid-row: 1;
+        grid-column: 2;
+        text-align: right;
+    }
+
+    .kiosk-aqi {
+        font-size: 0.82rem;
+        grid-row: 2;
+        grid-column: 2;
+        text-align: right;
+    }
+
+    /* Center: Logo & Slide Heading */
+    .header-col-center {
+        display: flex;
+        flex-direction: row;
+        justify-content: space-between;
+        align-items: center;
+        width: 100%;
+        padding-top: 2px;
+    }
+
+    .logo-pill-wrap {
+        padding: 2px 6px;
+    }
+
+    .logos-img {
+        height: 22px;
+    }
+
+    .slide-heading {
+        font-size: 1.25rem;
+        margin-top: 0;
+        text-align: right;
+    }
+
+    /* Right: Metrics Grid (Touch Cards) */
+    .header-col-right {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        gap: 8px;
+        align-items: stretch;
+    }
+
+    .net-status-line {
+        font-size: 1.25rem;
+        text-align: center;
+        padding: 6px 12px;
+        background: rgba(15, 23, 42, 0.7);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 8px;
+        width: 100%;
+    }
+
+    /* 3 Compact Touch Cards */
+    .metrics-subgrid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 6px;
+        width: 100%;
+    }
+
+    .metric-line {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 6px 4px;
+        background: rgba(15, 23, 42, 0.7);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 8px;
+        text-align: center;
+        font-size: 0.75rem;
+    }
+
+    .metric-label {
+        font-size: 0.7rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.02em;
+        opacity: 0.85;
+        margin-bottom: 2px;
+    }
+
+    .metric-val {
+        font-size: 1.0rem;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+    }
+
+    /* Main Viewport: Vertical Flow */
+    #kiosk-main {
+        position: relative;
+        flex: none;
+        width: 100%;
+        margin-top: 10px;
+        overflow: visible;
+    }
+
+    .kiosk-slide {
+        position: relative;
+        top: auto;
+        left: auto;
+        right: auto;
+        bottom: auto;
+        display: none;
+        opacity: 0;
+    }
+
+    .kiosk-slide.active {
+        display: block;
+        opacity: 1;
+    }
+
+    .chart-wrapper {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        height: auto;
+    }
+
+    /* Chart Canvas on Mobile: Fixed responsive height */
+    canvas {
+        height: 280px !important;
+        max-height: 320px;
+        width: 100% !important;
+        background: rgba(0, 0, 0, 0.3);
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    /* AI Analysis Narrative: Dedicated Mobile Card */
+    .ai-watermark {
+        position: relative;
+        top: auto;
+        left: auto;
+        right: auto;
+        bottom: auto;
+        margin-top: 12px;
+        padding: 14px 16px;
+        background: rgba(15, 23, 42, 0.85);
+        border: 1px solid rgba(56, 189, 248, 0.28);
+        border-radius: 12px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        pointer-events: auto;
+        z-index: 1;
+    }
+
+    .ai-watermark::before {
+        content: "⚡ AI Microgrid Analyst";
+        display: block;
+        font-size: 0.75rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--cyan-title);
+        margin-bottom: 8px;
+        padding-bottom: 4px;
+        border-bottom: 1px solid rgba(0, 229, 255, 0.2);
+    }
+
+    .ai-watermark pre {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+        font-size: 0.88rem;
+        font-weight: 500;
+        line-height: 1.55;
+        color: #f1f5f9;
+        text-shadow: none;
+        white-space: pre-wrap;
+        word-break: break-word;
+    }
+
+    /* Mobile Bottom Navigation Bar (Thumb-Friendly) */
+    #kiosk-controls {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        width: 100%;
+        height: auto;
+        padding: 10px 14px;
+        padding-bottom: max(10px, env(safe-area-inset-bottom));
+        background: rgba(0, 0, 0, 0.92);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border-top: 1px solid rgba(255, 255, 255, 0.12);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        z-index: 100;
+        opacity: 1.0;
+    }
+
+    #kiosk-controls:hover {
+        opacity: 1.0;
+    }
+
+    .slide-dots {
+        display: flex;
+        gap: 8px;
+        flex: 1;
+    }
+
+    .dot {
+        flex: 1;
+        min-height: 42px;
+        font-size: 0.8rem;
+        font-weight: 700;
+        padding: 8px 10px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        color: #e2e8f0;
+    }
+
+    .dot.active {
+        background: #0284c7;
+        color: #ffffff;
+        border-color: #38bdf8;
+        box-shadow: 0 0 12px rgba(56, 189, 248, 0.4);
+    }
+
+    .timer-badge {
+        min-height: 42px;
+        padding: 8px 12px;
+        font-size: 0.8rem;
+        font-weight: 800;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(30, 41, 59, 0.9);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        color: #38bdf8;
+    }
 }

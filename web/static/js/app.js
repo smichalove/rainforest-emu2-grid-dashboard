@@ -194,6 +194,22 @@ function switchSlide(slideNum) {
             headingEl.className = "slide-heading slide-theme-pink";
         }
     }
+
+    // Force Chart.js geometry recalculation on slide switch (vital for mobile layout display:none toggles)
+    setTimeout(() => {
+        if (slideNum === 1 && typeof chartSlide1 !== "undefined" && chartSlide1) chartSlide1.resize();
+        if (slideNum === 2 && typeof chartSlide2 !== "undefined" && chartSlide2) chartSlide2.resize();
+        if (slideNum === 3 && typeof chartSlide3 !== "undefined" && chartSlide3) chartSlide3.resize();
+    }, 60);
+}
+
+function toggleAutoCycle() {
+    autoCycleEnabled = !autoCycleEnabled;
+    const timerTag = document.getElementById("timer-tag");
+    if (timerTag) {
+        timerTag.innerText = autoCycleEnabled ? `${slideTimerSecs}s` : "⏸ Pause";
+        timerTag.classList.toggle("paused", !autoCycleEnabled);
+    }
 }
 
 function startSlideCycle() {
@@ -213,3 +229,11 @@ function startSlideCycle() {
         }
     }, 1000);
 }
+
+// Window resize and orientation change listener for crisp mobile rendering
+window.addEventListener("resize", () => {
+    if (typeof chartSlide1 !== "undefined" && chartSlide1) chartSlide1.resize();
+    if (typeof chartSlide2 !== "undefined" && chartSlide2) chartSlide2.resize();
+    if (typeof chartSlide3 !== "undefined" && chartSlide3) chartSlide3.resize();
+});
+

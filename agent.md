@@ -48,6 +48,7 @@ The `web/` directory provides the lightweight FastAPI/HTML5 visualization head:
 - **Read-Only SQLite:** Queries `grid_history.db` exclusively via read-only SQLite connections (`file:?mode=ro`).
 - **Telemetry Sync:** Background worker pulls updated telemetry files from `Rainforestpi` (`192.168.8.213`) every 15 seconds.
 - **Offline Vendoring:** Zero CDN dependencies; Chart.js v4.4.7 is vendored locally in `web/static/js/vendor/chart.umd.min.js`.
+- **Mobile UI Compatibility:** Responsive CSS media queries (`@media (max-width: 768px)`) adapt the interface into a touch-friendly smartphone view (stacked status cards, dedicated AI narrative card below the chart, 44px thumb navigation with auto-cycle pause/resume toggle) while keeping the exact desktop kiosk display untouched.
 
 ---
 
