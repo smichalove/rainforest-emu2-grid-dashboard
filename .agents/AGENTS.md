@@ -229,8 +229,36 @@
 * **Navigation Bar:** Fixed bottom touch dock (`padding-bottom: max(10px, env(safe-area-inset-bottom))`) with 44px minimum touch targets for Slide 1 (24h), Slide 2 (14d), and Slide 3 (DFT).
 * **Pause/Resume Control:** Added `toggleAutoCycle()` on the countdown timer pill (`#timer-tag`) allowing users to tap the pill to freeze the auto-cycle while reading detailed AI narratives or inspecting charts.
 
+---
 
+# Post-Mortem: 520c Storage2 (8TB HDD) Bad Block Recovery & MergerFS/NFS Restoration (Session 2026-10-11)
 
+### 1. Root Failure & Cascade Mechanics
+* **Trigger:** Following a reboot of `520c` (`192.168.8.181`), its secondary storage brick `/dev/sdb1` (`/srv/nas/storage2`, Seagate 8TB BarraCuda `ST8000DM004-2CX1` on SATA port 7 / `ata7.00`) encountered physical media read failures (`UNC` uncorrectable errors / `Medium Error: Data synchronization mark error`) in the ext4 journal block cluster (`976812913–976813055`) and directory inode tables.
+* **Kernel Disablement Cascade:** Boot-time `systemd-fsck` executed non-interactive `fsck.ext4 -a /dev/sdb1`. Repeated 28-second hardware timeouts triggered multiple SATA bus resets, causing the kernel's `libata` layer to give up and disable the port (`ata7.00: disable device`).
+* **Cluster Impact:**
+  * `srv-nas-storage2.mount` failed with status 4 (`UNEXPECTED INCONSISTENCY; RUN fsck MANUALLY`).
+  * `mergerfs-music.service` failed its dependency requirement for `storage2`.
+  * `nfs-server` was left exporting an empty underlying directory, causing remote Mac Mini clients (`Stevens-Mini-2` @ `192.168.8.103`) to report `Stale NFS file handle`.
+  * The root filesystem temporarily reported 100% saturation because writes were diverted to unmounted directory roots.
 
+### 2. Forensic Discovery & Deadlock Clearance
+* **Deadlock Diagnosis:** Attempts to run interactive `sudo fsck.ext4 -y /dev/sdb1` returned `/dev/sdb1 is in use`. Investigation revealed systemd's background check (`PID 671: fsck.ext4 -a -C5 /dev/sdb1`) was holding an exclusive block device lock in uninterruptible disk-wait (`D`).
+* **Deadlock Clearance:** Terminated the blocking background check (`sudo kill -9 671`).
+* **Boot-Loop Prevention:** `/etc/fstab` had `<pass>` set to `2` on `storage2`. Updated `/etc/fstab` using `sudo sed -i 's/storage2 ext4 defaults,nofail 0 2/storage2 ext4 defaults,nofail 0 0/' /etc/fstab` so systemd will never trigger blocking, non-interactive checks during boot that cause the SATA controller to trip out.
+* **Hardware Re-Arm:** Cleanly rebooted `520c` to reset the AHCI controller and re-establish the SATA link (`ata7: SATA link up 3.0 Gbps`).
 
+### 3. Multi-Pass Filesystem Repair & Directory Salvage
+* **Pass 1 (Journal Replay & Directory Inode Reconstruction):**
+  * Executed `sudo fsck.ext4 -y /dev/sdb1`.
+  * Replayed and committed journal transactions across bad blocks, moving past the defective sector into Pass 1.
+  * Extensively reconstructed corrupted directory structures, fixing missing `.` and `..` references and repairing file type attributes across deep subdirectory trees (e.g. `/music/iTunes/iTunes Media/Home Videos`).
+  * As designed in `ext4`, `e2fsck` saved modifications and safely halted with `storage2: ***** FILE SYSTEM WAS MODIFIED *****` upon hitting an unused group inode checksum boundary.
+* **Pass 2 (Bitmap Finalization & Doubly-Allocated Inode Reconciliation):**
+  * Unmounted the partially repaired volume and completed the final allocation bitmap reconciliation pass (`sudo fsck.ext4 -y /dev/sdb1`), clearing doubly-allocated inode errors.
 
+### 4. Service Restoration & Migration Verification
+* **Restoration:** Executed `sudo systemctl restart srv-nas-storage2.mount mergerfs-music.service nfs-server`.
+* **Verification:** Confirmed both storage bricks mounted (`/srv/nas/storage2` 7.3TB total, 5.6TB free) and unified pool `/home/steven/music_pool` fully restored (**10TB total, 5.6TB free, 43% used**).
+* **Write Capability:** Verified write capability with `mkdir -p /home/steven/music_pool/avid_distrution/art`.
+* **Sync Resumption:** Successfully synchronized the entire Avid distribution release suite (`avid_distribution_tool.py`, `alblum_publish.md`, `all_album_lyrics.md`, artwork, and master audio). Confirmed the 4-worker rsync migration pipeline from Windows `i7office` (`192.168.8.82`) resumed writing high-res music collections into `storage2` at wire speed.
