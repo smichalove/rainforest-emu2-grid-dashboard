@@ -45,10 +45,14 @@ web/
 
 ## 3. Key Conventions for Agents Modifying This Code
 
-### A. Frontend Visual Integrity
-- **Physical Layout Match:** Any styling changes must preserve the look and feel captured in `vnc_kiosk.png` (solid black background, cyan headers, gold solar metrics, bright green/red net status).
+### A. Frontend Visual Integrity & Universal Card Layout
+- **Universal Card-Based Presentation:** [`web/static/css/dashboard.css`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/web/static/css/dashboard.css) uses the responsive card-based layout across all desktop and mobile viewports (`max-width: 1280px` centered container, `overflow-y: auto`, 3-column metric cards for SolarEdge PV / Chillicon PV / House Load, dedicated glassmorphism AI narrative card beneath the chart canvas, and fixed bottom slide navigation dock with tap-to-pause timer pill).
+- **Stacked Solar & Energy-Balance House Load (`web/db_reader.py` & `web/static/js/charts.js`):**
+  - Asynchronous time series (`grid_history`, `solaredge_history.csv`, `chilicon_history.csv`, `solaredge_battery_history.csv`) are projected onto a uniform 5-minute time grid (`_interp_to_grid()`) up to the current timestamp, using ISO `'T'` timestamp cutoffs (`%Y-%m-%dT%H:%M:%S`) for SQLite queries.
+  - **House Load** is computed via physical energy conservation (`max(0.0, Net Grid + SolarEdge PV + Chillicon PV + Battery Discharge - Battery Charge)`).
+  - SolarEdge PV (gold) and Chillicon PV (orange) render as stacked bars (`stack: 'solar'`).
+  - Weather header displays Open-Meteo ambient forecast alongside PurpleAir local sensor temperature `(Actual: XX°F)`.
 - **No External CDN Dependencies:** All JavaScript and CSS libraries must remain vendored in `web/static/js/vendor/` to allow 100% offline operation on isolated LANs.
-- **Responsive Viewport:** Maintain `100vw` / `100vh` without vertical or horizontal scrollbars.
 
 ### B. Backend Concurrency & Reliability
 - **Non-blocking Endpoints:** Use `async` route handlers in `app.py`. Offload blocking SQLite or file I/O using `asyncio.to_thread()`.
@@ -74,5 +78,7 @@ curl -s http://127.0.0.1:8000/api/telemetry/spectrum
 
 ## 5. Backlog & TODOs
 
+- [ ] **Chilicon Local UDP `32758` Real-Time Ingestion:** Mirror outbound 1,372-byte UDP `32758` telemetry packets from the Chilicon CP-100 Gateway (`192.168.8.135:65452` ➔ `107.155.107.6:32758`, emitted every ~176s with two 90-second PLC sweeps across all 8 microinverters) on the Flint 2 router (`192.168.8.1`) to `520c` (`192.168.8.181:32758`) for local 90-second solar telemetry.
 - [ ] **Battery Flex Event Rendering:** Represent battery discharge during PSE Flex events as negative values (below the X-axis, `-kW`) with shaded blue area fill in the time domain charts (`charts.js`), matching the physical kiosk Matplotlib representation.
+
 
