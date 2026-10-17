@@ -48,7 +48,7 @@ web/
 ### A. Frontend Visual Integrity
 - **Physical Layout Match:** Any styling changes must preserve the look and feel captured in `vnc_kiosk.png` (solid black background, cyan headers, gold solar metrics, bright green/red net status).
 - **No External CDN Dependencies:** All JavaScript and CSS libraries must remain vendored in `web/static/js/vendor/` to allow 100% offline operation on isolated LANs.
-- **Responsive Viewport & Mobile Adaptation:** On desktop/kiosk displays (>= 769px), maintain fixed `100vw` / `100vh` without scrollbars, exactly matching the physical VNC kiosk display. On mobile viewports (<= 768px), enable vertical touch scrolling, stack metrics into compact cards, render the AI analysis narrative as a dedicated high-contrast glassmorphism card below the chart, and provide a fixed thumb-friendly bottom navigation bar with auto-cycle pause/resume toggle.
+- **Unified Card & Glassmorphism Layout:** Across all viewports (desktop, tablet, and mobile browsers), use the unified vertical flow: stacked metrics cards (`SolarEdge PV`, `Chillicon PV`, `House Load`), framed chart canvas, a dedicated high-contrast glassmorphism AI analysis card (`⚡ AI Microgrid Analyst`) positioned beneath the chart, and a fixed bottom navigation bar with auto-cycle pause/resume toggle.
 
 ### B. Backend Concurrency & Reliability
 - **Non-blocking Endpoints:** Use `async` route handlers in `app.py`. Offload blocking SQLite or file I/O using `asyncio.to_thread()`.

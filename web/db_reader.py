@@ -117,14 +117,56 @@ def get_latest_reading() -> Dict[str, Any]:
     }
 
 
+def _align_series_to_slots(
+    slots: List[datetime.datetime],
+    src_timestamps: List[str],
+    src_values: List[float],
+    max_gap_secs: float = 1500.0,
+    default_val: float = 0.0
+) -> List[float]:
+    """Aligns an irregularly sampled time series onto uniform datetime slots using binary search."""
+    if not src_timestamps or not src_values:
+        return [default_val] * len(slots)
+
+    import bisect
+    parsed_ts: List[datetime.datetime] = []
+    valid_vals: List[float] = []
+    for ts_s, val in zip(src_timestamps, src_values):
+        try:
+            parsed_ts.append(datetime.datetime.fromisoformat(ts_s))
+            valid_vals.append(float(val))
+        except Exception:
+            continue
+
+    if not parsed_ts:
+        return [default_val] * len(slots)
+
+    aligned: List[float] = []
+    n = len(parsed_ts)
+    for slot in slots:
+        idx = bisect.bisect_left(parsed_ts, slot)
+        best_val = default_val
+        best_diff = max_gap_secs + 1.0
+        for cand_idx in (idx - 1, idx):
+            if 0 <= cand_idx < n:
+                diff = abs((parsed_ts[cand_idx] - slot).total_seconds())
+                if diff <= max_gap_secs and diff < best_diff:
+                    best_diff = diff
+                    best_val = valid_vals[cand_idx]
+        aligned.append(round(best_val, 3))
+    return aligned
+
+
 def get_24h_history(cutoff_hours: int = 24) -> Dict[str, Any]:
-    """Retrieves 24-hour time series for grid demand, solar, and battery."""
+    """Retrieves time-aligned series for grid demand, solar (SolarEdge + Chillicon), house load, and battery."""
+    import bisect
     now = datetime.datetime.now()
     cutoff_time = now - datetime.timedelta(hours=cutoff_hours)
-    cutoff_iso = cutoff_time.strftime("%Y-%m-%d %H:%M:%S")
+    # Use ISO format with 'T' to match SQLite ISO timestamps (e.g. '2026-10-16T11:20:00')
+    cutoff_iso = cutoff_time.strftime("%Y-%m-%dT%H:%M:%S")
 
-    grid_timestamps: List[str] = []
-    grid_kw: List[float] = []
+    raw_grid_dt: List[datetime.datetime] = []
+    raw_grid_kw: List[float] = []
 
     conn = get_readonly_connection(DB_PATH)
     if conn:
@@ -137,41 +179,81 @@ def get_24h_history(cutoff_hours: int = 24) -> Dict[str, Any]:
             rows = cursor.fetchall()
             conn.close()
             for r in rows:
-                grid_timestamps.append(r["timestamp"])
-                grid_kw.append(float(r["kw"]))
+                try:
+                    dt = datetime.datetime.fromisoformat(r["timestamp"])
+                    if dt >= cutoff_time:
+                        raw_grid_dt.append(dt)
+                        raw_grid_kw.append(float(r["kw"]))
+                except Exception:
+                    continue
         except Exception as e:
             logger.error(f"Error querying 24h history: {e}")
             if conn:
                 conn.close()
 
-    if len(grid_kw) < 10:
+    if len(raw_grid_kw) < 10:
         days = max(1, cutoff_hours // 24)
         return generate_baseline_dataset(now, days=days)
 
+    # Build a uniform time grid: 5-minute slots for <= 48h (288 pts/24h), 60-minute slots for 14-day view
+    step_mins = 5 if cutoff_hours <= 48 else 60
+    step_delta = datetime.timedelta(minutes=step_mins)
+    half_step = datetime.timedelta(minutes=step_mins / 2.0)
+
+    slot_start = cutoff_time.replace(
+        minute=(cutoff_time.minute // step_mins) * step_mins,
+        second=0,
+        microsecond=0
+    )
+    slots: List[datetime.datetime] = []
+    curr = slot_start
+    while curr <= now:
+        slots.append(curr)
+        curr += step_delta
+    if not slots or (now - slots[-1]).total_seconds() > 60:
+        slots.append(now.replace(microsecond=0))
+
+    slot_timestamps = [s.strftime("%Y-%m-%dT%H:%M:%S") for s in slots]
+
+    # Aggregate 15s grid readings into each uniform slot (average within window, fallback to nearest)
+    aligned_grid_kw: List[float] = []
+    n_grid = len(raw_grid_dt)
+    for slot in slots:
+        lo = bisect.bisect_left(raw_grid_dt, slot - half_step)
+        hi = bisect.bisect_right(raw_grid_dt, slot + half_step)
+        if hi > lo:
+            avg_kw = sum(raw_grid_kw[lo:hi]) / (hi - lo)
+            aligned_grid_kw.append(round(avg_kw, 3))
+        else:
+            idx = min(max(0, bisect.bisect_left(raw_grid_dt, slot)), n_grid - 1)
+            if idx > 0 and abs((raw_grid_dt[idx - 1] - slot).total_seconds()) < abs((raw_grid_dt[idx] - slot).total_seconds()):
+                idx -= 1
+            aligned_grid_kw.append(round(raw_grid_kw[idx], 3))
+
     solar_data = read_solar_history(cutoff_time)
     battery_data = read_battery_history(cutoff_time)
-    flow_data = read_flow_history(cutoff_time)
     chilicon_data = read_chilicon_history(cutoff_time)
 
-    # Use exact SolarEdge direct Load readings if present; otherwise fallback to physics formula
-    if flow_data["load_power"]:
-        house_loads = flow_data["load_power"]
-    else:
-        house_loads = []
-        for i, g_kw in enumerate(grid_kw):
-            s_kw = solar_data["values"][i] if i < len(solar_data["values"]) else 0.0
-            c_kw = chilicon_data["values"][i] if i < len(chilicon_data["values"]) else 0.0
-            b_kw = battery_data["power_kw"][i] if i < len(battery_data["power_kw"]) else 0.0
-            h_load = max(0.1, round(g_kw + s_kw + c_kw + b_kw, 3))
-            house_loads.append(h_load)
+    max_gap = 1800.0 if step_mins <= 10 else 5400.0
+    aligned_se_kw = _align_series_to_slots(slots, solar_data["timestamps"], solar_data["values"], max_gap_secs=max_gap, default_val=0.0)
+    aligned_ch_kw = _align_series_to_slots(slots, chilicon_data["timestamps"], chilicon_data["values"], max_gap_secs=max_gap, default_val=0.0)
+    aligned_bat_kw = _align_series_to_slots(slots, battery_data["timestamps"], battery_data["power_kw"], max_gap_secs=max_gap, default_val=0.0)
+    aligned_bat_soc = _align_series_to_slots(slots, battery_data["timestamps"], battery_data["soc_percent"], max_gap_secs=max_gap * 2, default_val=50.0)
+
+    # Compute true physical House Load at every aligned slot:
+    # House Load = Net Grid Import/Export + SolarEdge PV + Chillicon PV + Battery Discharge
+    aligned_house_loads: List[float] = []
+    for g_kw, s_kw, c_kw, b_kw in zip(aligned_grid_kw, aligned_se_kw, aligned_ch_kw, aligned_bat_kw):
+        h_load = max(0.05, round(g_kw + s_kw + c_kw + b_kw, 3))
+        aligned_house_loads.append(h_load)
 
     return {
         "reference_time": now.isoformat(),
-        "grid": {"timestamps": grid_timestamps, "values": grid_kw},
-        "solaredge": solar_data if solar_data["values"] else {"timestamps": grid_timestamps, "values": [0.0]*len(grid_timestamps)},
-        "chilicon": chilicon_data if chilicon_data["values"] else {"timestamps": grid_timestamps, "values": [0.0]*len(grid_timestamps)},
-        "house_load": {"timestamps": flow_data["timestamps"] if flow_data["timestamps"] else grid_timestamps, "values": house_loads},
-        "battery": battery_data if battery_data["power_kw"] else {"timestamps": grid_timestamps, "power_kw": [0.0]*len(grid_timestamps), "soc_percent": [50.0]*len(grid_timestamps)}
+        "grid": {"timestamps": slot_timestamps, "values": aligned_grid_kw},
+        "solaredge": {"timestamps": slot_timestamps, "values": aligned_se_kw},
+        "chilicon": {"timestamps": slot_timestamps, "values": aligned_ch_kw},
+        "house_load": {"timestamps": slot_timestamps, "values": aligned_house_loads},
+        "battery": {"timestamps": slot_timestamps, "power_kw": aligned_bat_kw, "soc_percent": aligned_bat_soc}
     }
 
 

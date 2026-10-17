@@ -112,15 +112,18 @@ function updateHeaderMetrics(data) {
 
     // 3. Weather & AQI
     const wx = data.weather || {};
+    const pa = (data.air_quality && data.air_quality.purpleair) || {};
     const wxEl = document.getElementById("live-weather");
     if (wxEl) {
-        const tempC = wx.temp_f !== undefined ? ((wx.temp_f - 32) * 5 / 9).toFixed(1) : "25.7";
+        const tempC = wx.temp_f !== undefined ? ((wx.temp_f - 32) * 5 / 9).toFixed(1) : "13.1";
         const clouds = wx.cloud_cover !== undefined ? wx.cloud_cover : 0;
         const desc = wx.description || "Clear";
-        wxEl.innerText = `${tempC}°C | ${desc} (${clouds}%)`;
+        const actualStr = (pa.online && pa.temp_f !== undefined && pa.temp_f !== null)
+            ? ` (Actual: ${Math.round(Number(pa.temp_f))}°F)`
+            : "";
+        wxEl.innerText = `${tempC}°C${actualStr} | ${desc} (${clouds}%)`;
     }
 
-    const pa = (data.air_quality && data.air_quality.purpleair) || {};
     const aqiEl = document.getElementById("live-aqi");
     if (aqiEl) {
         const aqiVal = pa.online ? pa.aqi : 76;

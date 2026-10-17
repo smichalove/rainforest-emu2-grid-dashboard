@@ -1,5 +1,6 @@
 /**
- * Chart.js configurations replicating the exact physical Matplotlib Kiosk slides.
+ * Chart.js configurations replicating the physical Matplotlib Kiosk slides
+ * with stacked SolarEdge + Chillicon bars and dynamic Y-axis scaling.
  */
 
 let chartSlide1 = null;
@@ -18,28 +19,44 @@ function initSlide1Chart() {
             datasets: [
                 {
                     type: "bar",
-                    label: "Solar Generation",
+                    label: "SolarEdge PV (kW)",
                     data: [],
-                    backgroundColor: "rgba(161, 138, 20, 0.42)",
-                    borderColor: "rgba(161, 138, 20, 0.65)",
-                    borderWidth: 1,
+                    backgroundColor: "rgba(245, 158, 11, 0.55)",
+                    borderColor: "rgba(245, 158, 11, 0.8)",
+                    borderWidth: 0,
                     barPercentage: 1.0,
                     categoryPercentage: 1.0,
-                    yAxisID: "ySolar"
+                    stack: "solar",
+                    yAxisID: "ySolar",
+                    order: 3
+                },
+                {
+                    type: "bar",
+                    label: "Chillicon PV (kW)",
+                    data: [],
+                    backgroundColor: "rgba(250, 204, 21, 0.75)",
+                    borderColor: "rgba(250, 204, 21, 0.95)",
+                    borderWidth: 0,
+                    barPercentage: 1.0,
+                    categoryPercentage: 1.0,
+                    stack: "solar",
+                    yAxisID: "ySolar",
+                    order: 3
                 },
                 {
                     type: "line",
-                    label: "House Load",
+                    label: "House Load (kW)",
                     data: [],
                     borderColor: "#ffffff",
                     borderWidth: 2,
                     pointRadius: 0,
                     tension: 0.2,
-                    yAxisID: "yGrid"
+                    yAxisID: "yGrid",
+                    order: 2
                 },
                 {
                     type: "line",
-                    label: "Net Grid Demand",
+                    label: "Net Grid Demand (kW)",
                     data: [],
                     borderColor: "#22c55e",
                     segment: {
@@ -48,19 +65,22 @@ function initSlide1Chart() {
                     borderWidth: 2.2,
                     pointRadius: 0,
                     tension: 0.2,
-                    yAxisID: "yGrid"
+                    yAxisID: "yGrid",
+                    order: 1
                 },
                 {
                     type: "line",
-                    label: "Battery Storage",
+                    label: "Battery Storage (SoC)",
                     data: [],
                     borderColor: "#3b82f6",
-                    backgroundColor: "rgba(59, 130, 246, 0.25)",
+                    backgroundColor: "rgba(59, 130, 246, 0.22)",
                     fill: { target: { value: -10.0 } },
                     borderWidth: 1.5,
                     pointRadius: 0,
+                    spanGaps: false,
                     tension: 0.1,
-                    yAxisID: "yGrid"
+                    yAxisID: "yGrid",
+                    order: 5
                 }
             ]
         },
@@ -68,46 +88,72 @@ function initSlide1Chart() {
             responsive: true,
             maintainAspectRatio: false,
             animation: false,
+            interaction: {
+                mode: "index",
+                intersect: false
+            },
             plugins: {
-                legend: { display: false },
+                legend: {
+                    display: true,
+                    position: "top",
+                    align: "end",
+                    labels: {
+                        color: "#cbd5e1",
+                        font: { size: 11, weight: "bold" },
+                        boxWidth: 14,
+                        padding: 10
+                    }
+                },
                 tooltip: { enabled: true }
             },
             scales: {
                 x: {
+                    stacked: true,
                     grid: { color: "rgba(255, 255, 255, 0.08)", drawTicks: true },
                     ticks: {
                         color: "#ffffff",
-                        font: { size: 12, weight: "bold" },
-                        maxRotation: 30,
-                        minRotation: 30,
-                        maxTicksLimit: 9
+                        font: { size: 11, weight: "bold" },
+                        maxRotation: 25,
+                        minRotation: 0,
+                        maxTicksLimit: 10
                     }
                 },
                 yGrid: {
                     type: "linear",
                     position: "left",
-                    min: -10.0,
-                    max: 10.0,
+                    min: -1.0,
+                    max: 4.0,
+                    title: {
+                        display: true,
+                        text: "Grid / House Load (kW)",
+                        color: "#ffffff",
+                        font: { size: 11, weight: "bold" }
+                    },
                     grid: {
-                        color: ctx => (ctx.tick.value === 0 ? "#666666" : "rgba(255, 255, 255, 0.05)"),
-                        lineWidth: ctx => (ctx.tick.value === 0 ? 1.5 : 1)
+                        color: ctx => (ctx.tick && ctx.tick.value === 0 ? "#666666" : "rgba(255, 255, 255, 0.05)"),
+                        lineWidth: ctx => (ctx.tick && ctx.tick.value === 0 ? 1.5 : 1)
                     },
                     ticks: {
                         color: "#ffffff",
-                        font: { size: 12, weight: "bold" },
-                        stepSize: 2.5
+                        font: { size: 11, weight: "bold" }
                     }
                 },
                 ySolar: {
                     type: "linear",
                     position: "right",
+                    stacked: true,
                     min: 0.0,
-                    max: 4.5,
+                    max: 2.0,
+                    title: {
+                        display: true,
+                        text: "Total Solar PV (kW)",
+                        color: "#eab308",
+                        font: { size: 11, weight: "bold" }
+                    },
                     grid: { drawOnChartArea: false },
                     ticks: {
                         color: "#eab308",
-                        font: { size: 12, weight: "bold" },
-                        stepSize: 0.5
+                        font: { size: 11, weight: "bold" }
                     }
                 }
             }
@@ -127,27 +173,42 @@ function initSlide2Chart() {
             datasets: [
                 {
                     type: "bar",
-                    label: "Solar Generation",
+                    label: "SolarEdge PV (kW)",
                     data: [],
-                    backgroundColor: "rgba(161, 138, 20, 0.38)",
+                    backgroundColor: "rgba(245, 158, 11, 0.55)",
                     borderWidth: 0,
                     barPercentage: 1.0,
                     categoryPercentage: 1.0,
-                    yAxisID: "ySolar"
+                    stack: "solar",
+                    yAxisID: "ySolar",
+                    order: 3
+                },
+                {
+                    type: "bar",
+                    label: "Chillicon PV (kW)",
+                    data: [],
+                    backgroundColor: "rgba(250, 204, 21, 0.75)",
+                    borderWidth: 0,
+                    barPercentage: 1.0,
+                    categoryPercentage: 1.0,
+                    stack: "solar",
+                    yAxisID: "ySolar",
+                    order: 3
                 },
                 {
                     type: "line",
-                    label: "House Load",
+                    label: "House Load (kW)",
                     data: [],
                     borderColor: "#ffffff",
                     borderWidth: 1.8,
                     pointRadius: 0,
                     tension: 0.2,
-                    yAxisID: "yGrid"
+                    yAxisID: "yGrid",
+                    order: 2
                 },
                 {
                     type: "line",
-                    label: "Net Grid",
+                    label: "Net Grid (kW)",
                     data: [],
                     borderColor: "#22c55e",
                     segment: {
@@ -156,19 +217,22 @@ function initSlide2Chart() {
                     borderWidth: 1.8,
                     pointRadius: 0,
                     tension: 0.2,
-                    yAxisID: "yGrid"
+                    yAxisID: "yGrid",
+                    order: 1
                 },
                 {
                     type: "line",
-                    label: "Battery Storage",
+                    label: "Battery Storage (SoC)",
                     data: [],
                     borderColor: "#3b82f6",
-                    backgroundColor: "rgba(59, 130, 246, 0.25)",
+                    backgroundColor: "rgba(59, 130, 246, 0.22)",
                     fill: { target: { value: -10.0 } },
                     borderWidth: 1.5,
                     pointRadius: 0,
+                    spanGaps: false,
                     tension: 0.1,
-                    yAxisID: "yGrid"
+                    yAxisID: "yGrid",
+                    order: 5
                 }
             ]
         },
@@ -176,27 +240,57 @@ function initSlide2Chart() {
             responsive: true,
             maintainAspectRatio: false,
             animation: false,
-            plugins: { legend: { display: false } },
+            interaction: {
+                mode: "index",
+                intersect: false
+            },
+            plugins: {
+                legend: {
+                    display: true,
+                    position: "top",
+                    align: "end",
+                    labels: {
+                        color: "#cbd5e1",
+                        font: { size: 11, weight: "bold" },
+                        boxWidth: 14,
+                        padding: 10
+                    }
+                }
+            },
             scales: {
                 x: {
+                    stacked: true,
                     grid: { color: "rgba(255, 255, 255, 0.08)" },
-                    ticks: { color: "#ffffff", font: { size: 11, weight: "bold" }, maxRotation: 30, minRotation: 30, maxTicksLimit: 14 }
+                    ticks: { color: "#ffffff", font: { size: 11, weight: "bold" }, maxRotation: 25, minRotation: 0, maxTicksLimit: 14 }
                 },
                 yGrid: {
                     type: "linear",
                     position: "left",
-                    min: -10.0,
-                    max: 10.0,
-                    grid: { color: ctx => (ctx.tick.value === 0 ? "#666666" : "rgba(255, 255, 255, 0.05)") },
-                    ticks: { color: "#ffffff", font: { size: 12, weight: "bold" }, stepSize: 2.5 }
+                    min: -2.0,
+                    max: 6.0,
+                    title: {
+                        display: true,
+                        text: "Grid / House Load (kW)",
+                        color: "#ffffff",
+                        font: { size: 11, weight: "bold" }
+                    },
+                    grid: { color: ctx => (ctx.tick && ctx.tick.value === 0 ? "#666666" : "rgba(255, 255, 255, 0.05)") },
+                    ticks: { color: "#ffffff", font: { size: 11, weight: "bold" } }
                 },
                 ySolar: {
                     type: "linear",
                     position: "right",
+                    stacked: true,
                     min: 0.0,
                     max: 6.0,
+                    title: {
+                        display: true,
+                        text: "Total Solar PV (kW)",
+                        color: "#eab308",
+                        font: { size: 11, weight: "bold" }
+                    },
                     grid: { drawOnChartArea: false },
-                    ticks: { color: "#eab308", font: { size: 12, weight: "bold" } }
+                    ticks: { color: "#eab308", font: { size: 11, weight: "bold" } }
                 }
             }
         }
@@ -281,73 +375,85 @@ function initSlide3Chart() {
     });
 }
 
-function updateSlide1(historyData) {
-    if (!chartSlide1) initSlide1Chart();
-    if (!chartSlide1 || !historyData) return;
-
+function _applyDynamicTimeDomainData(chart, historyData, is14d) {
     const grid = historyData.grid || { timestamps: [], values: [] };
     const se = historyData.solaredge || { values: [] };
     const ch = historyData.chilicon || { values: [] };
     const house = historyData.house_load || { values: [] };
-    const bat = historyData.battery || { soc_percent: [] };
+    const bat = historyData.battery || { power_kw: [], soc_percent: [] };
 
-    // Format timestamps as "MM-DD HH" (e.g. "08-13 18")
-    const labels = grid.timestamps.map(ts => {
+    const labels = (grid.timestamps || []).map(ts => {
         try {
             const d = new Date(ts);
-            const m = String(d.getMonth() + 1).padStart(2, '0');
-            const day = String(d.getDate()).padStart(2, '0');
-            const hr = String(d.getHours()).padStart(2, '0');
-            return `${m}-${day} ${hr}`;
+            const m = String(d.getMonth() + 1).padStart(2, "0");
+            const day = String(d.getDate()).padStart(2, "0");
+            const hr = String(d.getHours()).padStart(2, "0");
+            const min = String(d.getMinutes()).padStart(2, "0");
+            return is14d ? `${m}-${day} ${hr}:00` : `${m}-${day} ${hr}:${min}`;
         } catch {
             return "";
         }
     });
 
-    // Total Solar = SE + Chillicon
-    const totalSolar = (se.values || []).map((v, idx) => v + (ch.values[idx] || 0));
+    const seVals = se.values || [];
+    const chVals = ch.values || [];
+    const houseVals = house.values || [];
+    const gridVals = grid.values || [];
+    const batPower = bat.power_kw || [];
+    const batSoc = bat.soc_percent || [];
 
-    // Convert Battery SoC (%) to Y-Axis Range (-10.0 to 0.0) - cup fill from -10.0 up to 0.0 baseline
-    const batteryFill = (bat.soc_percent || []).map(soc => (parseFloat(soc || 0) * 0.1) - 10.0);
+    // Only plot Battery SoC fill when battery is actively charging or discharging (|power| >= 0.05 kW),
+    // matching dashboard.py line 1369
+    let hasActiveBattery = false;
+    const batteryFill = labels.map((_, idx) => {
+        const pwr = parseFloat(batPower[idx] || 0);
+        const soc = parseFloat(batSoc[idx] !== undefined ? batSoc[idx] : 50.0);
+        if (Math.abs(pwr) >= 0.05) {
+            hasActiveBattery = true;
+            return (soc * 0.1) - 10.0;
+        }
+        return null;
+    });
 
-    chartSlide1.data.labels = labels;
-    chartSlide1.data.datasets[0].data = totalSolar;
-    chartSlide1.data.datasets[1].data = house.values || [];
-    chartSlide1.data.datasets[2].data = grid.values || [];
-    chartSlide1.data.datasets[3].data = batteryFill.length > 0 ? batteryFill : (bat.power_kw || []);
-    chartSlide1.update();
+    // Dynamic Y-Axis scaling for Solar (ySolar) and Grid/Load (yGrid)
+    let maxSolar = 0.5;
+    for (let i = 0; i < labels.length; i++) {
+        const tot = (seVals[i] || 0) + (chVals[i] || 0);
+        if (tot > maxSolar) maxSolar = tot;
+    }
+    chart.options.scales.ySolar.max = Math.max(1.0, Math.ceil(maxSolar * 1.25 * 2) / 2);
+
+    let minGrid = 0.0;
+    let maxGrid = 2.0;
+    for (let i = 0; i < labels.length; i++) {
+        const g = gridVals[i] || 0;
+        const h = houseVals[i] || 0;
+        if (g < minGrid) minGrid = g;
+        if (g > maxGrid) maxGrid = g;
+        if (h > maxGrid) maxGrid = h;
+    }
+    chart.options.scales.yGrid.min = hasActiveBattery ? -10.0 : Math.min(-0.5, Math.floor((minGrid - 0.3) * 2) / 2);
+    chart.options.scales.yGrid.max = Math.max(2.5, Math.ceil((maxGrid + 0.4) * 2) / 2);
+
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = seVals;
+    chart.data.datasets[1].data = chVals;
+    chart.data.datasets[2].data = houseVals;
+    chart.data.datasets[3].data = gridVals;
+    chart.data.datasets[4].data = batteryFill;
+    chart.update();
+}
+
+function updateSlide1(historyData) {
+    if (!chartSlide1) initSlide1Chart();
+    if (!chartSlide1 || !historyData) return;
+    _applyDynamicTimeDomainData(chartSlide1, historyData, false);
 }
 
 function updateSlide2(history14d) {
     if (!chartSlide2) initSlide2Chart();
     if (!chartSlide2 || !history14d) return;
-
-    const grid = history14d.grid || { timestamps: [], values: [] };
-    const se = history14d.solaredge || { values: [] };
-    const ch = history14d.chilicon || { values: [] };
-    const house = history14d.house_load || { values: [] };
-    const bat = history14d.battery || { power_kw: [], soc_percent: [] };
-
-    const labels = grid.timestamps.map(ts => {
-        try {
-            const d = new Date(ts);
-            const m = String(d.getMonth() + 1).padStart(2, '0');
-            const day = String(d.getDate()).padStart(2, '0');
-            return `${d.getFullYear()}-${m}-${day}`;
-        } catch {
-            return "";
-        }
-    });
-
-    const totalSolar = (se.values || []).map((v, idx) => v + (ch.values[idx] || 0));
-    const batteryFill14d = (bat.soc_percent || []).map(soc => (parseFloat(soc || 0) * 0.1) - 10.0);
-
-    chartSlide2.data.labels = labels;
-    chartSlide2.data.datasets[0].data = totalSolar;
-    chartSlide2.data.datasets[1].data = house.values || [];
-    chartSlide2.data.datasets[2].data = grid.values || [];
-    chartSlide2.data.datasets[3].data = batteryFill14d.length > 0 ? batteryFill14d : (bat.power_kw || []);
-    chartSlide2.update();
+    _applyDynamicTimeDomainData(chartSlide2, history14d, true);
 }
 
 function updateSlide3(spectrumData) {
@@ -362,3 +468,4 @@ function updateSlide3(spectrumData) {
     chartSlide3.data.datasets[3].data = spectrumData.house_spectrum || [];
     chartSlide3.update();
 }
+
