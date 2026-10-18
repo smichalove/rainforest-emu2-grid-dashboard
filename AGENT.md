@@ -283,6 +283,11 @@
 
 # System Architecture: Chilicon CP-100 Gateway (`192.168.8.135`) & Local UDP `32758` Telemetry Protocol (Session 2026-10-17)
 
+> [!CAUTION]
+> **`(agent crumb)` — PUBLIC REPOSITORY SANITIZATION REQUIRED:**  
+> All concrete LAN IP addresses (`192.168.8.1`, `192.168.8.135`, `192.168.8.181`, `192.168.8.213`), hardware MAC addresses (`88:da:1a:83:e1:21`, `94:83:c4:72:88:b6`), Chilicon Gateway serial numbers (`C14119`), Microinverter `EUI32` hardware IDs (`11700218`, `C1500871`, etc.), and PostgreSQL credentials/DSNs in this section and in `chilicon_udp_telemetry_design.md` / `chilicon_udp_listener.py` are **strictly private cluster context**.  
+> Whenever syncing or copying code/docs to the public staging repository (`/Users/treven/rainforest-emu2-grid-dashboard-public`), **MUST sanitize** these values to generic placeholders (`<router-ip>`, `<gateway-ip>`, `<postgres-host>`, `<gateway-serial>`, `CHILICON_PG_DSN` via `.env` / `Auth/`).
+
 ### 1. Gateway Hardware Identity & Network Behavior
 * **Host Identity:** `192.168.8.135` (DHCP hostname `Chilicon-C14119-WI`, MAC `88:da:1a:83:e1:21`, Gateway Serial/ID **`C14119`**, Firmware **`CHILIC0N Gateway v4882`**).
 * **Inbound Ports:** **0 open TCP/UDP ports** on LAN (runs bare-metal RTOS + `lwIP` stack with no local listening HTTP server).
@@ -320,8 +325,22 @@ Each 1,372-byte UDP payload contains two complete ~90-second Power Line Communic
     * **Lifetime Energy (kWh):** `sum(u32_72) / 55102.86185` (matches Chilicon Cloud `24,058.375 kWh`).
     * **Real-Time AC Power (Watts) per 90s Sweep:** For each inverter $i$, $P_i = \frac{\text{u32\_72}_{i,t_2} - \text{u32\_72}_{i,t_1}}{(t_{2,i} - t_{1,i}) \times 0.01530635}$.
 
-### 4. Router UDP `32758` Forwarding Architecture (`192.168.8.1` ➔ `192.168.8.181`)
-* To achieve **90-second real-time local solar telemetry** on `520c` (`192.168.8.181`) without disrupting `cloud.chiliconpower.com`:
-  * The OpenWrt Flint 2 router (`192.168.8.1`) can mirror/forward copies of outbound UDP packets matching `src host 192.168.8.135 and udp dst port 32758` to `192.168.8.181:32758` (via an `nftables` `dup to 192.168.8.181` rule or a lightweight router capture-and-forward daemon).
-  * `520c` listens on `0.0.0.0:32758/udp`, unpacks both 90-second sweeps per packet, and writes real-time system kW, lifetime kWh, and per-inverter diagnostics directly to SQLite / `chilicon_history.csv`.
+### 4. Deployed Router UDP `32758` Debug Bridge Rebroadcaster & Dual-Node Ingestion
+* **Flint 2 Router Service (`root@192.168.8.1`):**
+  * Managed by OpenWrt `procd` via `/etc/init.d/chilicon-rebroadcast`, `/usr/bin/chilicon_rebroadcast_runner.sh`, and `/usr/bin/chilicon_rebroadcast.lua` (documented on-router at `/root/AGENTS.md`).
+  * Passively captures outbound 1,372-byte UDP `32758` frames from `192.168.8.135` on `br-lan` (`tcpdump -i br-lan -l -nn -xx "src host 192.168.8.135 and udp dst port 32758"`) and rebroadcasts identical 1,372-byte raw UDP payloads to:
+    * `192.168.8.181:32758` (`520c` PostgreSQL & Web Kiosk server)
+    * `192.168.8.213:32758` (`Rainforestpi` Physical Kiosk & Telemetry Collector)
+    * `192.168.8.255:32758` (Subnet broadcast)
+* **`520c` PostgreSQL & Web Kiosk Listener (`192.168.8.181`):**
+  * Dedicated PostgreSQL database `energy_telemetry` (`chilicon_inverter_samples` for per-panel 90s diagnostics + `chilicon_system_history` for rolled-up system kW/kWh).
+  * Runs [`chilicon_udp_listener.py`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/chilicon_udp_listener.py) to persist both 90-second sweeps to PostgreSQL and append to `data/chilicon_history.csv`.
+* **`Rainforestpi` Edge Listener & Measured ARM Performance (`192.168.8.213`):**
+  * Launched automatically via [`run_dashboard_system.sh`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/run_dashboard_system.sh) and synced via [`redeploy.sh`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/redeploy.sh).
+  * Runs in lightweight CSV-only edge mode when `psycopg2` is absent, appending directly to `/home/steven/rainforest-emu2-grid-dashboard/chilicon_history.csv`.
+  * **Measured Pi ARM Cortex-A72 Benchmark:** Decodes 1,000 sweeps (`8,000` inverter records) in `135.08 ms` (**`270 µs` per 1,372-byte UDP packet** = **`0.00015%` CPU duty cycle** at the 176s gateway interval, **`13.2 MB` RSS** / `0.7%` RAM, `0%` idle CPU while blocked on `sock.recvfrom()`).
+* **Sunset / Sleep Decay & Cloud Fallback Guards:**
+  * **Inverter Sleep Decay (`chilicon_udp_listener.py`):** Forces `power_w = 0.0 W` when an inverter's poll timestamp does not advance (`dt == 0`), re-arms at `0.0 W` on dawn wake-up (`dt > 900s`), and runs a background `nighttime_watchdog_loop` that appends `0.000 kW` during extended night silence (`> 10m` quiet between `21:00–06:00`).
+  * **Local UDP Priority & Stale Sunset Bucket Guard (`dashboard_modules/solar.py`):** `ChilliconClient.fetch_data()` defers to `chilicon_history.csv` whenever a fresh local UDP sample (`<= 360s` old) is present, and when falling back to the cloud `fetchOwnerUpdate` endpoint, ignores non-`-1` 5-minute buckets older than 15 minutes (`> 3` buckets behind current time) so `Chillicon PV` drops cleanly to `0.000 kW` at sunset.
+  * **Unit Tests:** Verified in [`tests/test_chilicon_udp_listener.py`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/tests/test_chilicon_udp_listener.py) (`7 passed`).
 

@@ -339,34 +339,8 @@ Each 1,372-byte UDP payload contains two complete ~90-second Power Line Communic
   * Launched automatically via [`run_dashboard_system.sh`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/run_dashboard_system.sh) and synced via [`redeploy.sh`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/redeploy.sh).
   * Runs in lightweight CSV-only edge mode when `psycopg2` is absent, appending directly to `/home/steven/rainforest-emu2-grid-dashboard/chilicon_history.csv`.
   * **Measured Pi ARM Cortex-A72 Benchmark:** Decodes 1,000 sweeps (`8,000` inverter records) in `135.08 ms` (**`270 µs` per 1,372-byte UDP packet** = **`0.00015%` CPU duty cycle** at the 176s gateway interval, **`13.2 MB` RSS** / `0.7%` RAM, `0%` idle CPU while blocked on `sock.recvfrom()`).
-
-### 5. Microinverter Off-State, Dawn Transition & Nighttime Watchdog Safeguards
-* **Dusk & Off-State Stagnation Decay ($\Delta t = 0 \to 0.0\text{ W}$):**
-  * When solar irradiance drops below the microinverter operating threshold (~22V DC), the CP-720 DSP shuts down. The CP-100 gateway continues polling internal slots, but the uncontacted inverter's timestamp `ts_sec` stops advancing.
-  * In `chilicon_udp_listener.py`, whenever $\Delta t = 0$ between sweeps or consecutive packets, `power_w` is immediately forced to **`0.0 W`**. This prevents the critical failure mode where stale positive daytime generation persists in memory overnight.
-* **Dawn Cold Wake-Up Guard ($\Delta t > 900\text{s}$ Anti-Spike Filter):**
-  * When panels re-energize after 8–10 hours of darkness, an inverter's first response reports a timestamp delta $\Delta t \approx 28,800\text{s}$. Calculating $\Delta E / \Delta t$ across that gap yields math errors or transient power spikes.
-  * Any interval $\Delta t > 900\text{s}$ (15 minutes) is categorized as a cold wake-up: `power_w` is seeded at `0.0 W`, the baseline accumulator is re-armed, and true $dE/dt$ generation commences cleanly on the subsequent sweep 90 seconds later.
-* **Overnight Silence Heartbeat Watchdog:**
-  * During deep night hours (21:00–06:00), the CP-100 gateway may throttle or halt UDP debug broadcasts altogether.
-  * A dedicated background thread monitors elapsed silence. If no UDP packet arrives for $> 10$ minutes at night:
-    1. Sets all active inverters to `0.0 W` in memory.
-    2. Writes a synthetic heartbeat row (`power_kw = 0.000`, `active_inverters = 0`) to PostgreSQL (`chilicon_system_history`).
-    3. Atomically appends a `(timestamp, 0.000, lifetime_kwh)` row to `chilicon_history.csv` every 15 minutes.
-  * Ensures the Web Kiosk and physical display maintain continuous, gap-free zero baselines through midnight without UI flatlines.
-
-### 6. Kiosk Client Priority & Cloud Scraper Fallback Guard (`dashboard_modules/solar.py`)
-* **Local UDP Telemetry Priority:**
-  * In `ChilliconClient.fetch_data()`, the client inspects `chilicon_history.csv` before making outbound HTTPS requests to `cloud.chiliconpower.com`.
-  * If a fresh sample exists written within the last 360 seconds (6 minutes), the client directly returns `(power_kw, energy_wh, timestamp)`, preventing delayed 67-minute cloud scrapes from overwriting live 90-second local UDP data.
-* **Sunset Cloud Bucket Guard:**
-  * If the cloud API returns `power_kw == 0.0` but contains historical 5-minute interval buckets in `parsed[0]`, the client previously fell back to the last non-negative bucket indefinitely.
-  * Hardened the fallback: only fall back to the last non-negative 5-minute bucket if it is recent ($\le 3\text{ buckets} / 15\text{ minutes}$ old). If the last non-negative bucket is older (e.g. from midday or pre-sunset), the client strictly preserves `0.000 kW`, preventing daytime solar from "sticking" after dusk.
-
-### 7. Public Staging Sanitization Guidelines & Zero-Leak Guarantee
-* When synchronizing or copying code/documentation to `/Users/treven/rainforest-emu2-grid-dashboard-public/`:
-  * Never commit raw private fabric IPs (`192.168.8.x`), router MACs, Chilicon Gateway serials (`C14119`), or microinverter EUI32 hex identifiers (`11700218`, etc.).
-  * Replace with placeholders: `<router-ip>`, `<gateway-ip>`, `<postgres-host>`, `<gateway-serial>`, or load them securely via `.env` / `Auth/` configuration files.
-  * Do NOT run `build_public_staging.sh`; stage and verify modifications manually.
-
+* **Sunset / Sleep Decay & Cloud Fallback Guards:**
+  * **Inverter Sleep Decay (`chilicon_udp_listener.py`):** Forces `power_w = 0.0 W` when an inverter's poll timestamp does not advance (`dt == 0`), re-arms at `0.0 W` on dawn wake-up (`dt > 900s`), and runs a background `nighttime_watchdog_loop` that appends `0.000 kW` during extended night silence (`> 10m` quiet between `21:00–06:00`).
+  * **Local UDP Priority & Stale Sunset Bucket Guard (`dashboard_modules/solar.py`):** `ChilliconClient.fetch_data()` defers to `chilicon_history.csv` whenever a fresh local UDP sample (`<= 360s` old) is present, and when falling back to the cloud `fetchOwnerUpdate` endpoint, ignores non-`-1` 5-minute buckets older than 15 minutes (`> 3` buckets behind current time) so `Chillicon PV` drops cleanly to `0.000 kW` at sunset.
+  * **Unit Tests:** Verified in [`tests/test_chilicon_udp_listener.py`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/tests/test_chilicon_udp_listener.py) (`7 passed`).
 

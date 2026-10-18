@@ -87,17 +87,24 @@ To enable SolarEdge PV and battery storage telemetry overlay and mathematical an
 ```
 *Note: If you do not have your SolarEdge API key or Site ID, you will need to contact your solar system installer to request API access for your monitoring account.*
 
-### Chillicon Cloud API Configuration
-To enable the Chillicon Cloud API integration, configure your login credentials inside `~/Auth/chilicon_config.json` (or `auth/chilicon_config.json` in the application directory):
+### Chillicon Cloud API & Local UDP `32758` Debug Bridge Configuration
+To enable the Chillicon Cloud API integration and/or local sub-minute UDP `32758` Debug Bridge telemetry, configure your credentials inside `~/Auth/chilicon_config.json` (or `auth/chilicon_config.json` in the application directory):
 ```json
 {
   "username": "your_chilicon_email",
   "password": "your_chilicon_password",
-  "installation_hash": "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+  "installation_hash": "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+  "udp_port": 32758,
+  "pg_dsn": "postgresql://postgres:<password>@<postgres-host>:5432/energy_telemetry"
 }
 ```
 *Note: To find your `installation_hash`, log in to your account at `https://cloud.chiliconpower.com`, click on your solar installation dashboard, and inspect the URL in your browser's address bar. The long hexadecimal string at the end of the URL is your installation hash:*
 `https://cloud.chiliconpower.com/installation/abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890`
+
+#### Local Real-Time UDP `32758` Debug Bridge (`chilicon_udp_listener.py`)
+The Chilicon CP-100 Gateway emits unencrypted `1,372-byte` UDP datagrams on port `32758` every ~176 seconds, containing two ~90-second Power Line Communication (PLC) sweeps across all bound CP-720 microinverters (`85 bytes` per inverter record).
+* By mirroring or rebroadcasting outbound UDP `32758` packets from the gateway at the router level to your collector node(s), [`chilicon_udp_listener.py`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/chilicon_udp_listener.py) decodes real-time per-panel AC voltage (`Q12.4`), DC1/DC2 MPPT channels, operating uptime, and exact $\Delta E / \Delta t$ AC wattage (`55,102.861851 ticks/kWh`).
+* Appends 90-second system rollups directly to `chilicon_history.csv` (and optionally to PostgreSQL `energy_telemetry`), while `ChilliconClient.fetch_data()` automatically defers to fresh local UDP samples (`<= 360s` old) and only falls back to `cloud.chiliconpower.com` if local UDP packets are unavailable.
 
 ---
 

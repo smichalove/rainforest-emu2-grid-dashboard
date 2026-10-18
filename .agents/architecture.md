@@ -81,7 +81,11 @@ All energy telemetry (grid usage, microinverter solar generation, and battery fl
 5.  **`chilicon_history`**: Microinverter-level AC power production (`power_kw`).
 
 ### Analytical Joins
-Due to the mismatched sampling frequencies (15-second grid reads vs. 15-minute API feeds), queries must align records using an "As-Of" forward-filled subquery or standard window aggregation (15-minute buckets) to prevent data gaps.
+Due to the mismatched sampling frequencies (15-second grid reads, 90-second local Chilicon UDP sweeps, and 15-minute SolarEdge API feeds), queries align records using uniform 5-minute grid interpolation (`_interp_to_grid()`) or "As-Of" forward-filled subqueries to prevent data gaps.
+
+### Chilicon CP-100 Local UDP `32758` Debug Bridge & PostgreSQL (`energy_telemetry`)
+* **Router Rebroadcaster (`192.168.8.1`):** `/etc/init.d/chilicon-rebroadcast` duplicates outbound 1,372-byte UDP `32758` frames from the Chilicon CP-100 Gateway (`192.168.8.135`) to `520c` (`192.168.8.181:32758`) and `Rainforestpi` (`192.168.8.213:32758`).
+* **Listener Daemon ([`chilicon_udp_listener.py`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/chilicon_udp_listener.py)):** Decodes both 90-second PLC sweeps per packet (`8 × 85-byte` inverter records), writes per-inverter electrical diagnostics (`chilicon_inverter_samples`) and system rollups (`chilicon_system_history`) into PostgreSQL (`energy_telemetry` on `520c`), and appends 90-second system rollups to `chilicon_history.csv` on both `520c` and `Rainforestpi`.
 
 ---
 
@@ -90,4 +94,4 @@ Due to the mismatched sampling frequencies (15-second grid reads vs. 15-minute A
 1.  **Dynamic Prompt Templates**: Prompt definitions are stored in external files (e.g. `gemma_hybrid_prompt.txt`) and loaded dynamically at execution time. This allows runtime adjustments without restarting application services.
 2.  **Hardware Failures**: In the event of a power outage or system crash, the stager reads the state registry (`active_local_job.json`) upon reboot to restore the inference queue.
 3.  **Noisy Signal Filtering**: If the serial reader reports line noise or drops, an autonomous script (`snr_analysis.py`) triggers rolling median smoothing window changes dynamically.
-4.  **Data Imputation**: If the third-party solar/battery APIs fail, historical diurnal tables are read to fill gaps in the dataset, ensuring the graphs remain continuous.
+4.  **Data Imputation & Sunset Decay**: If third-party solar/battery APIs fail, historical diurnal tables fill gaps in the dataset. At dusk, `chilicon_udp_listener.py` forces `0.0 W` when inverter poll timestamps freeze (`dt == 0`), and `ChilliconClient.fetch_data()` ignores stale afternoon cloud buckets (`> 15 min` old).
