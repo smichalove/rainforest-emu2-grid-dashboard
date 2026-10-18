@@ -23,10 +23,10 @@ Because the monitor reads data directly from the Zigbee wireless network inside 
 ## Key Features
 - **Real-Time Data Parsing**: Decodes raw XML telemetry (`<InstantaneousDemand>`) directly from the EMU-2 serial port.
 - **Rolling 24-Hour Graph**: Features a dynamic rolling 24-hour X-axis with the newest readings always positioned on the far right, ensuring the graph is always fully populated with historical context.
-- **Persistent Data**: Logs grid demand automatically to an optimized SQLite database `grid_history.db` every 15 seconds (with automatic one-time migration of legacy `grid_history.csv` files on first boot), SolarEdge PV to `solaredge_history.csv` every 15 minutes, battery metrics to `solaredge_battery_history.csv` every 15 minutes, and Chillicon production to `chilicon_history.csv` every 15 minutes, retroactively reloading the graph and historical context immediately upon boot.
+- **Persistent Data**: Logs grid demand automatically to an optimized SQLite database `grid_history.db` every 15 seconds (with automatic one-time migration of legacy `grid_history.csv` files on first boot), SolarEdge PV to `solaredge_history.csv` every 15 minutes, battery metrics to `solaredge_battery_history.csv` every 15 minutes, and Chilicon production to `chilicon_history.csv` every 90–180 seconds via local UDP broadcast (with 15-minute cloud fallback), retroactively reloading the graph and historical context immediately upon boot.
 - **SolarEdge PV & Battery Integration**: Polls SolarEdge `/currentPowerFlow` to track real-time solar panel output, signed battery charge/discharge rates, and State of Charge (SoC %).
-- **Chillicon Cloud API Integration**: Polls actual microinverter solar generation (production power in kW and cumulative lifetime generation in Wh) from Chillicon Cloud every 15 minutes using persistent session cookie authentication.
-- **Stacked Solar PV Chart**: Stacks the actual Chillicon generation (plotted as a bright neon yellow cap) on top of the SolarEdge PV bars (warm gold base) on a unified 10-minute grid, displaying your total combined solar output on the secondary Y-axis.
+- **Chilicon Real-Time UDP 32758 Debug Bridge & Cloud Fallback**: Captures raw binary datagrams broadcast by the on-premise Chilicon CP-100 Gateway on port 32758, delivering ~90-second PLC sweeps across all 8 microinverters (AC voltage, MPPT currents, uptime, lifetime energy) to PostgreSQL and local CSVs with automatic fallback to the Chilicon Cloud API.
+- **Stacked Solar PV Chart**: Stacks the actual Chilicon generation (plotted as a bright neon yellow cap) on top of the SolarEdge PV bars (warm gold base) on a unified 10-minute grid, displaying your total combined solar output on the secondary Y-axis.
 - **Hands-Free Kiosk Mode**: Configured to boot completely headless and automatically launch into fullscreen without sleeping.
 - **3-Slide Touch Kiosk & Web Mirror**: Features an automated rotating carousel (45s / 45s / 20s) across both the physical Pi touchscreen and the FastAPI Web Kiosk (`520c` @ `192.168.8.181:8000`):
   * **Slide 1 (24-Hour Period)**: High-resolution time-domain net grid kW, house load, solar generation bars, and battery SoC water floor with real-time local delta narrative overlay.
@@ -295,6 +295,96 @@ CREATE TABLE IF NOT EXISTS analysis_history (
     escalation_timestamp TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_analysis_escalation ON analysis_history(escalation_status);
+```
+
+#### C. High-Resolution Inverter Telemetry Database (`chilicon_udp_listener.py`)
+For granular panel-level diagnostics, `chilicon_udp_listener.py` optionally streams every 90-second microinverter sweep into PostgreSQL (`520c` @ `192.168.8.181:5432`):
+```sql
+-- High-cardinality panel-level diagnostics (8 inverters x 90-second sweeps)
+CREATE TABLE IF NOT EXISTS chilicon_inverter_samples (
+    sweep_timestamp TIMESTAMPTZ NOT NULL,
+    inverter_id VARCHAR(16) NOT NULL,
+    record_type INT,
+    power_w NUMERIC(8,2),
+    lifetime_kwh NUMERIC(12,4),
+    ac_voltage_v NUMERIC(6,2),
+    dc1_raw INT,
+    dc2_raw INT,
+    uptime_sec BIGINT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (sweep_timestamp, inverter_id)
+);
+
+-- Aggregated system-level time series
+CREATE TABLE IF NOT EXISTS chilicon_system_history (
+    timestamp TIMESTAMPTZ PRIMARY KEY,
+    power_kw NUMERIC(8,3) NOT NULL,
+    lifetime_kwh NUMERIC(12,3) NOT NULL,
+    active_inverters INT NOT NULL,
+    source VARCHAR(32) DEFAULT 'udp_local',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+---
+
+## Chilicon CP-100 Real-Time UDP 32758 Debug Bridge
+
+To eliminate the ~67-minute cloud ingestion lag caused by delayed 5-minute interval bucket uploads on `cloud.chiliconpower.com`, the dashboard taps directly into the on-premise Chilicon CP-100 Gateway's unencrypted **UDP "Info Dump" Debug Bridge** on port `32758`.
+
+```mermaid
+flowchart LR
+    GW["Chilicon CP-100 Gateway<br/>192.168.8.135:65452"]
+    RTR["Flint 2 Router (GL-MT6000)<br/>192.168.8.1"]
+    CLOUD["Chilicon Cloud<br/>107.155.107.6:32758"]
+    PG["520c Server (PostgreSQL + Web)<br/>192.168.8.181:32758"]
+    PI["Rainforestpi (Touch Kiosk)<br/>192.168.8.213"]
+
+    GW -->|"UDP :32758 (1,372 B)<br/>Every ~176s (2x 90s Sweeps)"| RTR
+    RTR -->|"Original Packet<br/>(WAN)"| CLOUD
+    RTR ==>|"Cloned UDP :32758 Packet<br/>(Stateless Mirror / 0% CPU)"| PG
+    PG -->|"1. Store 8-Inverter 90s Series in PostgreSQL<br/>2. Update chilicon_history.csv"| PG
+    PI <-->|"Reads chilicon_history.csv<br/>(Cloud Fallback Guard)"| PG
+```
+
+### 1. The "Debug Bridge Rebroadcast" Architecture
+* **Passive Router Rebroadcast:** The CP-100 Gateway transmits an unencrypted 1,372-byte binary UDP datagram every ~176.3 seconds (~2.9 minutes) to `cloud.chiliconpower.com:32758`. By configuring the gateway router (`192.168.8.1`) to mirror or clone these outbound packets onto the local subnet (`0.0.0.0:32758`), any cluster node (`520c` or `Rainforestpi`) receives live 90-second telemetry as a stateless broadcast beacon.
+* **Zero Modification & Zero Backpressure:** The gateway's native cloud sync remains 100% operational. Because UDP is connectionless (`[UNREPLIED]`), dropped packets impose 0% router memory buffering and zero CPU overhead.
+
+### 2. Binary Frame & Inverter Record Layout (`1,372 Bytes`)
+Each datagram contains two consecutive 90-second Power Line Communication (PLC) sweeps across all 8 bound CP-720 dual-MPPT microinverters:
+* **Gateway Header (`0..7`, 8 Bytes):** Little-endian gateway serial (`0x00C14119` = `C14119`) + 4 reserved zero bytes.
+* **PLC Sweep 1 (`8..687`, 680 Bytes):** 8 microinverters $\times$ 85-byte C struct (captured ~90 seconds prior).
+* **PLC Sweep 2 (`688..1367`, 680 Bytes):** 8 microinverters $\times$ 85-byte C struct (current sweep).
+* **Frame Trailer (`1368..1371`, 4 Bytes):** 32-bit CRC checksum.
+
+#### Microinverter Struct Layout & Decoding Formulas (`rec[0..84]`)
+* **Raw Binary (Zero Base64):** 100% unencoded C struct memory dump. All scalar fields are byte-aligned little-endian primitives (`<I`, `<H`, `B`).
+* **Fixed-Point Q12.4 AC Voltage:** Offset `24..25` stores AC line voltage packed as Q12.4 (`val / 16.0` = `243.88 V AC`).
+* **Lifetime Cumulative Energy:** Offset `72..75` (`<I`) represents cumulative energy ticks at **55,102.86185 ticks / kWh** ($\text{Lifetime kWh} = \text{ticks} / 55102.86185$).
+* **Real-Time Sweep Power ($dE/dt$):** Power per inverter $i$ is calculated between Sweep 1 ($t_1$) and Sweep 2 ($t_2$):
+  $$P_{\text{Watts}, i} = \frac{\text{ticks}_{i}(t_2) - \text{ticks}_{i}(t_1)}{(t_{2,i} - t_{1,i}) \times 0.01530635}$$
+  where $0.01530635 = \frac{55102.86185}{3600\text{ s/hr}}$ ticks per Watt-second.
+
+### 3. Off-State, Dawn Transition & Night Silence Safeguards
+To eliminate spurious power spikes at dawn and prevent stale positive daytime generation from "sticking" in memory overnight:
+1. **Sleep / Stagnation Decay ($\Delta t = 0 \to 0.0\text{ W}$):** At dusk, when solar irradiance drops below the microinverter DSP operating threshold (~22V DC), the gateway continues polling, but uncontacted inverter timestamps freeze. Whenever $\Delta t = 0$, power is forced immediately to `0.0 W`.
+2. **Dawn Cold Wake-Up Guard ($\Delta t > 900\text{s}$ Anti-Spike Filter):** When inverters wake after 8–10 hours of darkness, $\Delta t \approx 28,800\text{s}$. The listener treats any gap $> 15\text{ minutes}$ as a cold wake-up, seeds power at `0.0 W`, and re-arms baseline counters so valid generation begins on the subsequent 90s sweep.
+3. **Overnight Silence Heartbeat Watchdog:** If the gateway halts UDP broadcasts during deep night (21:00–06:00), a background watchdog thread logs a synthetic `0.000 kW` heartbeat row to PostgreSQL and `chilicon_history.csv` every 15 minutes, ensuring seamless zero-baseline rendering on all dashboard charts.
+
+### 4. Kiosk Local Priority & Cloud Fallback Guard
+In [dashboard_modules/solar.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard_modules/solar.py):
+* **Local Telemetry Priority:** `ChilliconClient.fetch_data()` inspects `chilicon_history.csv`. If a sample was written within $\le 360\text{ seconds}$ (6 minutes), it returns the local reading directly, preventing delayed cloud scrapes from overriding real-time UDP data.
+* **Sunset Cloud Bucket Guard:** If forced to query the cloud API after dusk, the client only uses historical 5-minute interval buckets if they are recent ($\le 3\text{ buckets} / 15\text{ minutes}$ old), preventing daytime solar values from persisting after sunset.
+
+### 5. Running the UDP Listener Daemon
+Launch the listener daemon on `520c` or your local server:
+```bash
+python3 chilicon_udp_listener.py --port 32758 --csv /path/to/chilicon_history.csv --bind-ip 0.0.0.0
+```
+Optional PostgreSQL logging:
+```bash
+python3 chilicon_udp_listener.py --port 32758 --csv chilicon_history.csv --pg-dsn "dbname=postgres user=postgres host=127.0.0.1"
 ```
 
 ---
@@ -729,7 +819,22 @@ This filters out single-point sensor noise while providing a smooth average rate
 ### 4. Few-Shot Logical Test Cases
 To guide the LLM's reasoning engine contextually, few-shot examples representing normal operations, solar occlusion collapses, and grid flatline anomalies are embedded in `gemma_hybrid_prompt.txt`. This ensures the model treats the metrics as physical bounds and produces deterministic, concise outputs.
 
+## JRiver Media Center 36 Edge Migration & High-Scale Audio Streaming (`nvagent` @ `192.168.8.45`)
+
+In addition to microgrid edge intelligence, the cluster infrastructure hosts a dedicated high-fidelity digital audio transport and library management engine running on an NVIDIA Jetson Orin Nano (`nvagent` @ `192.168.8.45`):
+
+### 1. High-Scale Library & In-Place Root Playlist Restoration
+* **Scale Ingestion:** Connects directly to the central MergerFS/NFS music pool (`520c` @ `192.168.8.181:/mnt/520c/music`), managing over **100,000+ tracks** and **132 canonical master playlists** (53,144 blueprint tracks).
+* **Zero Sidebar Clutter REST Injection:** Replaced JRiver's native GUI `.mpl` import—which pollutes the sidebar with nested `"Imported Playlists"` folders—with an in-place MCWS REST automation engine ([`restore_master_playlists.py`](file:///home/steven/restore_master_playlists.py)). Injects tracks directly into root playlists in 100-item paced batches with a **99.7% overall match rate** (52,965 / 53,144 tracks).
+* **SACD Virtual ISO Track Indexing (`.iso;\d+`):** Implements Tier-1 pre-caching of 8,677 SACD tracks in 2.6 seconds, resolving internal multi-gigabyte ISO virtual tracks directly to JRiver database keys without missing filesystem references.
+* **Edge Memory Optimization (8GB Orin):** Bypassed monolithic MCWS JSON dumps (which spike to 14GB virtual memory and trigger Linux kernel OOM kills) by utilizing 34ms per-album memoized queries, maintaining flat host memory consumption (< 20MB overhead).
+
+### 2. Bit-Perfect DSD128 Hardware Streaming (Ayre QB-9 Twenty)
+* **DAC Transport:** Streams native Direct Stream Digital (DSD128 via DoP at 352.8 kHz) to the **Ayre QB-9 Twenty** asynchronous USB DAC.
+* **Buffer Architecture:** Configured with a 400ms ALSA hardware buffer and 2.0s secondary JRiver pre-buffering, completely isolated from background database writes to ensure 0 buffer underruns (XRUNs).
+
 ## Future Scalability & Memory Management
 To prevent long-term file I/O latency, memory spikes, or SD card wear from infinitely expanding telemetry logs on the Raspberry Pi kiosk, a future roadmap has been drafted:
 * See [retention_and_memory_management_plan.md](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/planning/retention_and_memory_management_plan.md) for architectural options (including logrotate + tail primitives, SQLite databases, and hourly analytics compression) to optimize resource consumption and downstream ML performance on local networks.
+
 

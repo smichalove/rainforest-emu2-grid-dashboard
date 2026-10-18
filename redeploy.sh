@@ -16,8 +16,8 @@ ssh steven@rainforestpi "mkdir -p ~/rainforest-emu2-grid-dashboard/scratch ~/rai
 scp scratch/combined_logos_small.png steven@rainforestpi:~/rainforest-emu2-grid-dashboard/scratch/
 scp -r dashboard_modules steven@rainforestpi:~/rainforest-emu2-grid-dashboard/
 scp protos/grid_telemetry_pb2*.py steven@rainforestpi:~/rainforest-emu2-grid-dashboard/protos/
-scp dashboard.py read_purple_air.py repl_client.py stage_batch_summary.py snr_analysis.py *prompt.txt README.md run_dashboard_system.sh backup_to_jetson.sh .env requirements.txt steven@rainforestpi:~/rainforest-emu2-grid-dashboard/
-ssh steven@rainforestpi "chmod +x ~/rainforest-emu2-grid-dashboard/backup_to_jetson.sh"
+scp dashboard.py chilicon_udp_listener.py read_purple_air.py repl_client.py stage_batch_summary.py snr_analysis.py *prompt.txt README.md run_dashboard_system.sh backup_to_jetson.sh .env requirements.txt steven@rainforestpi:~/rainforest-emu2-grid-dashboard/
+ssh steven@rainforestpi "chmod +x ~/rainforest-emu2-grid-dashboard/backup_to_jetson.sh ~/rainforest-emu2-grid-dashboard/chilicon_udp_listener.py"
 
 echo "=== Copying AI staging code, stubs, and .env to the Jetson Orin Nano ==="
 ssh steven@nvjetson "mkdir -p ~/rainforest-emu2-grid-dashboard/protos"
@@ -39,8 +39,8 @@ ssh steven@nvjetson "
   sudo systemctl restart jetson-grid-edge
 "
 
-echo "=== Restarting the dashboard process on the Pi ==="
-ssh steven@rainforestpi "pkill -f 'dashboard.py' 2>/dev/null" || true
+echo "=== Restarting the dashboard and Chilicon UDP listener on the Pi ==="
+ssh steven@rainforestpi "pkill -f 'dashboard.py' 2>/dev/null; pkill -f 'chilicon_udp_listener.py' 2>/dev/null" || true
 ssh steven@rainforestpi "DISPLAY=:0 nohup ~/rainforest-emu2-grid-dashboard/run_dashboard_system.sh </dev/null >/dev/null 2>&1 &"
 
 echo "=== Redeployment complete! ==="

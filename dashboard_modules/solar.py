@@ -306,9 +306,29 @@ class ChilliconClient:
     def fetch_data(self) -> Optional[Tuple[float, float, datetime.datetime]]:
         """Polls Chillicon Cloud API. Performs automatic re-login on session timeouts.
 
+        If local UDP 32758 telemetry has written a fresh sample to `self.history_file`
+        within the last 6 minutes, defers to that real-time sample so delayed cloud
+        polling never overwrites sub-minute local gateway data.
+
         Returns:
             A tuple of (power_kw, energy_wh, timestamp), or None if failed.
         """
+        now = datetime.datetime.now()
+        try:
+            rows = read_clean_csv(self.history_file)
+            if rows and len(rows[-1]) >= 3:
+                last_ts = datetime.datetime.fromisoformat(rows[-1][0])
+                age_sec = (now - last_ts).total_seconds()
+                if 0 <= age_sec <= 360:
+                    last_p = float(rows[-1][1])
+                    last_e = float(rows[-1][2])
+                    logging.info(
+                        f"Using fresh local UDP Chilicon telemetry ({age_sec:.0f}s old): {last_p:.3f} kW"
+                    )
+                    return last_p, last_e, last_ts
+        except Exception as e:
+            logging.debug(f"Could not check recent local Chilicon CSV row: {e}")
+
         today_str = datetime.date.today().isoformat()
         owner_update_url = f"https://cloud.chiliconpower.com/ajax/fetchOwnerUpdate?today={today_str}"
         
@@ -339,16 +359,24 @@ class ChilliconClient:
                 if len(parsed) >= 3:
                     energy_wh = float(parsed[1])
                     power_kw = float(parsed[2])
-                    
-                    # Fallback to last non-negative value in 5-minute interval list if current power is 0.0
-                    if power_kw == 0.0 and len(parsed) >= 1 and isinstance(parsed[0], list):
-                        non_negative = [v for v in parsed[0] if v != -1]
-                        if non_negative:
-                            power_kw = float(non_negative[-1]) / 1000.0
-                            logging.info(f"Chilicon current power is 0.0, falling back to last active interval value: {power_kw:.3f} kW")
-                            
                     now = datetime.datetime.now()
                     
+                    # Only fall back to last non-negative 5-min bucket if it is recent (<= 3 buckets / 15 min)
+                    if power_kw == 0.0 and len(parsed) >= 1 and isinstance(parsed[0], list):
+                        valid_indices = [idx for idx, v in enumerate(parsed[0]) if v != -1]
+                        if valid_indices:
+                            last_idx = valid_indices[-1]
+                            current_bucket = (now.hour * 60 + now.minute) // 5
+                            if (current_bucket - last_idx) <= 3:
+                                power_kw = float(parsed[0][last_idx]) / 1000.0
+                                logging.info(
+                                    f"Chilicon current power is 0.0, falling back to recent bucket {last_idx}: {power_kw:.3f} kW"
+                                )
+                            else:
+                                logging.info(
+                                    f"Chilicon last active bucket {last_idx} is stale (current={current_bucket}); keeping 0.000 kW"
+                                )
+                            
                     write_csv_row(self.history_file, [now.isoformat(), f"{power_kw:.3f}", f"{energy_wh:.1f}"])
                     return power_kw, energy_wh, now
                 else:

@@ -76,9 +76,9 @@ curl -s http://127.0.0.1:8000/api/telemetry/spectrum
 
 ---
 
-## 5. Backlog & TODOs
+## 5. Backlog & Completed Milestones
 
-- [ ] **Chilicon Local UDP `32758` Real-Time Ingestion:** Mirror outbound 1,372-byte UDP `32758` telemetry packets from the Chilicon CP-100 Gateway (`192.168.8.135:65452` ➔ `107.155.107.6:32758`, emitted every ~176s with two 90-second PLC sweeps across all 8 microinverters) on the Flint 2 router (`192.168.8.1`) to `520c` (`192.168.8.181:32758`) for local 90-second solar telemetry.
+- [x] **Chilicon Local UDP `32758` Real-Time Ingestion:** Deployed `/etc/init.d/chilicon-rebroadcast` on the Flint 2 router (`192.168.8.1`) to rebroadcast outbound 1,372-byte UDP `32758` telemetry packets from the Chilicon CP-100 Gateway (`192.168.8.135:65452` ➔ `107.155.107.6:32758`, emitted every ~176s with two 90-second PLC sweeps across all 8 microinverters) to `520c` (`192.168.8.181:32758`) and `Rainforestpi` (`192.168.8.213:32758`). [`chilicon_udp_listener.py`](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/chilicon_udp_listener.py) ingests per-inverter diagnostics into PostgreSQL (`energy_telemetry`) on `520c` and appends 90-second rolled-up system telemetry to `chilicon_history.csv` on both nodes.
 - [ ] **Battery Flex Event Rendering:** Represent battery discharge during PSE Flex events as negative values (below the X-axis, `-kW`) with shaded blue area fill in the time domain charts (`charts.js`), matching the physical kiosk Matplotlib representation.
 
 

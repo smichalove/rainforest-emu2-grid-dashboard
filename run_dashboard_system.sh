@@ -27,4 +27,9 @@ if [ -f "./venv/bin/python" ]; then
     PYTHON_BIN="./venv/bin/python"
 fi
 
+# Start the Chilicon UDP 32758 Debug Bridge listener daemon if not already running
+if ! pgrep -f "chilicon_udp_listener.py" >/dev/null 2>&1; then
+    nohup $PYTHON_BIN -u chilicon_udp_listener.py >> /tmp/chilicon_udp_listener.log 2>&1 &
+fi
+
 DISPLAY=:0 $PYTHON_BIN -u dashboard.py "$@" > dashboard_gui.log 2>&1

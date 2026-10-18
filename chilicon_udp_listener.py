@@ -205,12 +205,12 @@ def _resolve_pg_dsn() -> str:
 
 
 PG_DSN = _resolve_pg_dsn()
-CHILICON_CSV = Path(
-    os.environ.get(
-        "CHILICON_CSV_PATH",
-        str(SCRIPT_DIR / "data" / "chilicon_history.csv"),
-    )
+_default_csv = (
+    SCRIPT_DIR / "data" / "chilicon_history.csv"
+    if (SCRIPT_DIR / "data").exists()
+    else SCRIPT_DIR / "chilicon_history.csv"
 )
+CHILICON_CSV = Path(os.environ.get("CHILICON_CSV_PATH", str(_default_csv)))
 
 TICKS_PER_KWH = 55102.861851
 TICKS_PER_WS = TICKS_PER_KWH / 3600.0  # 15.3063505 ticks per Watt-second
@@ -237,6 +237,8 @@ def decode_sweep(
         inst_p_idx = struct.unpack_from("<H", rec, 44)[0]
         uptime_ticks = struct.unpack_from("<I", rec, 68)[0]
         energy_ticks = struct.unpack_from("<I", rec, 72)[0]
+        lifetime_kwh = energy_ticks / TICKS_PER_KWH
+
         resolved_power_w = 0.0
         if inv_id in prev_state:
             prev_ts = int(prev_state[inv_id]["ts_sec"])
@@ -299,66 +301,73 @@ def ingest_payload(
     sweep1_bytes = body[:680]
     sweep2_bytes = body[680:1360]
 
-    conn = psycopg2.connect(PG_DSN)
-    try:
-        with conn:
-            with conn.cursor() as cur:
-                for sweep_raw in (sweep1_bytes, sweep2_bytes):
-                    s_ts, recs = decode_sweep(sweep_raw, prev_state)
-                    for r in recs:
-                        cur.execute(
-                            """
-                            INSERT INTO chilicon_inverter_samples (
-                                sweep_ts, inverter_id, record_type, ac_voltage_v,
-                                dc1_current_raw, dc1_voltage_raw, dc2_current_raw, dc2_voltage_raw,
-                                inst_power_idx, power_w, uptime_ticks, lifetime_energy_ticks, lifetime_kwh
-                            ) VALUES (
-                                %(sweep_ts)s, %(inverter_id)s, %(record_type)s, %(ac_voltage_v)s,
-                                %(dc1_current_raw)s, %(dc1_voltage_raw)s, %(dc2_current_raw)s, %(dc2_voltage_raw)s,
-                                %(inst_power_idx)s, %(power_w)s, %(uptime_ticks)s, %(lifetime_energy_ticks)s, %(lifetime_kwh)s
+    decoded_sweeps = []
+    for sweep_raw in (sweep1_bytes, sweep2_bytes):
+        s_ts, recs = decode_sweep(sweep_raw, prev_state)
+        tot_power_kw = round(
+            sum(st["power_w"] for st in prev_state.values()) / 1000.0, 4
+        )
+        tot_kwh = round(
+            sum(st["lifetime_kwh"] for st in prev_state.values()), 4
+        )
+        active_inv = sum(
+            1 for st in prev_state.values() if st["power_w"] > 1.0
+        )
+        decoded_sweeps.append((s_ts, recs, tot_power_kw, tot_kwh, active_inv))
+        logger.info(
+            "Decoded sweep %s | GW=%s | Total=%.3f kW | Lifetime=%.3f kWh | Active=%d/%d",
+            s_ts.isoformat(),
+            gw_serial,
+            tot_power_kw,
+            tot_kwh,
+            active_inv,
+            len(prev_state),
+        )
+
+    if psycopg2 is not None and PG_DSN:
+        try:
+            conn = psycopg2.connect(PG_DSN)
+            try:
+                with conn:
+                    with conn.cursor() as cur:
+                        for s_ts, recs, tot_power_kw, tot_kwh, active_inv in decoded_sweeps:
+                            for r in recs:
+                                cur.execute(
+                                    """
+                                    INSERT INTO chilicon_inverter_samples (
+                                        sweep_ts, inverter_id, record_type, ac_voltage_v,
+                                        dc1_current_raw, dc1_voltage_raw, dc2_current_raw, dc2_voltage_raw,
+                                        inst_power_idx, power_w, uptime_ticks, lifetime_energy_ticks, lifetime_kwh
+                                    ) VALUES (
+                                        %(sweep_ts)s, %(inverter_id)s, %(record_type)s, %(ac_voltage_v)s,
+                                        %(dc1_current_raw)s, %(dc1_voltage_raw)s, %(dc2_current_raw)s, %(dc2_voltage_raw)s,
+                                        %(inst_power_idx)s, %(power_w)s, %(uptime_ticks)s, %(lifetime_energy_ticks)s, %(lifetime_kwh)s
+                                    )
+                                    ON CONFLICT (sweep_ts, inverter_id) DO UPDATE SET
+                                        power_w = EXCLUDED.power_w,
+                                        lifetime_energy_ticks = EXCLUDED.lifetime_energy_ticks,
+                                        lifetime_kwh = EXCLUDED.lifetime_kwh,
+                                        received_at = NOW();
+                                    """,
+                                    r,
+                                )
+                            cur.execute(
+                                """
+                                INSERT INTO chilicon_system_history (
+                                    sweep_ts, power_kw, lifetime_kwh, active_inverters, gateway_serial, source
+                                ) VALUES (%s, %s, %s, %s, %s, 'udp_rebroadcast')
+                                ON CONFLICT (sweep_ts) DO UPDATE SET
+                                    power_kw = EXCLUDED.power_kw,
+                                    lifetime_kwh = EXCLUDED.lifetime_kwh,
+                                    active_inverters = EXCLUDED.active_inverters,
+                                    received_at = NOW();
+                                """,
+                                (s_ts, tot_power_kw, tot_kwh, active_inv, gw_serial),
                             )
-                            ON CONFLICT (sweep_ts, inverter_id) DO UPDATE SET
-                                power_w = EXCLUDED.power_w,
-                                lifetime_energy_ticks = EXCLUDED.lifetime_energy_ticks,
-                                lifetime_kwh = EXCLUDED.lifetime_kwh,
-                                received_at = NOW();
-                            """,
-                            r,
-                        )
-                    # Roll up across all unique bound microinverters in prev_state
-                    tot_power_kw = round(
-                        sum(st["power_w"] for st in prev_state.values()) / 1000.0, 4
-                    )
-                    tot_kwh = round(
-                        sum(st["lifetime_kwh"] for st in prev_state.values()), 4
-                    )
-                    active_inv = sum(
-                        1 for st in prev_state.values() if st["power_w"] > 1.0
-                    )
-                    cur.execute(
-                        """
-                        INSERT INTO chilicon_system_history (
-                            sweep_ts, power_kw, lifetime_kwh, active_inverters, gateway_serial, source
-                        ) VALUES (%s, %s, %s, %s, %s, 'udp_rebroadcast')
-                        ON CONFLICT (sweep_ts) DO UPDATE SET
-                            power_kw = EXCLUDED.power_kw,
-                            lifetime_kwh = EXCLUDED.lifetime_kwh,
-                            active_inverters = EXCLUDED.active_inverters,
-                            received_at = NOW();
-                        """,
-                        (s_ts, tot_power_kw, tot_kwh, active_inv, gw_serial),
-                    )
-                    logger.info(
-                        "Ingested sweep %s | GW=%s | Total=%.3f kW | Lifetime=%.3f kWh | Active=%d/%d",
-                        s_ts.isoformat(),
-                        gw_serial,
-                        tot_power_kw,
-                        tot_kwh,
-                        active_inv,
-                        len(prev_state),
-                    )
-    finally:
-        conn.close()
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.debug("PostgreSQL write skipped/failed: %s", e)
 
     if append_csv and CHILICON_CSV.parent.exists() and prev_state:
         tot_power_kw = round(
