@@ -45,6 +45,17 @@ Each broadcast datagram is exactly 1,372 bytes, structured as follows:
   | 0x0558 .. 0x055B (4B) | Frame Trailer: 32-bit CRC Checksum                |
   +-----------------------+---------------------------------------------------+
 
+Encoding & Offset Architecture (Raw Binary vs. Base64 & Bitfields):
+  * ZERO Base64: Datagrams are 100% raw unencoded binary bytes transmitted directly
+    from gateway memory. There is no Base64, ASCII armoring, JSON, or compression.
+  * Standard Byte Offsets: Every microinverter record is a contiguous 85-byte block
+    (rec = sweep_bytes[i*85 : (i+1)*85]). All fields inside are aligned to standard
+    primitive byte boundaries (uint8, uint16_le, uint32_le), NOT bitfield offsets.
+  * Fixed-Point Q12.4 Voltage: The only bit-level representation is AC line voltage
+    at byte offset 24..25. The DSP packs voltage as a Q12.4 integer (lower 4 bits =
+    fractional Volts in 1/16 V resolution; upper 12 bits = integer Volts), decoded
+    via standard division by 16.0 (`val / 16.0`).
+
 ===============================================================================
 3. 85-BYTE MICROINVERTER STRUCT LAYOUT & FORMULAS (rec[0..84])
 ===============================================================================
@@ -79,6 +90,14 @@ Mathematical Equations:
   3. System Rollup:
        total_system_kw = sum(power_w for all inverters) / 1000.0
        total_system_kwh = sum(lifetime_kwh for all inverters)
+
+  4. Microinverter Off-State & Dawn Transition Safeguards:
+       * Sleep / Stagnation Decay: If dt == 0 (inverter didn't respond to sweep),
+         force power_w = 0.0 W. Eliminates overnight "ghost generation".
+       * Dawn Wake-Up Guard: If dt > 900s (>15m gap after overnight sleep),
+         re-arm baseline at 0.0 W without computing a spurious dE/dt spike.
+       * Night Heartbeat Watchdog: Background thread periodically logs 0.000 kW
+         during extended gateway night silence (>10m quiet between 21:00-06:00).
 
 ===============================================================================
 4. DUAL-DESTINATION STORAGE & OUTPUTS
@@ -144,11 +163,33 @@ logging.basicConfig(
 logger = logging.getLogger("chilicon_udp")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+def _load_dotenv() -> None:
+    """Loads key=value pairs from .env in SCRIPT_DIR if not already in os.environ."""
+    env_file = SCRIPT_DIR / ".env"
+    if not env_file.exists():
+        return
+    try:
+        for raw_line in env_file.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip().strip('"').strip("'")
+            if k and k not in os.environ:
+                os.environ[k] = v
+    except Exception:
+        pass
+
+
+_load_dotenv()
 UDP_PORT = int(os.environ.get("CHILICON_UDP_PORT", "32758"))
 
 
 def _resolve_pg_dsn() -> str:
-    """Resolves PostgreSQL DSN from env or gitignored Auth/chilicon_config.json."""
+    """Resolves PostgreSQL DSN from env/.env or gitignored Auth/chilicon_config.json."""
     if os.environ.get("CHILICON_PG_DSN"):
         return os.environ["CHILICON_PG_DSN"]
     for auth_rel in ("Auth/chilicon_config.json", "auth/chilicon_config.json"):
@@ -196,20 +237,24 @@ def decode_sweep(
         inst_p_idx = struct.unpack_from("<H", rec, 44)[0]
         uptime_ticks = struct.unpack_from("<I", rec, 68)[0]
         energy_ticks = struct.unpack_from("<I", rec, 72)[0]
-        lifetime_kwh = energy_ticks / TICKS_PER_KWH
-
-        power_w: Optional[float] = None
+        resolved_power_w = 0.0
         if inv_id in prev_state:
             prev_ts = int(prev_state[inv_id]["ts_sec"])
             prev_ticks = int(prev_state[inv_id]["energy_ticks"])
             dt = ts_sec - prev_ts
             d_ticks = energy_ticks - prev_ticks
             if 10 <= dt <= 900 and d_ticks >= 0:
-                power_w = d_ticks / (dt * (TICKS_PER_WS / 1000.0))
+                resolved_power_w = round(d_ticks / (dt * (TICKS_PER_WS / 1000.0)), 3)
             elif dt == 0:
-                power_w = prev_state[inv_id].get("power_w", float(inst_p_idx))
+                # Inverter offline / sleeping (timestamp has not advanced): force zero power
+                resolved_power_w = 0.0
+            elif dt > 900:
+                # Dawn wake-up after nighttime sleep (>15m): re-arm baseline without dE/dt spike
+                resolved_power_w = 0.0
+        else:
+            # First observation: use instant power index if active and nonzero
+            resolved_power_w = float(inst_p_idx) if inst_p_idx > 0 else 0.0
 
-        resolved_power_w = round(power_w, 3) if power_w is not None else float(inst_p_idx)
         prev_state[inv_id] = {
             "ts_sec": float(ts_sec),
             "energy_ticks": float(energy_ticks),
@@ -341,12 +386,82 @@ def backfill_from_capture(prev_state: Dict[str, Dict[str, float]]) -> None:
             ingest_payload(bytes(hex_bytes[28:1400]), prev_state, append_csv=False)
 
 
+def is_nighttime() -> bool:
+    """Returns True if current local time is outside solar production hours."""
+    hour = datetime.datetime.now().hour
+    return hour >= 21 or hour < 6
+
+
+def nighttime_watchdog_loop(
+    prev_state: Dict[str, Dict[str, float]],
+    heartbeat_tracker: Dict[str, float],
+) -> None:
+    """Periodically emits 0.000 kW records during gateway night silence (>10m quiet)."""
+    while True:
+        time.sleep(60)
+        now_ts = time.time()
+        silence_sec = now_ts - heartbeat_tracker.get("last_rx", now_ts)
+        if silence_sec >= 600 and is_nighttime():
+            if now_ts - heartbeat_tracker.get("last_csv_zero", 0.0) >= 900:
+                heartbeat_tracker["last_csv_zero"] = now_ts
+                for inv_id in prev_state:
+                    prev_state[inv_id]["power_w"] = 0.0
+
+                tot_kwh = (
+                    round(sum(st["lifetime_kwh"] for st in prev_state.values()), 1)
+                    if prev_state
+                    else 0.0
+                )
+                now_dt = datetime.datetime.now()
+                now_iso = now_dt.isoformat()
+
+                if CHILICON_CSV.parent.exists():
+                    try:
+                        with open(CHILICON_CSV, "a", encoding="utf-8") as f:
+                            f.write(f"{now_iso},0.000,{tot_kwh:.1f}\n")
+                        logger.info(
+                            "Night Watchdog: Appended 0.000 kW heartbeat to CSV (inverters sleeping)."
+                        )
+                    except Exception as e:
+                        logger.warning("Night Watchdog CSV append error: %s", e)
+
+                if psycopg2:
+                    try:
+                        conn = psycopg2.connect(PG_DSN)
+                        with conn:
+                            with conn.cursor() as cur:
+                                cur.execute(
+                                    """
+                                    INSERT INTO chilicon_system_history (
+                                        sweep_ts, power_kw, lifetime_kwh, active_inverters, gateway_serial, source
+                                    ) VALUES (%s, 0.000, %s, 0, 'UNKNOWN', 'night_watchdog')
+                                    ON CONFLICT (sweep_ts) DO NOTHING;
+                                    """,
+                                    (now_dt, tot_kwh),
+                                )
+                        conn.close()
+                    except Exception as e:
+                        logger.debug("Night Watchdog PG insert error: %s", e)
+
+
 def main() -> None:
+    import threading
+
     prev_state: Dict[str, Dict[str, float]] = {}
+    heartbeat_tracker: Dict[str, float] = {"last_rx": time.time(), "last_csv_zero": 0.0}
+
     try:
         backfill_from_capture(prev_state)
     except Exception as e:
         logger.warning("Backfill warning: %s", e)
+
+    watchdog = threading.Thread(
+        target=nighttime_watchdog_loop,
+        args=(prev_state, heartbeat_tracker),
+        daemon=True,
+        name="ChiliconNightWatchdog",
+    )
+    watchdog.start()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -359,6 +474,7 @@ def main() -> None:
     while True:
         data, addr = sock.recvfrom(4096)
         now = time.time()
+        heartbeat_tracker["last_rx"] = now
         if len(data) == 1372:
             crc = data[-4:]
             if crc == last_crc and (now - last_ts) < 5.0:

@@ -283,11 +283,6 @@
 
 # System Architecture: Chilicon CP-100 Gateway (`192.168.8.135`) & Local UDP `32758` Telemetry Protocol (Session 2026-10-17)
 
-> [!CAUTION]
-> **`(agent crumb)` — PUBLIC REPOSITORY SANITIZATION REQUIRED:**  
-> All concrete LAN IP addresses (`192.168.8.1`, `192.168.8.135`, `192.168.8.181`, `192.168.8.213`), hardware MAC addresses (`88:da:1a:83:e1:21`, `94:83:c4:72:88:b6`), Chilicon Gateway serial numbers (`C14119`), Microinverter `EUI32` hardware IDs (`11700218`, `C1500871`, etc.), and PostgreSQL credentials/DSNs in this section and in `chilicon_udp_telemetry_design.md` / `chilicon_udp_listener.py` are **strictly private cluster context**.  
-> Whenever syncing or copying code/docs to the public staging repository (`/Users/treven/rainforest-emu2-grid-dashboard-public`), **MUST sanitize** these values to generic placeholders (`<router-ip>`, `<gateway-ip>`, `<postgres-host>`, `<gateway-serial>`, `CHILICON_PG_DSN` via `.env` / `Auth/`).
-
 ### 1. Gateway Hardware Identity & Network Behavior
 * **Host Identity:** `192.168.8.135` (DHCP hostname `Chilicon-C14119-WI`, MAC `88:da:1a:83:e1:21`, Gateway Serial/ID **`C14119`**, Firmware **`CHILIC0N Gateway v4882`**).
 * **Inbound Ports:** **0 open TCP/UDP ports** on LAN (runs bare-metal RTOS + `lwIP` stack with no local listening HTTP server).
