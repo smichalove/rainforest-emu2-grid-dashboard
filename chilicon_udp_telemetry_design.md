@@ -1,19 +1,25 @@
-# Green Doc: Chilicon CP-100 Real-Time Local UDP Telemetry & Fabric Architecture
+# Green Doc: Chilicon CP-100 "Debug Bridge Rebroadcast" Telemetry Architecture
 
 **Date:** October 17, 2026  
+**Architecture Pattern:** Passive Router-Level UDP Debug Bridge Rebroadcast (`192.168.8.255:32758` / `192.168.8.181:32758`)  
 **Gateway Target:** Chilicon CP-100 (`192.168.8.135` / `Chilicon-C14119-WI`, Serial `C14119`, FW `v4882`)  
-**Fabric Nodes:** Flint 2 Router (`192.168.8.1`) ➔ `520c` PostgreSQL (`192.168.8.181`) ➔ `Rainforestpi` (`192.168.8.213`)
+**Fabric Nodes:** Flint 2 Router (`192.168.8.1`) ➔ LAN Broadcast / `520c` PostgreSQL (`192.168.8.181`) & `Rainforestpi` (`192.168.8.213`)
+
+> [!CAUTION]
+> **`(agent crumb)` — PUBLIC REPOSITORY SANITIZATION REQUIRED:**  
+> All LAN IPs (`192.168.8.x`), MAC addresses, Gateway/Microinverter serial IDs (`C14119`, `EUI32` hex IDs), and PostgreSQL credentials/endpoints in this document and associated listener scripts are **private fabric context** and **must be sanitized** (`<router-ip>`, `<gateway-ip>`, `<postgres-host>`, `<gateway-serial>`, `.env` / `Auth/`) before copying to `/Users/treven/rainforest-emu2-grid-dashboard-public`.
 
 ---
 
-## 1. Executive Summary
+## 1. Executive Summary: The "Debug Bridge Rebroadcast" Pattern
 
-Live packet inspection on the Flint 2 gateway router (`192.168.8.1`) revealed that the **Chilicon CP-100 Gateway (`192.168.8.135`) uses zero encryption** for its cloud communication with `cloud.chiliconpower.com` (`107.155.107.6`).
+In the CP-100 Gateway's Developer Menu (`Settings ➔ UDP Info Dump Port: 32758` and `OOK Menu ➔ Info Dump`), Chilicon's firmware engineers implemented an unencrypted **UDP "Info Dump" Debug Bridge** (`udpTxPayloadCount`) that emits the raw 85-byte PLC memory structs of every bound microinverter every **176.3 seconds (~2.9 minutes)**.
 
-Specifically:
-1. **100% of solar production telemetry is emitted over unencrypted UDP port `32758`** (`192.168.8.135:65452` ➔ `107.155.107.6:32758`) in a single **1,372-byte UDP payload** (`1,400` bytes IP length) once every **176 seconds (~2.9 minutes)**.
-2. Each UDP `32758` packet contains **two complete ~90-second Power Line Communication (PLC) polling sweeps** across all **8 bound CP-720 Dual-MPPT microinverters** (`16 × 85-byte` binary records).
-3. Because UDP is completely **stateless and fire-and-forget (`[UNREPLIED]`, no ACK wait)**, the Flint 2 router can clone/mirror a copy of every UDP `32758` packet to `520c` (`192.168.8.181`) at near-zero CPU cost, delivering **90-second real-time local solar telemetry** (10× faster than the 15-minute cloud scraper) while keeping the existing cloud connection and web scraper as an automatic fallback.
+Because the gateway transmits this UDP `32758` datagram as unicast to `cloud.chiliconpower.com` (`107.155.107.6:32758`), other LAN nodes on `192.168.8.0/24` do not normally see it at Layer 2. By configuring the **Flint 2 Router (`192.168.8.1`)** to **rebroadcast** each outbound UDP `32758` packet back onto the local subnet (`192.168.8.255:32758` or directly to `192.168.8.181` & `192.168.8.213`):
+
+1. **Zero Gateway Modification:** The CP-100 gateway's cloud link to `107.155.107.6` remains 100% untouched.
+2. **True Pub/Sub LAN Telemetry Bus:** Rebroadcasting the 1,372-byte UDP payload onto the LAN turns the gateway's internal debug dump into a **local real-time broadcast beacon**—any node on your LAN (`520c`, `Rainforestpi`, or a diagnostic laptop) can simply open a UDP socket on port `32758` and receive live **90-second per-microinverter telemetry** with zero handshakes and zero ACKs.
+3. **10× Higher Resolution + Per-Panel Diagnostics:** Delivers 90-second PLC sweep resolution across all **8 bound CP-720 Dual-MPPT microinverters** (vs. 15-minute cloud polling), while keeping the cloud web scraper as an automatic fallback.
 
 > [!TIP]
 > **Why UDP `32758` Is Ideal for Router Forwarding:**  
