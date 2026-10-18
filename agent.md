@@ -359,3 +359,20 @@ Each 1,372-byte UDP payload contains two complete ~90-second Power Line Communic
   $$\text{TICKS\_PER\_WS} = \frac{77,927.2144}{3600} = 21.64645\text{ ticks / Watt-second}$$
 * **Verification:** Calibrated `chilicon_udp_listener.py` across `520c` and `Rainforestpi`. Live decoded power immediately aligned to match the CP-100 console down to the milliwatt ($226.3\text{ W} / \sqrt{2} = 160.0\text{ W}$, exactly matching the console's 160 W reading).
 
+---
+
+# System Architecture: SolarEdge HD-Wave Inverter Local Modbus TCP Telemetry (Session 2026-10-18)
+
+### 1. Zero-Cloud Local Telemetry & Port 1502 Discovery
+* **Host Identity:** `192.168.8.70:1502` (Unit ID `1`, `SE6000H-USS3BBC14`, Serial `7404D9EB`).
+* **Motivation:** SolarEdge Cloud Monitoring Web API is rate-limited (300 calls/day), subject to 5–15 minute cloud lag, and limits polling to 6 minutes (360 seconds). Local Modbus TCP responds with sub-second (~12ms) latency directly on LAN.
+* **SunSpec Model Mapping (Function Code 3 Holding Registers):**
+  * **Model 102 (register `40069`, length 50):** Inverter AC Generation Power (`I_AC_Power` at offset 14, `I_AC_Power_SF` at offset 15).
+  * **Model 203 (register `40362`, length 30):** Revenue-grade Grid Export/Import Meter (`M_AC_Power` at offset 18, `M_AC_Power_SF` at offset 22). Negative = Grid Import, Positive = Grid Export.
+  * **Model 703 (register `40676`, length 10):** Battery Storage State of Charge (offsets 5 & 6 combine into uint32 `soc_raw * 0.001` %).
+  * **Whole-Home Demand Calculation:**
+    $$\text{Load Power} = \text{PV Generation} + \text{Grid Import} - \text{Grid Export} + \text{Battery Power}$$
+* **Implementation:** Zero external dependencies via Python's standard `socket` and `struct` in `dashboard_modules/solar.py` (`fetch_modbus_data`). Automatically falls back to Cloud Web API if Modbus connection fails.
+* **Kiosk Acceleration:** `dashboard.py` runs a 15-second loop when `modbus_host` is configured in `Auth/solaredge_config.json` or `SOLAREDGE_MODBUS_HOST`.
+* **Public Repository Isolation:** Kept strictly dev-only/private. The public repository remains 100% on the standard Cloud Web API to prevent breaking setups for users who lack SolarEdge SetApp installer privileges.
+
