@@ -1,5 +1,7 @@
 {
   "username": "YOUR_CHILICON_EMAIL",
   "password": "YOUR_CHILICON_PASSWORD",
-  "installation_hash": "YOUR_CHILICON_INSTALLATION_HASH"
+  "installation_hash": "YOUR_CHILICON_INSTALLATION_HASH",
+  "udp_port": 32758,
+  "pg_dsn": "postgresql://YOUR_PG_USER:YOUR_PG_PASSWORD@127.0.0.1:5432/energy_telemetry"
 }
