@@ -90,6 +90,8 @@ def load_env_credentials() -> Tuple[Dict[str, Optional[str]], Dict[str, Optional
     solaredge_credentials = {
         "api_key": os.environ.get("SOLAREDGE_API_KEY"),
         "site_id": os.environ.get("SOLAREDGE_SITE_ID"),
+        "modbus_host": os.environ.get("SOLAREDGE_MODBUS_HOST"),
+        "modbus_port": int(os.environ.get("SOLAREDGE_MODBUS_PORT", "1502")),
     }
     se_paths = [
         os.path.join(script_dir, "Auth/solaredge_config.json"),
@@ -106,6 +108,13 @@ def load_env_credentials() -> Tuple[Dict[str, Optional[str]], Dict[str, Optional
                         solaredge_credentials["api_key"] = data.get("api_key")
                     if not solaredge_credentials["site_id"]:
                         solaredge_credentials["site_id"] = data.get("site_id")
+                    if not solaredge_credentials["modbus_host"]:
+                        solaredge_credentials["modbus_host"] = data.get("modbus_host")
+                    if "modbus_port" in data and not os.environ.get("SOLAREDGE_MODBUS_PORT"):
+                        try:
+                            solaredge_credentials["modbus_port"] = int(data.get("modbus_port", 1502))
+                        except (ValueError, TypeError):
+                            solaredge_credentials["modbus_port"] = 1502
                     logging.info(f"Loaded SolarEdge credentials from: {path}")
                     break
             except Exception as e:

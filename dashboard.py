@@ -90,6 +90,8 @@ class GridDashboard(tk.Tk):
 
     solaredge_api_key: Optional[str] = None
     solaredge_site_id: Optional[str] = None
+    solaredge_modbus_host: Optional[str] = None
+    solaredge_modbus_port: int = 1502
     se_timestamps: List[datetime.datetime] = []
     se_power: List[float] = []
     se_battery_timestamps: List[datetime.datetime] = []
@@ -295,7 +297,9 @@ class GridDashboard(tk.Tk):
             site_id=self.solaredge_site_id or "",
             history_file=self.se_history_file,
             battery_history_file=self.se_battery_history_file,
-            flow_history_file=self.se_flow_history_file
+            flow_history_file=self.se_flow_history_file,
+            modbus_host=self.solaredge_modbus_host,
+            modbus_port=self.solaredge_modbus_port
         )
         self.ch_client = solar.ChilliconClient(
             username=self.chilicon_username or "",
@@ -380,6 +384,8 @@ class GridDashboard(tk.Tk):
                 se_creds, ch_creds = creds[0], creds[1]
                 self.solaredge_api_key = se_creds.get("api_key")
                 self.solaredge_site_id = se_creds.get("site_id")
+                self.solaredge_modbus_host = se_creds.get("modbus_host")
+                self.solaredge_modbus_port = se_creds.get("modbus_port", 1502)
                 self.chilicon_username = ch_creds.get("username")
                 self.chilicon_password = ch_creds.get("password")
                 self.chilicon_installation_hash = ch_creds.get("installation_hash")
@@ -488,7 +494,15 @@ class GridDashboard(tk.Tk):
                 path = self.se_history_file if self.se_history_file else os.path.join(script_dir, 'solaredge_history.csv')
                 bat_path = self.se_battery_history_file if self.se_battery_history_file else os.path.join(script_dir, 'solaredge_battery_history.csv')
                 flow_path = self.se_flow_history_file if self.se_flow_history_file else os.path.join(script_dir, 'solaredge_flow_history.csv')
-                client = solar.SolarEdgeClient(self.solaredge_api_key or "", self.solaredge_site_id or "", path, bat_path, flow_path)
+                client = solar.SolarEdgeClient(
+                    self.solaredge_api_key or "",
+                    self.solaredge_site_id or "",
+                    path,
+                    bat_path,
+                    flow_path,
+                    modbus_host=self.solaredge_modbus_host,
+                    modbus_port=self.solaredge_modbus_port
+                )
             
             res = client.fetch_data()
             if res:
@@ -1002,15 +1016,16 @@ class GridDashboard(tk.Tk):
         self.chilicon_thread.start()
 
     def solaredge_loop(self) -> None:
-        """Isolated SolarEdge API loop."""
+        """Isolated SolarEdge loop (15s for local Modbus TCP, 360s for Cloud Web API)."""
         while self.running:
             self.fetch_solaredge_data()
-            # Sleep in 10-second segments to monitor self.running shutdown speed
-            segments = SOLAREDGE_POLL_INTERVAL_SEC // 10
+            is_modbus = bool(self.se_client and self.se_client.modbus_host)
+            poll_interval = 15 if is_modbus else SOLAREDGE_POLL_INTERVAL_SEC
+            segments = max(1, poll_interval // 5)
             for _ in range(segments):
                 if not self.running:
                     break
-                time.sleep(10)
+                time.sleep(5)
 
     def chilicon_loop(self) -> None:
         """Isolated Chillicon scraper loop (polls local UDP CSV every 20s; throttles cloud fallback)."""
