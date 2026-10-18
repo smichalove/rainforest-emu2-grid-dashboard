@@ -138,7 +138,7 @@ class SolarEdgeClient:
         Queries:
             - Model 102 (register 40069, length 50): Inverter AC Power
             - Model 203 (register 40362, length 30): Grid Export/Import Meter
-            - Model 703 (register 40676, length 10): Battery Storage State of Charge
+            - Model 713 (register 41438, length 9): DER Storage Status (Battery SoC & Pct_SF)
         
         Returns:
             Dictionary with telemetry matching fetch_data(), or None on communication error.
@@ -204,11 +204,16 @@ class SolarEdgeClient:
                 grid_import = 0.0
                 grid_export = grid_kw
 
-            # 3. Battery Storage State of Charge (Model 703 @ 40676)
-            m703_data = read_block(40676, 10)
-            m703_u = struct.unpack(f'>{len(m703_data)//2}H', m703_data)
-            soc_raw = (m703_u[5] << 16) | m703_u[6]
-            battery_soc = max(0.0, min(100.0, soc_raw * 0.001))
+            # 3. Battery Storage State of Charge (SunSpec Model 713 DER Storage Status @ 41438)
+            m713_data = read_block(41438, 9)
+            m713_u = struct.unpack(f'>{len(m713_data)//2}H', m713_data)
+            m713_s = struct.unpack(f'>{len(m713_data)//2}h', m713_data)
+            soc_raw = m713_u[4]
+            pct_sf = m713_s[8]
+            if soc_raw != 0xFFFF and pct_sf != -32768:
+                battery_soc = max(0.0, min(100.0, float(soc_raw) * (10 ** pct_sf)))
+            else:
+                battery_soc = 100.0
             battery_power = 0.0
 
             # 4. Whole-Home Load Computation
