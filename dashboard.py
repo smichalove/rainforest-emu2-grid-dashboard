@@ -519,10 +519,11 @@ class GridDashboard(tk.Tk):
             if res:
                 power, energy, now = res
                 with self.data_lock:
-                    self.chilicon_timestamps.append(now)
-                    self.chilicon_power.append(power)
-                    self.chilicon_energy.append(energy)
-                self.solar_bars_dirty = True
+                    if not self.chilicon_timestamps or now > self.chilicon_timestamps[-1]:
+                        self.chilicon_timestamps.append(now)
+                        self.chilicon_power.append(power)
+                        self.chilicon_energy.append(energy)
+                        self.solar_bars_dirty = True
                 if self.chilicon_status_label is not None:
                     self.ui_queue.put(lambda: self.chilicon_status_label.config(text=f"Chillicon PV: {power:.3f} kW"))
                 self.update_load_label()
@@ -1012,10 +1013,10 @@ class GridDashboard(tk.Tk):
                 time.sleep(10)
 
     def chilicon_loop(self) -> None:
-        """Isolated Chillicon scraper loop."""
+        """Isolated Chillicon scraper loop (polls local UDP CSV every 20s; throttles cloud fallback)."""
         while self.running:
             self.fetch_chilicon_data()
-            for _ in range(90):
+            for _ in range(2):
                 if not self.running:
                     break
                 time.sleep(10)

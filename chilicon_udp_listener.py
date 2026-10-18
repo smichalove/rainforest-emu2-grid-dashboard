@@ -212,8 +212,14 @@ _default_csv = (
 )
 CHILICON_CSV = Path(os.environ.get("CHILICON_CSV_PATH", str(_default_csv)))
 
-TICKS_PER_KWH = 55102.861851
-TICKS_PER_WS = TICKS_PER_KWH / 3600.0  # 15.3063505 ticks per Watt-second
+import math
+
+# CP-720 microinverter DSP registers accumulate peak AC voltage/current ticks.
+# The CP-100 Gateway console applies the standard AC RMS factor (1 / sqrt(2) = 0.70710678)
+# to compute true physical RMS Watts and Watt-hours displayed on the console screen.
+RMS_FACTOR = math.sqrt(2)  # 1.41421356
+TICKS_PER_KWH = 55102.861851 * RMS_FACTOR  # 77,927.214 ticks / kWh
+TICKS_PER_WS = TICKS_PER_KWH / 3600.0  # 21.64645 ticks per Watt-second
 EPOCH_2000 = datetime.datetime(2000, 1, 1, 0, 0, 0)
 
 
