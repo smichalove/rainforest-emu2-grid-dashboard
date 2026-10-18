@@ -368,10 +368,10 @@ Each datagram contains two consecutive 90-second Power Line Communication (PLC) 
 #### Microinverter Struct Layout & Decoding Formulas (`rec[0..84]`)
 * **Raw Binary (Zero Base64):** 100% unencoded C struct memory dump. All scalar fields are byte-aligned little-endian primitives (`<I`, `<H`, `B`).
 * **Fixed-Point Q12.4 AC Voltage:** Offset `24..25` stores AC line voltage packed as Q12.4 (`val / 16.0` = `243.88 V AC`).
-* **Lifetime Cumulative Energy:** Offset `72..75` (`<I`) represents cumulative energy ticks at **55,102.86185 ticks / kWh** ($\text{Lifetime kWh} = \text{ticks} / 55102.86185$).
+* **Lifetime Cumulative Energy:** Offset `72..75` (`<I`) represents cumulative energy ticks calibrated with the AC RMS scaling factor ($\text{RMS\_FACTOR} = \sqrt{2} \approx 1.41421356$) at **77,927.2144 ticks / kWh** ($\text{Lifetime kWh} = \text{ticks} / 77927.2144$).
 * **Real-Time Sweep Power ($dE/dt$):** Power per inverter $i$ is calculated between Sweep 1 ($t_1$) and Sweep 2 ($t_2$):
-  $$P_{\text{Watts}, i} = \frac{\text{ticks}_{i}(t_2) - \text{ticks}_{i}(t_1)}{(t_{2,i} - t_{1,i}) \times 0.01530635}$$
-  where $0.01530635 = \frac{55102.86185}{3600\text{ s/hr}}$ ticks per Watt-second.
+  $$P_{\text{Watts}, i} = \frac{\text{ticks}_{i}(t_2) - \text{ticks}_{i}(t_1)}{(t_{2,i} - t_{1,i}) \times 0.02164645}$$
+  where $0.02164645 = \frac{77927.2144}{3,600,000\text{ W*s/kWh}}$ ticks per Watt-second, matching the physical CP-100 Gateway console display down to the milliwatt.
 
 ### 3. Off-State, Dawn Transition & Night Silence Safeguards
 To eliminate spurious power spikes at dawn and prevent stale positive daytime generation from "sticking" in memory overnight:
