@@ -228,6 +228,7 @@ class ChilliconClient:
         self.password: str = password
         self.installation_hash: str = installation_hash
         self.history_file: str = history_file
+        self.last_cloud_poll_time: Optional[datetime.datetime] = None
         self.cookie_jar = http.cookiejar.CookieJar()
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookie_jar))
 
@@ -329,6 +330,14 @@ class ChilliconClient:
         except Exception as e:
             logging.debug(f"Could not check recent local Chilicon CSV row: {e}")
 
+        # Throttle remote cloud scraper calls to at most once every 15 minutes (900s)
+        if self.last_cloud_poll_time is not None:
+            elapsed = (now - self.last_cloud_poll_time).total_seconds()
+            if elapsed < 900:
+                logging.debug(f"Chilicon cloud polling throttled ({elapsed:.0f}s < 900s); awaiting next UDP sweep.")
+                return None
+
+        self.last_cloud_poll_time = now
         today_str = datetime.date.today().isoformat()
         owner_update_url = f"https://cloud.chiliconpower.com/ajax/fetchOwnerUpdate?today={today_str}"
         
