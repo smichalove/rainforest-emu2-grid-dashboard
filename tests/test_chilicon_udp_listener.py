@@ -47,14 +47,14 @@ def _make_full_udp_payload(
 ) -> bytes:
     """Builds a complete 1,372-byte Chilicon UDP 32758 packet (Header + 2 Sweeps + CRC)."""
     inv_ids = [
-        0x11700218,
-        0xC1500871,
-        0xC1400025,
-        0xB14009F7,
-        0xC140032A,
-        0xB15003B2,
-        0xB160012D,
-        0x617005FE,
+        0x10000001,
+        0x10000002,
+        0x10000003,
+        0x10000004,
+        0x10000005,
+        0x10000006,
+        0x10000007,
+        0x10000008,
     ]
     header = struct.pack("<II", gw_serial_u32, 0)
     sweep1 = b"".join(
@@ -89,16 +89,16 @@ def test_decode_sweep_fields_and_delta_power():
         ts1=845557000,
         ts2=845557090,  # dt = 90 seconds
         base_ticks=165708585,
-        delta_ticks_per_inv=138,  # 138 ticks over 90s -> ~100.18W per inverter
+        delta_ticks_per_inv=138,  # 138 ticks over 90s -> ~70.84W RMS per inverter
     )
     body = payload[8:-4]
     prev_state = {}
 
-    # Sweep 1: no prior state -> falls back to inst_p_idx (70.0 W)
+    # Sweep 1: no prior state -> falls back to inst_p_idx / RMS_FACTOR
     s1_ts, s1_recs = cud.decode_sweep(body[:680], prev_state)
     assert len(s1_recs) == 8
-    assert s1_recs[0]["inverter_id"] == "11700218"
-    assert s1_recs[1]["inverter_id"] == "C1500871"
+    assert s1_recs[0]["inverter_id"] == "10000001"
+    assert s1_recs[1]["inverter_id"] == "10000002"
     assert s1_recs[1]["record_type"] == 0x22
     assert s1_recs[0]["ac_voltage_v"] == pytest.approx(3902 / 16.0, rel=1e-3)
     assert s1_recs[0]["power_w"] == 70.0
@@ -140,8 +140,8 @@ def test_ingest_payload_writes_postgres_and_csv(tmp_path: Path):
     assert len(lines) == 1
     parts = lines[0].split(",")
     assert len(parts) == 3
-    assert float(parts[1]) == pytest.approx(0.801, abs=0.01)
-    assert float(parts[2]) == pytest.approx(24058.1, abs=1.0)
+    assert float(parts[1]) == pytest.approx(0.567, abs=0.01)
+    assert float(parts[2]) == pytest.approx(17011.9, abs=1.0)
 
 
 def test_ingest_payload_ignores_invalid_length():
@@ -168,7 +168,7 @@ def test_ingest_payload_csv_only_without_psycopg2(tmp_path: Path):
     assert csv_file.exists()
     parts = csv_file.read_text(encoding="utf-8").strip().split(",")
     assert len(parts) == 3
-    assert float(parts[1]) == pytest.approx(0.801, abs=0.01)
+    assert float(parts[1]) == pytest.approx(0.567, abs=0.01)
 
 
 def test_decode_sweep_sleep_and_dawn_wakeup_guards():

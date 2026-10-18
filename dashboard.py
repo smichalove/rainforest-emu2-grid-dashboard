@@ -57,7 +57,8 @@ logging.basicConfig(
     format='%(asctime)s [%(levelname)s] %(message)s'
 )
 
-SOLAREDGE_POLL_INTERVAL_SEC: int = 360  # 6 minutes interval (240 requests/day)
+SOLAREDGE_POLL_INTERVAL_SEC: int = 360  # 6 minutes interval for Cloud Web API (240 requests/day)
+SOLAREDGE_MODBUS_POLL_INTERVAL_SEC: int = 15  # 15 seconds interval when Local Modbus TCP is enabled
 
 
 class GridDashboard(tk.Tk):
@@ -79,11 +80,15 @@ class GridDashboard(tk.Tk):
 
     solaredge_api_key: Optional[str] = None
     solaredge_site_id: Optional[str] = None
+    solaredge_modbus_host: Optional[str] = None
+    solaredge_modbus_port: int = 1502
     se_timestamps: List[datetime.datetime] = []
     se_power: List[float] = []
     se_battery_timestamps: List[datetime.datetime] = []
     se_battery_power: List[float] = []
     se_battery_soc: List[float] = []
+    se_load_power_timestamps: List[datetime.datetime] = []
+    se_load_power: List[float] = []
 
     chilicon_username: Optional[str] = None
     chilicon_password: Optional[str] = None
@@ -95,6 +100,7 @@ class GridDashboard(tk.Tk):
     last_weather_fetch_time: Optional[datetime.datetime] = None
     cached_weather: Dict[str, Optional[float]] = {}
     weather_map: Dict[str, Dict[str, Any]] = {}
+    last_summary_time: Optional[datetime.datetime] = None
 
     latest_status_text: str = "Waiting for data..."
     latest_status_color: str = "white"
@@ -136,6 +142,7 @@ class GridDashboard(tk.Tk):
     date_label: Optional[tk.Label] = None
 
     _data_lock_inst: Optional[threading.Lock] = None
+    ui_queue: queue.Queue = queue.Queue()
     # --------------------------------------------------------------------------------------
 
     def __init__(self) -> None:
@@ -161,6 +168,8 @@ class GridDashboard(tk.Tk):
         # Solar Edge credentials & arrays
         self.solaredge_api_key = None
         self.solaredge_site_id = None
+        self.solaredge_modbus_host = None
+        self.solaredge_modbus_port = 1502
         self.se_timestamps = []
         self.se_power = []
         self.se_battery_timestamps = []
@@ -233,7 +242,9 @@ class GridDashboard(tk.Tk):
             site_id=self.solaredge_site_id or "",
             history_file=self.se_history_file,
             battery_history_file=self.se_battery_history_file,
-            flow_history_file=self.se_flow_history_file
+            flow_history_file=self.se_flow_history_file,
+            modbus_host=self.solaredge_modbus_host,
+            modbus_port=self.solaredge_modbus_port,
         )
         self.ch_client = solar.ChilliconClient(
             username=self.chilicon_username or "",
@@ -314,6 +325,8 @@ class GridDashboard(tk.Tk):
             se_creds, ch_creds = config.load_env_credentials()
             self.solaredge_api_key = se_creds["api_key"]
             self.solaredge_site_id = se_creds["site_id"]
+            self.solaredge_modbus_host = se_creds.get("modbus_host")
+            self.solaredge_modbus_port = int(se_creds.get("modbus_port") or 1502)
             self.chilicon_username = ch_creds["username"]
             self.chilicon_password = ch_creds["password"]
             self.chilicon_installation_hash = ch_creds["installation_hash"]
@@ -395,14 +408,22 @@ class GridDashboard(tk.Tk):
         self.update_summary_display()
 
     def fetch_solaredge_data(self) -> None:
-        """Polls SolarEdge API (delegate)."""
+        """Polls SolarEdge API / Local Modbus TCP (delegate)."""
         try:
             client = self.se_client
             if client is None:
                 path = self.se_history_file if self.se_history_file else os.path.join(script_dir, 'solaredge_history.csv')
                 bat_path = self.se_battery_history_file if self.se_battery_history_file else os.path.join(script_dir, 'solaredge_battery_history.csv')
                 flow_path = self.se_flow_history_file if self.se_flow_history_file else os.path.join(script_dir, 'solaredge_flow_history.csv')
-                client = solar.SolarEdgeClient(self.solaredge_api_key or "", self.solaredge_site_id or "", path, bat_path, flow_path)
+                client = solar.SolarEdgeClient(
+                    self.solaredge_api_key or "",
+                    self.solaredge_site_id or "",
+                    path,
+                    bat_path,
+                    flow_path,
+                    modbus_host=self.solaredge_modbus_host,
+                    modbus_port=self.solaredge_modbus_port,
+                )
             
             res = client.fetch_data()
             if res:
@@ -493,15 +514,16 @@ class GridDashboard(tk.Tk):
         """Updates the house load label in the GUI using the latest available data."""
         try:
             with self.data_lock:
-                # To ensure the widget exactly matches the orange 'Appliance Load' line on the chart,
-                # we display the direct SolarEdge LOAD reading when available. If not available (e.g.,
-                # if API is offline), we fall back to the calculated physical energy balance formula.
-                if self.se_load_power:
+                # When dual heterogeneous solar arrays (SolarEdge + Chilicon) are active alongside
+                # the Rainforest EMU-2 utility meter, compute whole-home KCL energy balance so
+                # branch loads outside the primary inverter's subpanel CT are included.
+                has_dual_solar = bool(self.chilicon_power and not self.chilicon_off and self.usage)
+                if self.se_load_power and not has_dual_solar:
                     latest_load = self.se_load_power[-1]
                 else:
                     latest_rf = self.usage[-1] if self.usage else 0.0
                     latest_se_pv = self.se_power[-1] if self.se_power else 0.0
-                    latest_ch_pv = self.chilicon_power[-1] if self.chilicon_power else 0.0
+                    latest_ch_pv = self.chilicon_power[-1] if (self.chilicon_power and not self.chilicon_off) else 0.0
                     latest_bat = self.se_battery_power[-1] if self.se_battery_power else 0.0
                     latest_load = max(0.0, latest_rf + latest_se_pv + latest_ch_pv + latest_bat)
                 
@@ -860,15 +882,20 @@ class GridDashboard(tk.Tk):
         self.chilicon_thread.start()
 
     def solaredge_loop(self) -> None:
-        """Isolated SolarEdge API loop."""
+        """Isolated SolarEdge loop (polls local Modbus TCP every 15s if configured, otherwise Cloud Web API every 360s)."""
         while self.running:
             self.fetch_solaredge_data()
-            # Sleep in 10-second segments to monitor self.running shutdown speed
-            segments = SOLAREDGE_POLL_INTERVAL_SEC // 10
-            for _ in range(segments):
-                if not self.running:
-                    break
-                time.sleep(10)
+            if self.solaredge_modbus_host:
+                for _ in range(SOLAREDGE_MODBUS_POLL_INTERVAL_SEC):
+                    if not self.running:
+                        break
+                    time.sleep(1)
+            else:
+                segments = SOLAREDGE_POLL_INTERVAL_SEC // 10
+                for _ in range(segments):
+                    if not self.running:
+                        break
+                    time.sleep(10)
 
     def chilicon_loop(self) -> None:
         """Isolated Chillicon scraper loop (polls local UDP CSV every 20s; throttles cloud fallback)."""

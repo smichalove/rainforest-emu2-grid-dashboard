@@ -1,4 +1,7 @@
 {
   "api_key": "YOUR_SOLAREDGE_API_KEY",
-  "site_id": "YOUR_SOLAREDGE_SITE_ID"
+  "site_id": "YOUR_SOLAREDGE_SITE_ID",
+  "modbus_host": null,
+  "modbus_port": 1502
 }
+

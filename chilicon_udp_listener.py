@@ -195,7 +195,7 @@ def _resolve_pg_dsn() -> str:
                     return str(cfg["pg_dsn"])
             except Exception:
                 pass
-    return "postgresql://postgres@127.0.0.1:5432/energy_telemetry"
+    return "dbname=energy_telemetry"
 
 
 PG_DSN = _resolve_pg_dsn()

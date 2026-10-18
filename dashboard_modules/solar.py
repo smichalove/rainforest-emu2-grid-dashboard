@@ -9,6 +9,8 @@ import http.cookiejar
 import json
 import logging
 import re
+import socket
+import struct
 import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional, Tuple
@@ -18,7 +20,7 @@ from .io import read_clean_csv, write_csv_row
 
 
 class SolarEdgeClient:
-    """Handles credentials, data polling, and CSV storage for SolarEdge API.
+    """Handles credentials, data polling, and CSV storage for SolarEdge API & SunSpec Modbus TCP.
 
     Attributes:
         api_key (str): SolarEdge API Key.
@@ -26,14 +28,27 @@ class SolarEdgeClient:
         history_file (str): Path to write SolarEdge PV generation records.
         battery_history_file (str): Path to write SolarEdge battery records.
         flow_history_file (str): Path to write SolarEdge load/grid flow records.
+        modbus_host (Optional[str]): Optional local IP/hostname of the SolarEdge inverter for direct SunSpec Modbus TCP polling.
+        modbus_port (int): Local Modbus TCP port (default 1502).
     """
 
-    def __init__(self, api_key: str, site_id: str, history_file: str, battery_history_file: str, flow_history_file: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        site_id: str,
+        history_file: str,
+        battery_history_file: str,
+        flow_history_file: Optional[str] = None,
+        modbus_host: Optional[str] = None,
+        modbus_port: int = 1502,
+    ) -> None:
         self.api_key: str = api_key
         self.site_id: str = site_id
         self.history_file: str = history_file
         self.battery_history_file: str = battery_history_file
         self.flow_history_file: str = flow_history_file or history_file.replace("solaredge_history.csv", "solaredge_flow_history.csv")
+        self.modbus_host: Optional[str] = modbus_host
+        self.modbus_port: int = modbus_port
 
     def load_history(self, cutoff_hours: int = 24) -> Tuple[
         List[datetime.datetime], List[float], List[datetime.datetime], List[float], List[float]
@@ -119,15 +134,131 @@ class SolarEdgeClient:
                     
         return load_ts, load_power
 
+    def fetch_modbus_data(self) -> Optional[Dict[str, Any]]:
+        """Polls the local SolarEdge inverter directly over Modbus TCP (default port 1502).
+
+        Queries:
+            - Model 102 (register 40069, length 50): Inverter AC Power
+            - Model 203 (register 40362, length 30): Grid Export/Import Meter
+            - Model 713 (register 41438, length 9): DER Storage Status (Battery SoC & Pct_SF)
+
+        Returns:
+            Dictionary with telemetry matching fetch_data(), or None on communication error.
+        """
+        if not self.modbus_host:
+            return None
+
+        now = datetime.datetime.now()
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(4.0)
+
+        def recv_exact(sock: socket.socket, num_bytes: int) -> bytes:
+            buf = bytearray()
+            while len(buf) < num_bytes:
+                chunk = sock.recv(num_bytes - len(buf))
+                if not chunk:
+                    raise ConnectionResetError("Connection closed while receiving Modbus data")
+                buf.extend(chunk)
+            return bytes(buf)
+
+        tid = 0
+
+        def read_block(addr: int, count: int) -> bytes:
+            nonlocal tid
+            tid = (tid + 1) & 0xFFFF
+            req = struct.pack('>HHHBBHH', tid, 0, 6, 1, 3, addr, count)
+            s.sendall(req)
+            header = recv_exact(s, 7)
+            resp_tid, pid, length, uid = struct.unpack('>HHHB', header)
+            pdu = recv_exact(s, length - 1)
+            func = pdu[0]
+            if func == 3:
+                byte_count = pdu[1]
+                return pdu[2:2 + byte_count]
+            elif func == 0x83:
+                raise RuntimeError(f"Modbus exception code {pdu[1]} at address {addr}")
+            else:
+                raise RuntimeError(f"Unexpected Modbus function code {func}")
+
+        try:
+            s.connect((self.modbus_host, self.modbus_port))
+
+            # 1. Inverter AC Power (Model 102 @ 40069)
+            inv_data = read_block(40069, 50)
+            inv_s = struct.unpack(f'>{len(inv_data)//2}h', inv_data)
+            raw_pv = inv_s[14]
+            sf_pv = inv_s[15]
+            pv_w = (raw_pv * (10 ** sf_pv)) if sf_pv != -32768 else 0.0
+            pv_power = max(0.0, pv_w / 1000.0)
+
+            # 2. Grid Meter (Model 203 @ 40362, Meter 2 Export/Import)
+            m2_data = read_block(40362, 30)
+            m2_s = struct.unpack(f'>{len(m2_data)//2}h', m2_data)
+            raw_m2 = m2_s[18]
+            sf_m2 = m2_s[22]
+            grid_w = (raw_m2 * (10 ** sf_m2)) if sf_m2 != -32768 else 0.0
+            grid_kw = grid_w / 1000.0
+
+            if grid_kw < 0:
+                grid_import = abs(grid_kw)
+                grid_export = 0.0
+            else:
+                grid_import = 0.0
+                grid_export = grid_kw
+
+            # 3. Battery Storage State of Charge (SunSpec Model 713 DER Storage Status @ 41438)
+            m713_data = read_block(41438, 9)
+            m713_u = struct.unpack(f'>{len(m713_data)//2}H', m713_data)
+            m713_s = struct.unpack(f'>{len(m713_data)//2}h', m713_data)
+            soc_raw = m713_u[4]
+            pct_sf = m713_s[8]
+            if soc_raw != 0xFFFF and pct_sf != -32768:
+                battery_soc = max(0.0, min(100.0, float(soc_raw) * (10 ** pct_sf)))
+            else:
+                battery_soc = 100.0
+            battery_power = 0.0
+
+            # 4. Subpanel / Inverter-Metered Load Computation
+            load_power = max(0.0, pv_power + grid_import - grid_export + battery_power)
+
+            # Persist to CSVs
+            write_csv_row(self.history_file, [now.isoformat(), f"{pv_power:.3f}"])
+            write_csv_row(
+                self.battery_history_file,
+                [now.isoformat(), f"{battery_power:.3f}", f"{battery_soc:.1f}"]
+            )
+            write_csv_row(
+                self.flow_history_file,
+                [now.isoformat(), f"{pv_power:.3f}", f"{load_power:.3f}", f"{grid_import:.3f}", f"{grid_export:.3f}"]
+            )
+
+            return {
+                "pv_power": pv_power,
+                "battery_power": battery_power,
+                "battery_soc": battery_soc,
+                "load_power": load_power,
+                "grid_import": grid_import,
+                "grid_export": grid_export,
+                "timestamp": now
+            }
+        except Exception as e:
+            logging.warning(f"SolarEdge Modbus TCP read error ({self.modbus_host}:{self.modbus_port}): {e}")
+            return None
+        finally:
+            try:
+                s.close()
+            except Exception:
+                pass
+
     def fetch_data(self) -> Optional[Dict[str, Any]]:
-        """Polls the SolarEdge API currentPowerFlow endpoint and logs history.
+        """Polls SolarEdge telemetry (local Modbus TCP if configured, otherwise Cloud Web API).
 
         Retrieves real-time power generation, household consumption (load),
         grid imports/exports, and battery storage/SoC data, then writes them
         to their respective CSV database files.
 
         Returns:
-            A dictionary containing parsed API flow values, or None if the
+            A dictionary containing parsed flow values, or None if the
             request or parsing fails. The dictionary contains:
                 - 'pv_power' (float): Solar generation in kW.
                 - 'battery_power' (float): Signed battery power in kW.
@@ -137,6 +268,16 @@ class SolarEdgeClient:
                 - 'grid_export' (float): Power exported to the grid in kW.
                 - 'timestamp' (datetime.datetime): Fetch timestamp.
         """
+        if self.modbus_host:
+            res = self.fetch_modbus_data()
+            if res is not None:
+                return res
+            logging.warning("SolarEdge Modbus TCP read failed; attempting Cloud Web API fallback...")
+
+        if not self.api_key or not self.site_id:
+            logging.error("SolarEdge Web API credentials not configured.")
+            return None
+
         now = datetime.datetime.now()
 
         url = (

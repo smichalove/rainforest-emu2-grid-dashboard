@@ -195,41 +195,42 @@ graph TD
 ### File Map & Roles
 
 #### Core Application (Runs on Raspberry Pi)
-- **[dashboard.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard.py)**: Main kiosk entry point. Starts Tkinter fullscreen GUI, runs thread pool watchdogs, and spawns the 5-minute local delta loop that triggers `backup_to_jetson.sh` and queries the Jetson stager daemon via secure gRPC client.
-- **[backup_to_jetson.sh](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/backup_to_jetson.sh)**: Executed by `dashboard.py` on the Pi. Syncs telemetry CSVs and cache configs incrementally to the Jetson Orin Nano `grid_backup` home directory.
-- **[run_dashboard_system.sh](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/run_dashboard_system.sh)**: Kiosk autostart helper that launches the background GCS batch stager and the main GUI process.
-- **[stage_batch_summary.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/stage_batch_summary.py)**: Pi-side decoupled stager script running every 4 hours to upload historical telemetry to GCS and retrieve cloud baselines.
+- **[dashboard.py](dashboard.py)**: Main kiosk entry point. Starts Tkinter fullscreen GUI, runs thread pool watchdogs, and spawns the 5-minute local delta loop that triggers `backup_to_jetson.sh` and queries the Jetson stager daemon via secure gRPC client.
+- **[chilicon_udp_listener.py](chilicon_udp_listener.py)**: Optional standalone daemon that listens for unencrypted 1,372-byte Chilicon CP-100 Gateway UDP `:32758` broadcasts, decodes 8-microinverter PLC sweeps at 90-second resolution, and writes real-time telemetry to `chilicon_history.csv` and optional PostgreSQL.
+- **[backup_to_jetson.sh](backup_to_jetson.sh)**: Executed by `dashboard.py` on the Pi. Syncs telemetry CSVs and cache configs incrementally to the Jetson Orin Nano `grid_backup` home directory.
+- **[run_dashboard_system.sh](run_dashboard_system.sh)**: Kiosk autostart helper that launches the background GCS batch stager and the main GUI process.
+- **[stage_batch_summary.py](stage_batch_summary.py)**: Pi-side decoupled stager script running every 4 hours to upload historical telemetry to GCS and retrieve cloud baselines.
 
 #### Modular Package (`dashboard_modules/` - Used on both Pi & Jetson)
-- **[config.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard_modules/config.py)**: Central config file specifying colors, slide durations, font sizes, coordinates, and credential parser methods.
-- **[io.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard_modules/io.py)**: Thread-safe file readers/writers featuring null-byte stripping for CSVs and atomic writes for JSON.
-- **[telemetry.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard_modules/telemetry.py)**: Handles EMU-2 USB serial port auto-discovery, XML parsing, and history loading.
-- **[solar.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard_modules/solar.py)**: Clients that authenticate and poll SolarEdge API and Chillicon panel updates.
-- **[weather.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard_modules/weather.py)**: Fetcher for Open-Meteo forecasts with exponential failure backoffs.
-- **[spectral.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard_modules/spectral.py)**: Math module calculating DFT coefficients, diurnal rhythm amplitude, and bimodal ratios.
-- **[ai.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard_modules/ai.py)**: Interface client for Gemini API and Ollama generation queries.
-- **[grpc_client.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard_modules/grpc_client.py)**: Encapsulates gRPC connection management, loads secure credentials, and queries telemetry analysis stream.
-- **[grpc_server.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/dashboard_modules/grpc_server.py)**: Encapsulates secure gRPC server listening, database insertions, and maps background DFT metrics.
+- **[config.py](dashboard_modules/config.py)**: Central config file specifying colors, slide durations, font sizes, coordinates, and credential parser methods (including optional `modbus_host` / `modbus_port` for SolarEdge).
+- **[io.py](dashboard_modules/io.py)**: Thread-safe file readers/writers featuring null-byte stripping for CSVs and atomic writes for JSON.
+- **[telemetry.py](dashboard_modules/telemetry.py)**: Handles EMU-2 USB serial port auto-discovery, XML parsing, and history loading.
+- **[solar.py](dashboard_modules/solar.py)**: Clients that poll SolarEdge (via optional 15s local SunSpec Modbus TCP with automatic Cloud Web API fallback) and Chillicon (via local UDP CSV priority with 15-minute Cloud fallback).
+- **[weather.py](dashboard_modules/weather.py)**: Fetcher for Open-Meteo forecasts with exponential failure backoffs.
+- **[spectral.py](dashboard_modules/spectral.py)**: Math module calculating DFT coefficients, diurnal rhythm amplitude, and bimodal ratios.
+- **[ai.py](dashboard_modules/ai.py)**: Interface client for Gemini API and Ollama generation queries.
+- **[grpc_client.py](dashboard_modules/grpc_client.py)**: Encapsulates gRPC connection management, loads secure credentials, and queries telemetry analysis stream.
+- **[grpc_server.py](dashboard_modules/grpc_server.py)**: Encapsulates secure gRPC server listening, database insertions, and maps background DFT metrics.
 
 #### Edge AI Server (Runs on Jetson Orin Nano)
-- **[stage_local_summary.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/stage_local_summary.py)**: Executed by systemd as the edge server listening on port 5000 (HTTP REST) and port 50051 (secure gRPC mTLS). It reads telemetry records, performs DFT and SNR math calculations, and streams token summaries using local Ollama models.
-- **[snr_analysis.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/snr_analysis.py)**: Standalone mathematical helper file implementing DTFT spectrum and signal SNR calculators.
+- **[stage_local_summary.py](stage_local_summary.py)**: Executed by systemd as the edge server listening on port 5000 (HTTP REST) and port 50051 (secure gRPC mTLS). It reads telemetry records, performs DFT and SNR math calculations, and streams token summaries using local Ollama models.
+- **[snr_analysis.py](snr_analysis.py)**: Standalone mathematical helper file implementing DTFT spectrum and signal SNR calculators.
 
 #### Verification & Testing (Runs on developer workstation)
-- **[render_local_plot.py](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/render_local_plot.py)**: Mock desktop Tkinter GUI application that displays Slide 1 and Slide 2 layouts without hardware interfaces, simulating slide rotation, weather checks, and telemetry rendering.
-- **[plot_and_open.sh](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/plot_and_open.sh)**: Utility script that runs `render_local_plot.py` to capture and verify Matplotlib renderings.
-- **[repl_client.py](file:///Users/treven/rainforest-emu2-grid-dashboard-public/repl_client.py)**: Interactive context-aware terminal REPL client for querying local microgrid telemetry databases alongside user notes, utilizing local Ollama models.
-- **[test_repl_logic.py](file:///Users/treven/rainforest-emu2-grid-dashboard-public/test_repl_logic.py)**: Validation test suite for the REPL client logic, ensuring robust SIGINT handling, multi-line command parsing, and local database queries.
+- **[render_local_plot.py](render_local_plot.py)**: Mock desktop Tkinter GUI application that displays Slide 1 and Slide 2 layouts without hardware interfaces, simulating slide rotation, weather checks, and telemetry rendering.
+- **[plot_and_open.sh](plot_and_open.sh)**: Utility script that runs `render_local_plot.py` to capture and verify Matplotlib renderings.
+- **[repl_client.py](repl_client.py)**: Interactive context-aware terminal REPL client for querying local microgrid telemetry databases alongside user notes, utilizing local Ollama models.
+- **[test_repl_logic.py](test_repl_logic.py)**: Validation test suite for the REPL client logic, ensuring robust SIGINT handling, multi-line command parsing, and local database queries.
 
 #### Prompt Templates
-- **[gemma_hybrid_prompt.txt](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/gemma_hybrid_prompt.txt)**: Prompt template used by `stage_local_summary.py` to analyze time-domain metrics.
-- **[gemma_dft_prompt.txt](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/gemma_dft_prompt.txt)**: Prompt template used by `stage_local_summary.py` to analyze frequency-domain SNR rhythms.
+- **[gemma_hybrid_prompt.txt](gemma_hybrid_prompt.txt)**: Prompt template used by `stage_local_summary.py` to analyze time-domain metrics.
+- **[gemma_dft_prompt.txt](gemma_dft_prompt.txt)**: Prompt template used by `stage_local_summary.py` to analyze frequency-domain SNR rhythms.
 
 ---
 
 ## 15. Interactive Context-Aware REPL Client
 
-* **Script:** [repl_client.py](file:///Users/treven/rainforest-emu2-grid-dashboard-public/repl_client.py)
+* **Script:** [repl_client.py](repl_client.py)
 * **Model:** Local Ollama server models (e.g., `gemma4-it-q4:latest` or vision models)
 * **Inputs:** Local SQLite telemetry (`grid_history.db`), CSV metrics (`solaredge_history.csv`, etc.), and user annotations (`user_annotations.json`)
 * **Outputs:** Persistent annotations stored in `user_annotations.json` and conversation archives in `repl_chat_log.jsonl`
@@ -250,9 +251,36 @@ To provide an interactive, context-aware command-line interface (REPL) that allo
 
 - **Preserve Uncommitted Plans & Roadmaps:**
   > [!IMPORTANT]
-  > You must never run git operations (such as `git checkout` or `git restore`) or file writes that overwrite or discard uncommitted planning milestones, gRPC specifications, or future architecture roadmaps in [planning/implementation_plan.md](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/planning/implementation_plan.md). 
+  > You must never run git operations (such as `git checkout` or `git restore`) or file writes that overwrite or discard uncommitted planning milestones, gRPC specifications, or future architecture roadmaps in [planning/implementation_plan.md](planning/implementation_plan.md). 
   - Always read the complete file first and ensure that any changes (e.g., adding logging references or caveats) are merged or appended cleanly without truncating other sections.
 
 - **Proactive Status Updates:**
   - You must keep all roadmap files, task lists (`task.md`), and planning documents up-to-date. As soon as a feature is completed, tested, or deployed, update its status using explicit **[DONE]**, **[RESOLVED]**, or `[x]` checkmarks.
+
+---
+
+## 17. Multi-Sensor Microgrid Calibration & Whole-Home KCL Load Balance
+
+* **Reference Report:** [calibration_test_report.md](calibration_test_report.md)
+* **Core Principle:** In dual-array heterogeneous microgrids (`SolarEdge` + `Chilicon` + `Rainforest EMU-2`), SolarEdge's `se_load_power` only reflects the subpanel downstream of SolarEdge's CT clamps and misses upstream main-panel branch loads (`~213–220 W` discrepancy).
+* **Unified KCL Formula (`dashboard.py` -> `update_load_label`):**
+  When dual solar sources are active (`self.chilicon_power and not self.chilicon_off and self.usage`), `House Load` is computed via whole-home Kirchhoff's Current Law (KCL) energy balance:
+  $$P_{\text{House Load}} = \max\!\left(0.0,\; P_{\text{EMU2}} + P_{\text{SolarEdge}} + P_{\text{Chilicon}} + P_{\text{Battery}}\right)$$
+* **Verified Metrology Closure:** Validated against an independent 200A Mains CT reference frame (`Emporia Vue Gen 2`), achieving **`+6.6 W` (`0.47%`)** net closure error across all 5 sensors, well inside the theoretical $\pm 51.8\text{ W}$ ($\pm 3.71\%$ RSS) confidence interval for two $\pm 3\%$ solar telemetry streams.
+
+---
+
+## 18. Optional Local Solar Telemetry (SolarEdge SunSpec Modbus TCP & Chilicon UDP `:32758`)
+
+* **SolarEdge Local SunSpec Modbus TCP (`dashboard_modules/solar.py` -> `SolarEdgeClient.fetch_modbus_data`):**
+  * Optional configuration via `"modbus_host": "<inverter-ip>"` and `"modbus_port": 1502` in `Auth/solaredge_config.json` (or `SOLAREDGE_MODBUS_HOST` / `SOLAREDGE_MODBUS_PORT` environment variables).
+  * Queries SunSpec holding registers over TCP Function Code `0x03` every 15 seconds using zero external dependencies (`socket` + `struct`):
+    * **Model 102 (`40069`, length `50`):** Inverter AC Power (`I_AC_Power` @ offset 14, `I_AC_Power_SF` @ offset 15).
+    * **Model 203 (`40362`, length `30`):** Meter 2 AC Power (`M_AC_Power` @ offset 18, `M_AC_Power_SF` @ offset 22).
+    * **Model 713 (`41438`, length `9`):** DER Storage Status (`SoC` @ `uint16` offset 4, `Pct_SF` @ `int16` offset 8; Note: `Model 703` is static IEEE 1547 enter-service configuration and must not be used for battery SoC).
+  * Automatically falls back to the SolarEdge Cloud Monitoring Web API if local Modbus TCP is disabled or unreachable.
+* **Chilicon CP-100 Local UDP `:32758` Debug Bridge (`chilicon_udp_listener.py` & `ChilliconClient.fetch_data`):**
+  * Optional passive listener decoding 1,372-byte unencrypted UDP packets into 90-second 8-microinverter PLC sweeps calibrated with AC RMS ($\sqrt{2}$, `77,927.2144 ticks/kWh`).
+  * Includes dusk stagnation decay ($\Delta t = 0 \to 0.0\text{ W}$), dawn cold wake-up spike suppression ($\Delta t > 900\text{s}$), and a 15-minute overnight `0.000 kW` heartbeat watchdog.
+  * `ChilliconClient.fetch_data()` prioritizes local `chilicon_history.csv` rows $\le 360\text{s}$ old and throttles cloud fallback polling to 15 minutes.
 

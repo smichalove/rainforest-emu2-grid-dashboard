@@ -76,15 +76,69 @@ The dashboard automatically authenticates using Vertex AI on Google Cloud:
      GOOGLE_CLOUD_LOCATION="global"
      ```
 
-### SolarEdge API Configuration
-To enable SolarEdge PV and battery storage telemetry overlay and mathematical analysis in the Gemini prompt, configure your SolarEdge API credentials inside `~/Auth/solaredge_config.json` (or `auth/solaredge_config.json` in the application directory):
+### SolarEdge Setup & Configuration (Modbus TCP & Cloud API)
+
+The dashboard supports two mutually compatible methods for integrating SolarEdge PV generation, battery storage flow, and whole-home load telemetry:
+1. **Local SunSpec Modbus TCP (Recommended):** High-frequency 15-second polling directly over your local network, zero cloud dependency, no rate limits, and sub-second latency.
+2. **SolarEdge Cloud Monitoring Web API (Fallback):** 15-minute polling via SolarEdge's official REST API (`/currentPowerFlow`), useful when installer SetApp access is unavailable.
+
+The system dynamically prefers local Modbus TCP if `modbus_host` is configured, automatically falling back to the Cloud Monitoring API if the local connection is unreachable.
+
+---
+
+#### Option 1: Local SunSpec Modbus TCP Setup (15-Second Polling)
+
+SolarEdge HD-Wave and Energy Hub inverters support the open SunSpec Modbus over TCP protocol on port `1502`.
+
+##### Step A: Enable Modbus TCP via SolarEdge SetApp
+1. **Connect to Inverter Wi-Fi:** Toggle the inverter's ON/OFF/P switch to **`P`** for $\le 2$ seconds (or scan the QR code on the inverter casing) to activate the internal Wi-Fi access point (`SE-XXXXXXXX`).
+2. **Open SolarEdge SetApp:** Connect your smartphone to the inverter Wi-Fi network and launch the SetApp installer application.
+3. **Enable Modbus TCP:**
+   - Navigate to: **Communication** $\rightarrow$ **RS485-1** (or **LAN / Ethernet**) $\rightarrow$ **Protocol** $\rightarrow$ Select **SunSpec (Non-SE Logger)** or **Modbus TCP**.
+   - Set **Port** to `1502`.
+   - Set **Device ID / Unit ID** to `1`.
+4. **Connect to Home LAN:** Ensure the inverter is connected to your local network via Ethernet or Wi-Fi, and configure a static DHCP IP reservation on your router (e.g., `<inverter-ip>`).
+
+##### Step B: SunSpec Model Telemetry Mapping
+The dashboard queries holding registers using standard Modbus Function Code `0x03` with zero external dependencies (pure Python `socket` + `struct`):
+* **Model 102 (Registers `40069–40118`, Inverter AC Power):** Reads `I_AC_Power` (offset 14) and `I_AC_Power_SF` (offset 15) to compute calibrated AC power in Watts ($P = \text{Raw} \times 10^{\text{SF}}$).
+* **Model 203 (Registers `40362–40391`, Revenue-Grade Meter):** Reads `M_AC_Power` (offset 18) and `M_AC_Power_SF` (offset 22) for subpanel grid import/export.
+* **Model 713 (Registers `41438–41446`, DER Storage Status):** Reads `SoC` (offset 4, uint16) and `Pct_SF` (offset 8, int16) to report real-time battery State of Charge ($0.0–100.0\%$). *(Note: Model 703 is static grid configuration holding a fixed nominal baseline; dynamic battery charge resides in Model 713).*
+
+---
+
+#### Option 2: SolarEdge Cloud Monitoring API Setup (15-Minute Polling)
+
+If you do not have SetApp commissioning access, you can use the official Cloud Web API:
+1. Log in to your SolarEdge Monitoring Portal (`https://monitoring.solaredge.com`).
+2. Navigate to **Admin** $\rightarrow$ **Site Access** $\rightarrow$ **API Access**.
+3. Accept the terms of use and click **Generate API Key**. Copy your **API Key** and **Site ID**.
+   *(Note: If the Admin tab is missing, contact your solar installer to request API access for your account.)*
+
+---
+
+#### Configuration File (`solaredge_config.json`)
+
+Save your credentials in `~/Auth/solaredge_config.json` (or `auth/solaredge_config.json` in the project root):
+
 ```json
 {
+  "modbus_host": "<inverter-ip>",
+  "modbus_port": 1502,
   "api_key": "your_solaredge_api_key",
   "site_id": "your_solaredge_site_id"
 }
 ```
-*Note: If you do not have your SolarEdge API key or Site ID, you will need to contact your solar system installer to request API access for your monitoring account.*
+
+Or configure via environment variables in `.env`:
+```env
+SOLAREDGE_MODBUS_HOST="<inverter-ip>"
+SOLAREDGE_MODBUS_PORT=1502
+SOLAREDGE_API_KEY="your_solaredge_api_key"
+SOLAREDGE_SITE_ID="your_solaredge_site_id"
+```
+
+*Note: If both Modbus and Cloud credentials are provided, the dashboard queries Modbus TCP every 15 seconds, falling back to the 15-minute Cloud API only if Modbus is unreachable.*
 
 ### Chillicon Cloud API Configuration
 To enable the Chillicon Cloud API integration, configure your login credentials inside `~/Auth/chilicon_config.json` (or `auth/chilicon_config.json` in the application directory):
@@ -619,12 +673,12 @@ Based on Vertex AI pricing for `gemini-2.5-flash`:
 - Always run `gitleaks` prior to committing or syncing any changes to GitHub.
 
 ### AI Agent & Developer Guidelines
-For human developers and AI coding agents, this repository provides specialized rules, instructions, and architectural references within the [.agents/](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/.agents) directory:
-*   [agent.md](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/.agents/rules/agent.md): Development guidelines, styling specifications, security requirements, and commit conventions.
-*   [architecture.md](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/.agents/architecture.md): A detailed reference of the decoupled multi-node edge AI topology, data flows, and database schemas.
-*   [token-guard.md](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/.agents/rules/token-guard.md): Guidelines on token limits and context optimization.
+For human developers and AI coding agents, this repository provides specialized rules, instructions, and architectural references within the [.agents/](.agents) directory:
+*   [agent.md](.agents/rules/agent.md): Development guidelines, styling specifications, security requirements, and commit conventions.
+*   [architecture.md](.agents/architecture.md): A detailed reference of the decoupled multi-node edge AI topology, data flows, and database schemas.
+*   [token-guard.md](.agents/rules/token-guard.md): Guidelines on token limits and context optimization.
 
-Before implementing any changes, AI agents **MUST** read the guidelines in [agent.md](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/.agents/rules/agent.md) and refer to the system design in [architecture.md](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/.agents/architecture.md).
+Before implementing any changes, AI agents **MUST** read the guidelines in [agent.md](.agents/rules/agent.md) and refer to the system design in [architecture.md](.agents/architecture.md).
 
 ---
 
@@ -742,7 +796,7 @@ LIMIT 100;
 
 ## Future Scalability & Memory Management
 To prevent long-term file I/O latency, memory spikes, or SD card wear from infinitely expanding telemetry logs on the Raspberry Pi kiosk, a future roadmap has been drafted:
-* See [retention_and_memory_management_plan.md](file:///Users/treven/Documents/rainforest-emu2-grid-dashboard/planning/retention_and_memory_management_plan.md) for architectural options (including logrotate + tail primitives, SQLite databases, and hourly analytics compression) to optimize resource consumption and downstream ML performance on local networks.
+* See [retention_and_memory_management_plan.md](planning/retention_and_memory_management_plan.md) for architectural options (including logrotate + tail primitives, SQLite databases, and hourly analytics compression) to optimize resource consumption and downstream ML performance on local networks.
 
 ---
 
@@ -776,3 +830,22 @@ An interactive, terminal-based REPL chat client (`repl_client.py`) is included t
    python3 test_repl_logic.py
    ```
 
+---
+
+## Multi-Sensor Microgrid Calibration & Metrology Accuracy
+
+In a **non-homogeneous residential microgrid** combining multiple independent solar generation systems (such as an upstream AC-coupled Chilicon CP-100 / CP-720 microinverter array alongside a downstream DC-coupled SolarEdge hybrid inverter and battery), a single inverter's subpanel CT cannot see branch loads or solar backfeeds located upstream of its CT clamps.
+
+By anchoring whole-home energy balance at the **Rainforest EMU-2 Utility Revenue Meter** (ANSI C12.20 `±0.5%` accuracy) and applying Kirchhoff's Current Law (KCL) across both solar arrays:
+
+$$P_{\text{House Load}} = \max\!\left(0.0,\; P_{\text{EMU2}} + P_{\text{SolarEdge}} + P_{\text{Chilicon}} + P_{\text{Battery}}\right)$$
+
+### Empirical 5-Sensor Calibration & Error Propagation Summary
+Simultaneous cross-validation against an independent **200A Split-Core Mains CT (`Emporia Vue Gen 2`)** at the main distribution panel service lugs confirms sub-percent closure across all hardware telemetry streams:
+
+| Derivation / Reference Frame | Formula | Measured / Derived Value | Uncertainty (`±3%` Solar) | Closure Delta |
+| :--- | :--- | :--- | :--- | :--- |
+| **Node A (Service Entrance Inflow)** | $P_{\text{Chilicon}}\;(1.687\text{ kW}) + P_{\text{EMU2}}\;(-0.648\text{ kW})$ | **`1.0390 kW`** (`1,039.0 W` predicted) vs. **`1.0324 kW`** (`Emporia 200A Mains CT`) | `±50.7 W` (RSS) | **`+6.6 W` (`0.64%`)** |
+| **Node B (Whole-Home Load)** | $P_{\text{EMU2}}\;(-0.648) + P_{\text{Chilicon}}\;(1.687) + P_{\text{SolarEdge}}\;(0.358)$ | **`1.3970 kW`** (`1,397.0 W` KCL Balance) vs. **`1.3904 kW`** (`Emporia Mains + SolarEdge`) | `±51.8 W` (`±3.71%` RSS) / `±64.5 W` (`±4.62%` Linear) | **`+6.6 W` (`0.47%`)** |
+
+See [calibration_test_report.md](calibration_test_report.md) for the complete 5-sensor KCL node analysis, AC RMS ($\sqrt{2}$) microinverter calibration verification, and $\pm 3\%$ error propagation math.
