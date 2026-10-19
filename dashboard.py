@@ -510,21 +510,36 @@ class GridDashboard(tk.Tk):
             logging.error(f"Resilient fallback error in align_and_compute_spectrum: {e}")
             return [], [], [], [], []
 
+    @staticmethod
+    def _ema_tail(series: List[float], window: int = 4, alpha: float = 0.35) -> float:
+        """Computes a causal first-order Exponential Moving Average over the recent tail of a series."""
+        if not series:
+            return 0.0
+        tail = series[-window:]
+        acc = float(tail[0])
+        for val in tail[1:]:
+            acc = alpha * float(val) + (1.0 - alpha) * acc
+        return acc
+
     def update_load_label(self) -> None:
-        """Updates the house load label in the GUI using the latest available data."""
+        """Updates the house load label in the GUI using causal EMA low-pass filtered KCL energy balance."""
         try:
             with self.data_lock:
                 # When dual heterogeneous solar arrays (SolarEdge + Chilicon) are active alongside
-                # the Rainforest EMU-2 utility meter, compute whole-home KCL energy balance so
-                # branch loads outside the primary inverter's subpanel CT are included.
+                # the Rainforest EMU-2 utility meter, compute whole-home KCL energy balance with a
+                # causal low-pass filter (alpha=0.35, 60s window) to damp cross-sensor phase jitter.
                 has_dual_solar = bool(self.chilicon_power and not self.chilicon_off and self.usage)
                 if self.se_load_power and not has_dual_solar:
-                    latest_load = self.se_load_power[-1]
+                    latest_load = self._ema_tail(self.se_load_power, window=4, alpha=0.35)
                 else:
-                    latest_rf = self.usage[-1] if self.usage else 0.0
-                    latest_se_pv = self.se_power[-1] if self.se_power else 0.0
-                    latest_ch_pv = self.chilicon_power[-1] if (self.chilicon_power and not self.chilicon_off) else 0.0
-                    latest_bat = self.se_battery_power[-1] if self.se_battery_power else 0.0
+                    latest_rf = self._ema_tail(self.usage, window=4, alpha=0.35)
+                    latest_se_pv = self._ema_tail(self.se_power, window=4, alpha=0.35)
+                    latest_ch_pv = (
+                        self._ema_tail(self.chilicon_power, window=2, alpha=0.35)
+                        if (self.chilicon_power and not self.chilicon_off)
+                        else 0.0
+                    )
+                    latest_bat = self._ema_tail(self.se_battery_power, window=4, alpha=0.35)
                     latest_load = max(0.0, latest_rf + latest_se_pv + latest_ch_pv + latest_bat)
                 
             if self.load_status_label is not None:
