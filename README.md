@@ -1,8 +1,14 @@
 # EMU-2 Grid Dashboard
 
+### 1. Physical Touchscreen Kiosk (1024×768 Native Display)
 ![EMU-2 Grid Dashboard Preview - Slide 1 (24-Hour Time Domain)](dashboard_preview.jpeg)
 ![EMU-2 Grid Dashboard Preview - Slide 2 (14-Day History Zoom)](dashboard_preview_slide2.jpeg)
 ![EMU-2 Grid Dashboard Preview - Slide 3 (Circuit Breakdown & DFT Spectrum)](dashboard_preview_slide3.jpeg)
+
+### 2. Tablet & Desktop Web Kiosk Mirror
+The dashboard includes an integrated, zero-CDN FastAPI Web Kiosk (`web/`) that automatically mirrors the physical kiosk across desktop monitors, wall-mounted tablets (such as an iPad), and mobile browsers with sub-second WebSocket updates:
+
+![Tablet & Desktop Web Kiosk Mirror](images/dashboard_layout_ipad.jpg)
 
 A robust, 24-hour real-time grid monitoring dashboard using a Rainforest EMU-2 smart meter connected to a Raspberry Pi. It automatically boots into a fullscreen kiosk mode over HDMI, safely bypasses modern Wayland graphic quirks, and seamlessly persists data to SQLite and local CSVs to survive power outages.
 
@@ -39,6 +45,11 @@ Because the monitor reads data directly from the Zigbee wireless network inside 
 - **Multi-Sensor Microgrid KCL Calibration**: Reconciles dual heterogeneous solar arrays (SolarEdge + Chilicon) anchored at the Rainforest EMU-2 utility revenue meter ($\pm 0.5\%$), calculating whole-home load via Kirchhoff's Current Law and eliminating single-inverter subpanel CT blind spots within sub-percent ($0.47\%$) closure accuracy.
 - **Stacked Solar PV Chart**: Stacks the actual Chilicon generation (plotted as a bright neon yellow cap) on top of the SolarEdge PV bars (warm gold base) on a unified 10-minute grid, displaying your total combined solar output on the secondary Y-axis.
 - **Hands-Free Kiosk Mode**: Configured to boot completely headless and automatically launch into fullscreen without sleeping.
+- **3-Slide Touch Kiosk & Web Mirror**: Features an automated rotating carousel across both the physical Raspberry Pi touchscreen and the FastAPI Web Kiosk (`web/`):
+  * **Slide 1 (24-Hour Period)**: High-resolution time-domain net grid kW, house load, solar generation bars, and battery SoC water floor with real-time local delta narrative overlay.
+  * **Slide 2 (Zoom - 14-Day History)**: Multi-day energy progression with an interactive ReAct AI agent narrative analyzing seasonal sun shifts, solar vs load balance, and battery economics.
+  * **Slide 3 (Circuit Breakdown & DFT Spectrum)**: Real-time whole-home circuit telemetry (Emporia Vue 200A mains, sub-panels, smart plugs) and frequency-domain harmonic analysis.
+- **Tablet & Mobile Responsive Web Wrapper**: Automatically adapts across desktop monitors, wall-mounted tablets (iPad/touchscreens), and mobile viewports with glassmorphism cards and a fixed thumb navigation dock with auto-cycle pause/resume toggle.
 - **AI Background Summaries**: Renders a narrative, statistical, and mathematical analysis summary directly on the graph background, formatted with smart 80-character line wrapping. Supports both Google Cloud Vertex AI and fully local Nvidia Jetson-based edge models (Ollama/Gemma 4).
 
 ---
