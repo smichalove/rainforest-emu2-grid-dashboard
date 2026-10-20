@@ -1,7 +1,8 @@
 # EMU-2 Grid Dashboard
 
-![EMU-2 Grid Dashboard Preview - Slide 1 (Time Domain)](dashboard_preview.jpeg)
-![EMU-2 Grid Dashboard Preview - Slide 2 (Frequency Domain)](dashboard_preview_slide2.jpeg)
+![EMU-2 Grid Dashboard Preview - Slide 1 (24-Hour Time Domain)](dashboard_preview.jpeg)
+![EMU-2 Grid Dashboard Preview - Slide 2 (14-Day History Zoom)](dashboard_preview_slide2.jpeg)
+![EMU-2 Grid Dashboard Preview - Slide 3 (Circuit Breakdown & DFT Spectrum)](dashboard_preview_slide3.jpeg)
 
 A robust, 24-hour real-time grid monitoring dashboard using a Rainforest EMU-2 smart meter connected to a Raspberry Pi. It automatically boots into a fullscreen kiosk mode over HDMI, safely bypasses modern Wayland graphic quirks, and seamlessly persists data to SQLite and local CSVs to survive power outages.
 
